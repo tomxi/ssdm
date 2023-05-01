@@ -8,23 +8,11 @@ setup(
     author_email='tom.xi@nyu.edu',
     url='https://github.com/tomxi/ssdm',
     packages=find_packages(),
-    install_requires=[
-        'numpy',
-        'matplotlib',
-        'seaborn',
-        'librosa',
-        'openl3',
-        'tensorflow >= 2.0',
-        'holoviews',
-        'panel',
-        'scipy',
-        'sklearn',
-        'torch',
-        'tqdm',
-        'pandas',
-        'jams',
-        'mir_eval',
-    ],ß
+    # install_requires=[
+    #     'openl3',
+    #     'jams',
+    #     'mir_eval',
+    # ],
     classifiers=[
         'Development Status :: 3 - Alpha',
         'Intended Audience :: Collaborators',

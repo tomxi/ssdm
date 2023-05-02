@@ -4,5 +4,7 @@ notebooks/
 *.out
 *.sbatch
 
+salami_old.py
+
 __pycache__
 .ipynb*

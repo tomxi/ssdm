@@ -1,5 +1,4 @@
 from . import feature
-from . import salami_old
 from . import scluster
 from . import scanner
 

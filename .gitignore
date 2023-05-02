@@ -1,5 +1,7 @@
 .vscode/
+
 *.out
 *.sbatch
+
 __pycache__
 .ipynb*

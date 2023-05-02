@@ -257,12 +257,14 @@ def segmentation_to_mireval(
 ) -> tuple:
     """
     """
-    mir_eval_segments = []
+    mir_eval_interval = []
+    mir_eval_label = []
     for anno in segmentation.annotations:
-        mir_eval_segments.append(
-            anno.to_interval_values()
-        )
-    return mir_eval_segments
+        interval, value = anno.to_interval_values()
+        mir_eval_interval.append(interval)
+        mir_eval_label.append(value)
+
+    return mir_eval_interval, mir_eval_label
 
 
 def compute_tau(
@@ -271,30 +273,48 @@ def compute_tau(
     ts: np.array, 
     region: str = 'full', #{'full', 'path'}
     quantize: bool = True, 
+    n_bins: int = 16, # number of quantization bins
 ) -> float:
     """
     """
     meet_mat = segmentation_to_meet(segmentation, ts)
-    if quantize:
-        #TODO
-        meet_mat = np.eye(len(ts))
-
+    
     if region == 'full':
+        if quantize:
+            normalized_sdm = sdm / (sdm.max() + 1e-9)
+            bins = np.arange(0, 1 + 1e-9, 1 / n_bins)
+            sdm = np.digitize(normalized_sdm, bins=bins, right=False)
+
         return -stats.kendalltau(sdm.flatten(), meet_mat.flatten())[0]
     elif region == 'path':
         meet_diag = np.diag(meet_mat, k=1)
         sdm_diag = np.diag(sdm, k=1)
-        return -stats.kendalltau(meet_diag, sdm_diag)[0]
+        if quantize:
+            normalized_sdm_diag = sdm_diag / (sdm_diag.max() + 1e-9)
+            bins = np.arange(0, 1 + 1e-9, 1 / n_bins)
+            sdm_diag = np.digitize(normalized_sdm_diag, bins=bins, right=False)
+        return -stats.kendalltau(sdm_diag, meet_diag)[0]
     else:
         raise librosa.ParameterError('region can only be "full" or "path"')
-    
 
 
 def compute_l(
-    proposal, 
-    annotation,
-) -> float:
+    proposal: jams.JAMS, 
+    annotation: jams.JAMS,
+) -> np.array:
     """
     """
-    pass
+    anno_interval, anno_label = segmentation_to_mireval(annotation)
+    proposal_interval, proposal_label = segmentation_to_mireval(proposal)
+
+    # make last segment for estimation end at the same time as annotation
+    end = max(anno_interval[-1][-1, 1], proposal_interval[-1][-1, 1])
+    for i in range(len(proposal_interval)):
+        proposal_interval[i][-1, 1] = end
+    for i in range(len(anno_interval)):
+        anno_interval[i][-1, 1] = end
+
+    return mir_eval.hierarchy.lmeasure(
+        anno_interval, anno_label, proposal_interval, proposal_label,
+    )
 

@@ -157,7 +157,8 @@ def prep(track, feat_type='openl3') -> tuple:
 
     feat_mat = feat_npz['feature']
     ts = feat_npz['ts']
-    feat_mat = feat_mat[:, :track.min_num_frames()]
+    common_ts = track.ts()
+    feat_mat = feat_mat[:, :len(common_ts)]
     # add noise
     if add_noise:
         rng = np.random.default_rng()

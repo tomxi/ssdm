@@ -6,9 +6,9 @@ import mir_eval
 from sklearn import preprocessing
 from scipy import spatial, sparse, stats
 
-from ssdm import spliter
-from ssdm import feature
-from ssdm import scluster as sc
+import ssdm
+import ssdm.scluster as sc
+
 
 
 class Track:
@@ -23,52 +23,70 @@ class Track:
 
         self._y = None # populate when .audio() is called.
         self._sr = None # populate when .audio() is called.
-        self._num_annos = None # populate when .jam() is called.
+        self._jam = None # populate when .jam() is called.
         self._common_ts = None # populate when .ts() is called.
 
-    
+
     def audio(
         self, 
         sr: float = 22050
     ) -> tuple:
         if self._sr != sr:
             self._y, self._sr = librosa.load(self.audio_path, sr=sr)
-
         return self._y, self._sr
     
     
     def jam(
         self, 
     ) -> jams.JAMS:
-        jam = jams.load(os.path.join(self.salami_dir, f'jams/{self.tid}.jams'))
-        if self._num_annos is None:
-            self._num_annos = len(jam.search(namespace='segment_salami_upper'))
-        return jam
+        if self._jam is None:
+            self._jam = jams.load(os.path.join(self.salami_dir, f'jams/{self.tid}.jams'))
+        return self._jam
+
+    
+    def num_annos(
+        self,
+    ) -> int:
+        return len(self.jam().search(namespace='segment_salami_upper'))
     
     
     def segmentation_annotation(
         self,
-        mode: str = 'normal', # {'normal', 'expanded'},
+        mode: str = 'normal', # {'normal', 'expand'},
         anno_id: int = 0,
-    ) -> list: # hier annotaion format (standardize)
-        # TODO
-        upper_annos = self.jam.search(namespace='segment_salami_upper')
-        lower_annos = self.jam.search(namespace='segment_salami_lower')
+    ) -> list: 
+        """
+        A list of `jams.Annotation`s with two modes: {'normal', 'expand'}
+        """
+        upper_annos = self.jam().search(namespace='segment_salami_upper')
+        lower_annos = self.jam().search(namespace='segment_salami_lower')
         hier_annos = []
         if mode == 'normal':
             return [upper_annos[anno_id], lower_annos[anno_id]]
-        elif mode == 'expanded':
-            # TODO
-            pass
-
-            
+        elif mode == 'expand':
+            upper_expanded = ssdm.expand_hierarchy(upper_annos[anno_id])
+            lower_expanded = ssdm.expand_hierarchy(lower_annos[anno_id])
+            return  upper_expanded + lower_expanded
 
 
     def segmentation_lsd(
-        self, 
+        self,
+        config = None,
     ) -> list: # hier annotaion format (standardize)
-        # TODO
-        pass
+        if config is None:
+            config = ssdm.DEFAULT_LSD_CONFIG
+        
+        rep_f, rep_ts = ssdm.feature.prep(self, config['rep_ftype'])
+        loc_f, loc_ts = feature.prep(self, config['loc_ftype'])
+
+        # Spectral Clustering with Config
+        est_bdry_idxs, est_sgmt_labels = sc.do_segmentation(rep_f, loc_f, config)
+
+        # Post processing and ready for mir_eval.hierarchy.lmeasure
+        # convert list of frame_indices to times in seconds
+        est_bdry_times = [librosa.frames_to_time(frames, sr=22050, hop_length=4096) for frames in est_bdry_idxs]
+        est_intervals = [mir_eval.util.boundaries_to_intervals(est_bdry) for est_bdry in est_bdry_times]
+        return est_intervals, est_sgmt_labels
 
 
     def segmentation_adobe(
@@ -195,6 +213,8 @@ def segmentation_to_mireval(
 ) -> tuple:
     """
     """
+    pass
+
     hier_intervals, hier_values = ([], [])
     return hier_intervals, hier_values
 

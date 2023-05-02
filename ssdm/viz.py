@@ -9,8 +9,9 @@ import holoviews as hv
 from holoviews import opts
 import panel as pn
 
-from ssdm import salami
-from ssdm import spliter
+import ssdm
+from ssdm import ssdm
+
 
 hv.extension("bokeh", logo=False)
 
@@ -20,17 +21,17 @@ def show_sdm(tid='384', feature_type='mfcc', ax=None):
         fig, ax = plt.subplots()
     
     # Get track with tid and get sdm
-    track = salami.Track(tid=tid)
+    track = ssdm.Track(tid=tid)
     sdm = track.sdm(feat=feature_type, distance='cosine')
     quadmesh = librosa.display.specshow(sdm, y_axis='time', x_axis='time', ax=ax, hop_length=4096, sr=22050)
     
-    ax.set_title(f"Cosine SDM | Salami track: {tid} | feature: {feature_type}")
+    ax.set_title(f"track: {tid} | feature: {feature_type}")
     return quadmesh
     
 
 # def show_all_sdms(tid='384'):
 #     fig, axs = plt.subplots(3,2, sharex=True, sharey=True, figsize=(9,10))
-#     for i, feat in enumerate(spliter.AVAL_FEAT_TYPES):
+#     for i, feat in enumerate(ssdm.AVAL_FEAT_TYPES):
 #         quadmesh = show_sdm(tid=tid, feature_type=feat, ax=axs[i // 2][i % 2]);
 #         fig.colorbar(quadmesh, ax=axs[i // 2][i % 2]);
 #     fig.tight_layout()
@@ -38,7 +39,7 @@ def show_sdm(tid='384', feature_type='mfcc', ax=None):
 
 
 def show_anno_meet_mats(tid='384', no_rep=False):
-    track = salami.Track(tid=tid)
+    track = ssdm.Track(tid=tid)
     meet_mats = track.meet_mats(track.common_ts(), no_rep)
     n_annos = len(meet_mats)
     fig, axs = plt.subplots(1, n_annos, figsize=(5*n_annos + 1, 4))
@@ -60,9 +61,9 @@ def show_lsd_meet_mat(tid='384', rep_feature='openl3', loc_feature='mfcc', layer
               'hier': True,
               'num_layers': 10}
     
-    track = salami.Track(tid=tid)
+    track = ssdm.Track(tid=tid)
     hier_anno = track.lsd_anno(rep_feature=rep_feature, loc_feature=loc_feature)
-    lsd_meet_mat = salami._meet_mat(hier_anno[:layer], ts=track.common_ts())
+    lsd_meet_mat = ssdm._meet_mat(hier_anno[:layer], ts=track.common_ts())
     fig, ax = plt.subplots(figsize=(5, 4))
     quadmesh = librosa.display.specshow(lsd_meet_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
     fig.colorbar(quadmesh, ax=ax)      
@@ -113,7 +114,7 @@ def update_cross_dmap(time):
 
 def explore_track(tid, rep_feature, loc_feature, lsd_layer=10):
     # init track object
-    track = salami.Track(tid)
+    track = ssdm.Track(tid)
     if lsd_layer > 10:
         lsd_layer = 10
     elif lsd_layer <2:
@@ -129,7 +130,7 @@ def explore_track(tid, rep_feature, loc_feature, lsd_layer=10):
 
     # LSD results:
     hier_anno = track.lsd_anno(rep_feature=rep_feature, loc_feature=loc_feature)
-    lsd = salami._meet_mat(hier_anno[:lsd_layer], ts=track.common_ts())
+    lsd = ssdm._meet_mat(hier_anno[:lsd_layer], ts=track.common_ts())
     
     # audio
     audio = pn.pane.Audio(track.audio_path, name=tid, throttle=250)
@@ -160,7 +161,7 @@ def explore_track(tid, rep_feature, loc_feature, lsd_layer=10):
 
 
 def scatter_all_scores():
-    compare_scores_df = spliter.score_comparison_df()
+    compare_scores_df = ssdm.score_comparison_df()
     
     axd = plt.figure(layout="tight", figsize=(15, 15)).subplot_mosaic(
         """
@@ -194,7 +195,7 @@ def scatter_all_scores():
 
 def explore_sdm_tau(tid='384'):
     # init track and get audio
-    track = salami.Track(tid)
+    track = ssdm.Track(tid)
     audio = pn.pane.Audio(track.audio_path, name=tid, throttle=250)
     tau_df = pd.read_pickle('./tau_df.pkl')
 
@@ -202,7 +203,7 @@ def explore_sdm_tau(tid='384'):
 
     dmap = hv.DynamicMap(update_cross_dmap, streams=[audio.param.time])
 
-    for feat in spliter.AVAL_FEAT_TYPES:
+    for feat in ssdm.AVAL_FEAT_TYPES:
         # tau_r and tau_l for each sdm
         tau_r = tau_df.loc[tid][feat, 'rep']
         tau_l = tau_df.loc[tid][feat, 'loc']
@@ -262,7 +263,7 @@ def l_heatmap(tid=None, ax=None, l_type='lr'):
     # figure 2 in paper
     # When tid is None, do the average of the entire corpus.
     # get l_score_df:
-    l_df = spliter.get_l_df(l_type=l_type)
+    l_df = ssdm.get_l_df(l_type=l_type)
     l_score = pd.read_pickle('./l_score_df.pkl')
     l_df = l_score.loc[(slice(None), l_type), slice(None)]
     l_df.index = l_df.index.droplevel(1)
@@ -276,16 +277,16 @@ def l_heatmap(tid=None, ax=None, l_type='lr'):
 
     
     img_mat = np.zeros((6,6))
-    for x, rep_feat in enumerate(spliter.AVAL_FEAT_TYPES):
-        for y, loc_feat in enumerate(spliter.AVAL_FEAT_TYPES):
+    for x, rep_feat in enumerate(ssdm.AVAL_FEAT_TYPES):
+        for y, loc_feat in enumerate(ssdm.AVAL_FEAT_TYPES):
             img_mat[x, y] = lr_scores_to_show[rep_feat, loc_feat]
     
     if ax is None:
         fig, ax = plt.subplots(figsize=(5,5))
 
     im = ax.imshow(img_mat, cmap='coolwarm')
-    ax.set_xticks(np.arange(6), labels=spliter.AVAL_FEAT_TYPES)
-    ax.set_yticks(np.arange(6), labels=spliter.AVAL_FEAT_TYPES)
+    ax.set_xticks(np.arange(6), labels=ssdm.AVAL_FEAT_TYPES)
+    ax.set_yticks(np.arange(6), labels=ssdm.AVAL_FEAT_TYPES)
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
     ax.set_xlabel('Local Feature')
     ax.set_ylabel('Repetition Feature')

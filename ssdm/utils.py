@@ -2,22 +2,28 @@ import pandas as pd
 import numpy as np
 import json, os
 from tqdm import tqdm
-
 from sklearn.model_selection import train_test_split
 
-from ssdm import salami
-
 AVAL_FEAT_TYPES = ['chroma', 'crema', 'tempogram', 'mfcc', 'yamnet', 'openl3']
-DEFAULT_LSD_CONFIG = {'rec_width': 13,
-                      'rec_smooth': 7,
-                      'evec_smooth': 13,
-                      'rep_ftype': 'chroma', # grid
-                      'loc_ftype': 'mfcc', # grid
-                      'rep_metric': 'cosine',
-                      'hier': True,
-                      'num_layers': 10}
+DEFAULT_LSD_CONFIG = {
+    'rec_width': 13,
+    'rec_smooth': 7,
+    'evec_smooth': 13,
+    'rep_ftype': 'chroma', # grid
+    'loc_ftype': 'mfcc', # grid
+    'rep_metric': 'cosine',
+    'hier': True,
+    'num_layers': 10
+}
 
-pidx = pd.IndexSlice # for slicing ndarrays in pandas
+REPRESENTATION_KWARGS = {
+    'chroma': {'add_noise': True, 'time_delay_emb': True},
+    'crema': {'add_noise': True, 'time_delay_emb': True},
+    'tempogram': {'add_noise': True, 'time_delay_emb': False},
+    'mfcc': {'add_noise': True, 'time_delay_emb': True},
+    'yamnet': {'add_noise': True, 'time_delay_emb': False},
+    'openl3': {'add_noise': True, 'time_delay_emb': False},
+}
 
 
 # add new splits to split_ids.json

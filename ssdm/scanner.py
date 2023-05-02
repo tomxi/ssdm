@@ -7,7 +7,7 @@ from datetime import datetime
 from scipy.spatial.distance import pdist, squareform
 
 from ssdm import salami
-from ssdm import spliter
+import ssdm
 
 import librosa
 
@@ -51,7 +51,7 @@ class SalamiDataset(Dataset):
         if mode == 'both':
             self.rl_labels = {}
             for tid in self.track_ids:
-                for feat in spliter.AVAL_FEAT_TYPES:
+                for feat in ssdm.AVAL_FEAT_TYPES:
                     loc_label = self.loc_df.loc[tid][feat]
                     rep_label = self.rep_df.loc[tid][feat]
                     if rep_label**2 + loc_label**2 > 0 :

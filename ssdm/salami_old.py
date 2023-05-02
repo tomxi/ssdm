@@ -1,6 +1,5 @@
 import os, json
 import h5py
-from ssdm import spliter
 
 
 import numpy as np
@@ -179,7 +178,7 @@ class Track:
 
         marker = f'lm_{k}' if loc_mask else 'l'
         
-        for feat in spliter.AVAL_FEAT_TYPES:
+        for feat in ssdm.AVAL_FEAT_TYPES:
             if recompute or feat not in score_dict['rep'].keys():
                 # compute
                 meet_mats = self.meet_mats(self.common_ts(), no_rep=False)

@@ -50,7 +50,86 @@ class Track:
         return len(self.jam().search(namespace='segment_salami_upper'))
     
     
-    def segmentation_annotation(
+    
+    def ts(
+        self
+    ) -> np.array:
+        if self._common_ts is None:
+            num_frames = np.asarray([
+                len(ssdm.feature.openl3(self)['ts']),
+                len(ssdm.feature.yamnet(self)['ts']),
+                len(ssdm.feature.chroma(self)['ts']),
+                len(ssdm.feature.crema(self)['ts']),
+                len(ssdm.feature.tempogram(self)['ts']),
+                len(ssdm.feature.mfcc(self)['ts'])
+            ])
+            self._common_ts = ssdm.feature.crema(self)['ts'][:np.min(num_frames)]
+        return self._common_ts
+
+
+    def representation(
+        self,
+        feat_type: str = 'openl3',
+        add_noise: bool = False,
+        time_delay_emb: bool = False,
+    ) -> np.array:
+        # THIS HAS SR FIXED AT 22050
+        if feat_type == 'openl3':
+            feat_npz = ssdm.feature.openl3(self)
+        elif feat_type == 'yamnet':
+            feat_npz = ssdm.feature.yamnet(self)
+        elif feat_type == 'mfcc':
+            feat_npz = ssdm.feature.mfcc(self)
+        elif feat_type == 'tempogram':
+            feat_npz = ssdm.feature.tempogram(self)
+        elif feat_type == 'chroma':
+            feat_npz = ssdm.feature.chroma(self)
+        elif feat_type == 'crema':
+            feat_npz = ssdm.feature.crema(self)
+        else:
+            raise librosa.ParameterError('bad representation name')
+
+        feat_mat = feat_npz['feature'][:len(self.ts())]
+        if add_noise:
+            rng = np.random.default_rng()
+            noise = rng.random(feat_mat.shape) * (1e-9)
+            feat_mat = feat_mat + noise
+
+        if time_delay_emb:
+            feat_mat = librosa.feature.stack_memory(
+                feat_mat, mode='edge', n_steps=6, delay=2
+            )
+        return feat_mat
+
+
+    def sdm(
+        self,
+        feature: str = 'mfcc',
+        distance: str = 'cosine',
+        recompute: bool = False,
+        **kwargs, # add_noise, time_delay_emb; for preping features
+    ) -> np.array:
+        # npy path
+        sdm_path = os.path.join(self.salami_dir, f'sdms/{self.tid}_{feature}_{distance}.npy')
+        
+        # see if desired sdm is already computed
+        if not os.path.exists(sdm_path) or recompute:
+            # compute sdm
+            feat_mat = self.representation(feat_type=feature, **kwargs)
+            dmat = spatial.distance.squareform(
+                spatial.distance.pdist(feat_mat.T, distance)
+            )
+            # store sdm
+            with open(sdm_path, 'wb') as f:
+                np.save(f, dmat)
+        
+        # read npy file
+        with open(sdm_path, 'rb') as f:
+            dmat = np.load(sdm_path, allow_pickle=True)
+        return dmat
+
+
+def segmentation_annotation(
         self,
         mode: str = 'normal', # {'normal', 'expand'},
         anno_id: int = 0,
@@ -72,21 +151,36 @@ class Track:
     def segmentation_lsd(
         self,
         config = None,
-    ) -> list: # hier annotaion format (standardize)
+    ) -> list:
+        """
+        A list of `jams.Annotation`s segmented with config
+        """
         if config is None:
             config = ssdm.DEFAULT_LSD_CONFIG
         
-        rep_f, rep_ts = ssdm.feature.prep(self, config['rep_ftype'])
-        loc_f, loc_ts = feature.prep(self, config['loc_ftype'])
+        rep_kwarg = ssdm.REPRESENTATION_KWARGS[config['rep_ftype']]
+        loc_kwarg = ssdm.REPRESENTATION_KWARGS[config['loc_ftype']]
+        rep_f = self.representation(feat_type=config['rep_ftype'], **rep_kwarg)[:, :len(self.ts())]
+        loc_f = self.representation(feat_type=config['loc_ftype'], **loc_kwarg)[:, :len(self.ts())]
 
         # Spectral Clustering with Config
         est_bdry_idxs, est_sgmt_labels = sc.do_segmentation(rep_f, loc_f, config)
 
-        # Post processing and ready for mir_eval.hierarchy.lmeasure
-        # convert list of frame_indices to times in seconds
-        est_bdry_times = [librosa.frames_to_time(frames, sr=22050, hop_length=4096) for frames in est_bdry_idxs]
-        est_intervals = [mir_eval.util.boundaries_to_intervals(est_bdry) for est_bdry in est_bdry_times]
-        return est_intervals, est_sgmt_labels
+        # create jams annotation
+        hier_anno = []
+
+        for layer_bdry_idx, layer_labels in zip(est_bdry_idxs, est_sgmt_labels):
+            anno = jams.Annotation(namespace='segment_open')
+            for i, segment_label in enumerate(layer_labels):
+                start_time = self.ts()[layer_bdry_idx[i]]
+                end_time = self.ts()[layer_bdry_idx[i+1]]
+                anno.append(
+                    time=start_time, 
+                    duration=end_time - start_time,
+                    value=segment_label
+                )
+            hier_anno.append(anno)
+        return hier_anno
 
 
     def segmentation_adobe(
@@ -94,87 +188,6 @@ class Track:
     ) -> list:
         # TODO
         pass
-    
-    
-    def sdm(
-        self,
-        feature: str = 'mfcc',
-        distance: str = 'cosine',
-        recompute: bool = False,
-        **kwargs, # add_noise, time_delay_emb; for preping features
-    ) -> np.array:
-        # npy path
-        sdm_path = os.path.join(self.salami_dir, f'sdms/{self.tid}_{feature}_{distance}.npy')
-        
-        # see if desired sdm is already computed
-        if not os.path.exists(sdm_path) or recompute:
-            # compute sdm
-            feat_mat = self.feature(feat_type=feature, **kwargs)
-            dmat = spatial.distance.squareform(
-                spatial.distance.pdist(feat_mat.T, distance)
-            )
-            # store sdm
-            with open(sdm_path, 'wb') as f:
-                np.save(f, dmat)
-        
-        # read npy file
-        with open(sdm_path, 'rb') as f:
-            dmat = np.load(sdm_path, allow_pickle=True)
-        return dmat
-
-
-    def ts(
-        self
-    ) -> np.array:
-        if self._common_ts is None:
-            num_frames = np.asarray([
-                len(feature.openl3(self)['ts']),
-                len(feature.yamnet(self)['ts']),
-                len(feature.chroma(self)['ts']),
-                len(feature.crema(self)['ts']),
-                len(feature.tempogram(self)['ts']),
-                len(feature.mfcc(self)['ts'])
-            ])
-
-            self._common_ts = feature.crema(self)['ts'][:np.min(num_frames)]
-        
-        return self._common_ts
-
-
-    def feature(
-        self,
-        feat_type: str = 'openl3',
-        add_noise: bool = False,
-        time_delay_emb: bool = False,
-    ) -> np.array:
-        # THIS HAS SR FIXED AT 22050
-        if feat_type == 'openl3':
-            feat_npz = openl3(track)
-        elif feat_type == 'yamnet':
-            feat_npz = yamnet(track)
-        elif feat_type == 'mfcc':
-            feat_npz = mfcc(track)
-        elif feat_type == 'tempogram':
-            feat_npz = tempogram(track)
-        elif feat_type == 'chroma':
-            feat_npz = chroma(track)
-        elif feat_type == 'crema':
-            feat_npz = crema(track)
-        else:
-            raise librosa.ParameterError('bad feature name')
-
-        feat_mat = feat_npz['feature'][:len(self.ts())]
-        if add_noise:
-            rng = np.random.default_rng()
-            noise = rng.random(feat_mat.shape) * (1e-9)
-            feat_mat = feat_mat + noise
-
-        if time_delay_emb:
-            feat_mat = librosa.feature.stack_memory(
-                feat_mat, mode='edge', n_steps=6, delay=2
-            )
-        
-        return feat_mat
 
 
 ### Stand alone functions

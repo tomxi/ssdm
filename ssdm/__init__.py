@@ -6,6 +6,6 @@ from . import scanner
 
 from .salami import *
 from .viz import *
-from .spliter import *
+from .utils import *
 
 from .expand_hier import expand_hierarchy

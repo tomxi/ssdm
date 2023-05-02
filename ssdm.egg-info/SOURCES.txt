@@ -7,7 +7,7 @@ ssdm/salami.py
 ssdm/salami_new.py
 ssdm/scanner.py
 ssdm/scluster.py
-ssdm/spliter.py
+ssdm/utils.py
 ssdm/viz.py
 ssdm.egg-info/PKG-INFO
 ssdm.egg-info/SOURCES.txt

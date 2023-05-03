@@ -1,4 +1,5 @@
 import os, json
+import pkg_resources
 import numpy as np
 import librosa
 import jams
@@ -291,9 +292,8 @@ class Track:
         return pd.read_pickle(record_path)
 
 
-    def report_l(
+    def report_lsd_l(
         self,
-        l_type = 'lr', #{lp, lr, l} 
         anno_id: int = 0,
         recompute: bool = False,
     ) -> pd.DataFrame:
@@ -322,16 +322,17 @@ class Track:
         # Read from record_path
         return pd.read_pickle(record_path)
 
+
 ### Stand alone functions
 def get_ids(
     split: str = 'dev',
-    id_paths: str = '/home/qx244/scanning-ssm/revive/split_ids.json',
     out_type: str = 'list' # one of {'set', 'list'}
 ) -> list:
     """ split can be ['audio', 'jams', 'excluded', 'new_val', 'new_test', 'new_train']
-        Dicts sotred in id_paths json file.
+        Dicts sotred in id_path json file.
     """
-    with open(id_paths, 'r') as f:
+    id_path = pkg_resources.resource_filename('ssdm', 'split_ids.json')
+    with open(id_path, 'r') as f:
         id_json = json.load(f)
         
     ids = id_json[split]

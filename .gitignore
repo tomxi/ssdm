@@ -1,5 +1,6 @@
 .vscode/
 
+sbatch/
 notebooks/
 *.out
 *.sbatch

@@ -220,69 +220,107 @@ class Track:
     def report_tau(
         self,
         anno_id: int = 0,
+        recompute: bool = False,
         **kwargs,
     ) -> pd.DataFrame:
-        tau_score = pd.DataFrame(index=ssdm.AVAL_FEAT_TYPES, columns=['full_expand', 'full_normal', 'full_refine', 'path_normal', 'path_refine'])
-        for feat in ssdm.AVAL_FEAT_TYPES:
-            sdm = self.sdm(feature=feat, **ssdm.REPRESENTATION_KWARGS[feat])
-            tau_score.loc[feat]['full_expand'] = compute_tau(
-                sdm, 
-                self.segmentation_annotation(mode='expand', anno_id=anno_id),
-                self.ts(),
-                region='full',
-                **kwargs
+        """
+        kwargs for compute_tau function: 
+            region: str = 'full', #{'full', 'path'}
+            quantize: bool = False, 
+            quant_bins: int = 16, # number of quantization bins, ignored whtn quantize is Flase
+        """
+        # test if record_path exist, if no, set recompute to true.
+        record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_a{anno_id}.pkl')
+        if not os.path.exists(record_path):
+            recompute = True
+
+        if recompute:
+            # creating a dataframe to store all different variations of kendall taus for each feature
+            tau_score = pd.DataFrame(
+                index=ssdm.AVAL_FEAT_TYPES, 
+                columns=['full_expand', 'full_normal', 'full_refine', 'path_expand', 'path_normal', 'path_refine']
             )
-            tau_score.loc[feat]['full_normal'] = compute_tau(
-                sdm, 
-                self.segmentation_annotation(mode='normal', anno_id=anno_id),
-                self.ts(),
-                region='full',
-                **kwargs
-            )
-            tau_score.loc[feat]['full_refine'] = compute_tau(
-                sdm, 
-                self.segmentation_annotation(mode='refine', anno_id=anno_id),
-                self.ts(),
-                region='full',
-                **kwargs
-            )
-            tau_score.loc[feat]['path_refine'] = compute_tau(
-                sdm, 
-                self.segmentation_annotation(mode='refine', anno_id=anno_id),
-                self.ts(),
-                region='path',
-                **kwargs
-            )
-            tau_score.loc[feat]['path_normal'] = compute_tau(
-                sdm, 
-                self.segmentation_annotation(mode='normal', anno_id=anno_id),
-                self.ts(),
-                region='path',
-                **kwargs
-            )
-        return tau_score
+            for feat in ssdm.AVAL_FEAT_TYPES:
+                sdm = self.sdm(feature=feat, **ssdm.REPRESENTATION_KWARGS[feat])
+                tau_score.loc[feat]['full_expand'] = compute_tau(
+                    sdm, 
+                    self.segmentation_annotation(mode='expand', anno_id=anno_id),
+                    self.ts(),
+                    region='full',
+                    **kwargs
+                )
+                tau_score.loc[feat]['full_normal'] = compute_tau(
+                    sdm, 
+                    self.segmentation_annotation(mode='normal', anno_id=anno_id),
+                    self.ts(),
+                    region='full',
+                    **kwargs
+                )
+                tau_score.loc[feat]['full_refine'] = compute_tau(
+                    sdm, 
+                    self.segmentation_annotation(mode='refine', anno_id=anno_id),
+                    self.ts(),
+                    region='full',
+                    **kwargs
+                )
+                tau_score.loc[feat]['path_refine'] = compute_tau(
+                    sdm, 
+                    self.segmentation_annotation(mode='refine', anno_id=anno_id),
+                    self.ts(),
+                    region='path',
+                    **kwargs
+                )
+                tau_score.loc[feat]['path_normal'] = compute_tau(
+                    sdm, 
+                    self.segmentation_annotation(mode='normal', anno_id=anno_id),
+                    self.ts(),
+                    region='path',
+                    **kwargs
+                )
+                tau_score.loc[feat]['path_expand'] = compute_tau(
+                    sdm, 
+                    self.segmentation_annotation(mode='expand', anno_id=anno_id),
+                    self.ts(),
+                    region='path',
+                    **kwargs
+                )
+            # Save to record_path
+            tau_score.to_pickle(record_path)
+        
+        # Read from record_path
+        return pd.read_pickle(record_path)
 
 
     def report_l(
         self,
         l_type = 'lr', #{lp, lr, l} 
-        anno_id: int = 0
+        anno_id: int = 0,
+        recompute: bool = False,
     ) -> pd.DataFrame:
-        l_score = pd.DataFrame(index=ssdm.AVAL_FEAT_TYPES, columns=ssdm.AVAL_FEAT_TYPES)
-        l_type_index = {'lp': 0, 'lr': 1, 'l': 2}
+        record_path = os.path.join(self.salami_dir, f'ells/{self.tid}_a{anno_id}.pkl')
+        # test if record_path exist, if no, set recompute to true.
+        if not os.path.exists(record_path):
+            recompute = True
 
-        lsd_config = ssdm.DEFAULT_LSD_CONFIG
-        for r_feat in ssdm.AVAL_FEAT_TYPES:
-            lsd_config['rep_ftype'] = r_feat
-            for l_feat in ssdm.AVAL_FEAT_TYPES:
-                lsd_config['loc_ftype'] = l_feat
+        if recompute:
+            l_score = pd.DataFrame(
+                index=ssdm.AVAL_FEAT_TYPES,
+                columns=pd.MultiIndex.from_product([['lp', 'lr', 'l'], ssdm.AVAL_FEAT_TYPES])
+            )
+            lsd_config = ssdm.DEFAULT_LSD_CONFIG
+            for r_feat in ssdm.AVAL_FEAT_TYPES:
+                lsd_config['rep_ftype'] = r_feat
+                for l_feat in ssdm.AVAL_FEAT_TYPES:
+                    lsd_config['loc_ftype'] = l_feat
+                    l_score.loc[r_feat, (slice(None), l_feat)] = compute_l(
+                        self.segmentation_lsd(lsd_config), 
+                        self.segmentation_annotation(anno_id=anno_id)
+                    )
+            # save to record_path
+            l_score.to_pickle(record_path)
 
-                l_score.loc[r_feat][l_feat] = compute_l(
-                    self.segmentation_lsd(lsd_config), 
-                    self.segmentation_annotation(anno_id=anno_id)
-                )[l_type_index[l_type]]
-
-        return l_score
+        # Read from record_path
+        return pd.read_pickle(record_path)
 
 ### Stand alone functions
 def get_ids(
@@ -352,7 +390,7 @@ def compute_tau(
     segmentation: jams.JAMS,
     ts: np.array, 
     region: str = 'full', #{'full', 'path'}
-    quantize: bool = True, 
+    quantize: bool = False, 
     quant_bins: int = 16, # number of quantization bins, ignored whtn quantize is Flase
 ) -> float:
     """

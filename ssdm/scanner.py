@@ -6,9 +6,6 @@ from datetime import datetime
 
 from scipy.spatial.distance import pdist, squareform
 
-from ssdm import salami
-import ssdm
-
 import librosa
 
 from tqdm import tqdm

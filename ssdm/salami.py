@@ -3,6 +3,7 @@ import numpy as np
 import librosa
 import jams
 import mir_eval
+import pandas as pd
 from sklearn import preprocessing
 from scipy import spatial, sparse, stats
 
@@ -130,7 +131,7 @@ class Track:
 
     def segmentation_annotation(
         self,
-        mode: str = 'normal', # {'normal', 'expand'},
+        mode: str = 'normal', # {'normal', 'expand', 'refine', 'coarse'},
         anno_id: int = 0,
     ) -> jams.JAMS: 
         """
@@ -141,10 +142,22 @@ class Track:
         hier_annos = []
         if mode == 'normal':
             return jams.JAMS(annotations=[upper_annos[anno_id], lower_annos[anno_id]])
-        elif mode == 'expand':
+        else:
             upper_expanded = ssdm.expand_hierarchy(upper_annos[anno_id])
             lower_expanded = ssdm.expand_hierarchy(lower_annos[anno_id])
-            return  jams.JAMS(annotations=upper_expanded + lower_expanded)
+            
+            if mode == 'expand':
+                return  jams.JAMS(annotations=upper_expanded + lower_expanded)
+            elif mode == 'refine':
+                upper_refined = upper_expanded[-1]
+                lower_refined = lower_expanded[-1]
+                return  jams.JAMS(annotations=[upper_refined, lower_refined])
+            elif mode == 'coarse':
+                upper_coarsened = upper_expanded[0]
+                lower_coarsened = lower_expanded[0]
+                return  jams.JAMS(annotations=[upper_coarsened, lower_coarsened])
+            else:
+                raise librosa.ParameterError("mode can only be one of 'normal', 'expand', 'refine', or 'coarse'.")
 
 
     def segmentation_lsd(
@@ -203,6 +216,73 @@ class Track:
         justin_jam = jams.JAMS(annotations=hier_anno, sandbox={'mu': 0.1, 'gamma': 0.1})
         return justin_jam
 
+
+    def report_tau(
+        self,
+        anno_id: int = 0,
+        **kwargs,
+    ) -> pd.DataFrame:
+        tau_score = pd.DataFrame(index=ssdm.AVAL_FEAT_TYPES, columns=['full_expand', 'full_normal', 'full_refine', 'path_normal', 'path_refine'])
+        for feat in ssdm.AVAL_FEAT_TYPES:
+            sdm = self.sdm(feature=feat, **ssdm.REPRESENTATION_KWARGS[feat])
+            tau_score.loc[feat]['full_expand'] = compute_tau(
+                sdm, 
+                self.segmentation_annotation(mode='expand', anno_id=anno_id),
+                self.ts(),
+                region='full',
+                **kwargs
+            )
+            tau_score.loc[feat]['full_normal'] = compute_tau(
+                sdm, 
+                self.segmentation_annotation(mode='normal', anno_id=anno_id),
+                self.ts(),
+                region='full',
+                **kwargs
+            )
+            tau_score.loc[feat]['full_refine'] = compute_tau(
+                sdm, 
+                self.segmentation_annotation(mode='refine', anno_id=anno_id),
+                self.ts(),
+                region='full',
+                **kwargs
+            )
+            tau_score.loc[feat]['path_refine'] = compute_tau(
+                sdm, 
+                self.segmentation_annotation(mode='refine', anno_id=anno_id),
+                self.ts(),
+                region='path',
+                **kwargs
+            )
+            tau_score.loc[feat]['path_normal'] = compute_tau(
+                sdm, 
+                self.segmentation_annotation(mode='normal', anno_id=anno_id),
+                self.ts(),
+                region='path',
+                **kwargs
+            )
+        return tau_score
+
+
+    def report_l(
+        self,
+        l_type = 'lr', #{lp, lr, l} 
+        anno_id: int = 0
+    ) -> pd.DataFrame:
+        l_score = pd.DataFrame(index=ssdm.AVAL_FEAT_TYPES, columns=ssdm.AVAL_FEAT_TYPES)
+        l_type_index = {'lp': 0, 'lr': 1, 'l': 2}
+
+        lsd_config = ssdm.DEFAULT_LSD_CONFIG
+        for r_feat in ssdm.AVAL_FEAT_TYPES:
+            lsd_config['rep_ftype'] = r_feat
+            for l_feat in ssdm.AVAL_FEAT_TYPES:
+                lsd_config['loc_ftype'] = l_feat
+
+                l_score.loc[r_feat][l_feat] = compute_l(
+                    self.segmentation_lsd(lsd_config), 
+                    self.segmentation_annotation(anno_id=anno_id)
+                )[l_type_index[l_type]]
+
+        return l_score
 
 ### Stand alone functions
 def get_ids(
@@ -273,7 +353,7 @@ def compute_tau(
     ts: np.array, 
     region: str = 'full', #{'full', 'path'}
     quantize: bool = True, 
-    n_bins: int = 16, # number of quantization bins
+    quant_bins: int = 16, # number of quantization bins, ignored whtn quantize is Flase
 ) -> float:
     """
     """
@@ -282,7 +362,7 @@ def compute_tau(
     if region == 'full':
         if quantize:
             normalized_sdm = sdm / (sdm.max() + 1e-9)
-            bins = np.arange(0, 1 + 1e-9, 1 / n_bins)
+            bins = np.arange(0, 1 + 1e-9, 1 / quant_bins)
             sdm = np.digitize(normalized_sdm, bins=bins, right=False)
 
         return -stats.kendalltau(sdm.flatten(), meet_mat.flatten())[0]
@@ -291,7 +371,7 @@ def compute_tau(
         sdm_diag = np.diag(sdm, k=1)
         if quantize:
             normalized_sdm_diag = sdm_diag / (sdm_diag.max() + 1e-9)
-            bins = np.arange(0, 1 + 1e-9, 1 / n_bins)
+            bins = np.arange(0, 1 + 1e-9, 1 / quant_bins)
             sdm_diag = np.digitize(normalized_sdm_diag, bins=bins, right=False)
         return -stats.kendalltau(sdm_diag, meet_diag)[0]
     else:

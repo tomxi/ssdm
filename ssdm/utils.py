@@ -1,8 +1,10 @@
+import pkg_resources
 import pandas as pd
 import numpy as np
 import json, os
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
+
 
 AVAL_FEAT_TYPES = ['chroma', 'crema', 'tempogram', 'mfcc', 'yamnet', 'openl3']
 DEFAULT_LSD_CONFIG = {
@@ -51,7 +53,8 @@ def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
 
 
 def score_comparison_df():
-    l_score = pd.read_pickle('./l_score_df.pkl')
+    l_score_path = pkg_resources.resource_filename('ssdm', 'l_score_df.pkl')
+    l_score = pd.read_pickle(l_score_path)
 
     tau_df = pd.read_pickle('./tau_df.pkl')
     tau_loc = tau_df.loc[:, (slice(None), ['loc'])]
@@ -87,7 +90,15 @@ def score_comparison_df():
     return compare_scores_df
 
 def get_l_df(l_type = 'lr'):
-    l_score = pd.read_pickle('./l_score_df.pkl')
+    l_score_path = pkg_resources.resource_filename('ssdm', 'l_score_df.pkl')
+    l_score = pd.read_pickle(l_score_path)
+
     l_df = l_score.loc[(slice(None), l_type), slice(None)]
     l_df.index = l_df.index.droplevel(1)
     return l_df
+
+def get_adobe_l_df():
+    l_score_path = pkg_resources.resource_filename('ssdm', 'l_score_justin_df.pkl')
+    l_score = pd.read_pickle(l_score_path)
+
+    return l_score

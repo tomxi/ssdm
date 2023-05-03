@@ -10,100 +10,102 @@ from holoviews import opts
 import panel as pn
 
 import ssdm
-from ssdm import ssdm
 
 
 hv.extension("bokeh", logo=False)
 
 # get it to consume ax object for easier ploting.
-def show_sdm(tid='384', feature_type='mfcc', ax=None):
+def show_sdm(tid='384', feat='mfcc', ax=None):
     if ax is None:
         fig, ax = plt.subplots()
     
     # Get track with tid and get sdm
     track = ssdm.Track(tid=tid)
-    sdm = track.sdm(feat=feature_type, distance='cosine')
+    sdm = track.sdm(feature=feat, distance='cosine')
     quadmesh = librosa.display.specshow(sdm, y_axis='time', x_axis='time', ax=ax, hop_length=4096, sr=22050)
     
-    ax.set_title(f"track: {tid} | feature: {feature_type}")
+    ax.set_title(f"track: {tid} | feature: {feat}")
     return quadmesh
     
 
-# def show_all_sdms(tid='384'):
-#     fig, axs = plt.subplots(3,2, sharex=True, sharey=True, figsize=(9,10))
-#     for i, feat in enumerate(ssdm.AVAL_FEAT_TYPES):
-#         quadmesh = show_sdm(tid=tid, feature_type=feat, ax=axs[i // 2][i % 2]);
-#         fig.colorbar(quadmesh, ax=axs[i // 2][i % 2]);
-#     fig.tight_layout()
-#     return fig, axs
+def show_all_sdms(tid='384'):
+    fig, axs = plt.subplots(3,2, sharex=True, sharey=True, figsize=(9,10))
+    for i, feat in enumerate(ssdm.AVAL_FEAT_TYPES):
+        quadmesh = show_sdm(tid=tid, feat=feat, ax=axs[i // 2][i % 2]);
+        fig.colorbar(quadmesh, ax=axs[i // 2][i % 2]);
+    fig.tight_layout()
+    return fig, axs
 
 
-def show_anno_meet_mats(tid='384', no_rep=False):
+def show_anno_meet_mats(tid='384', mode='normal'):
+    """
+    mode can be one of {'normal', 'expand', 'refine', 'coarse'}
+    """
     track = ssdm.Track(tid=tid)
-    meet_mats = track.meet_mats(track.common_ts(), no_rep)
-    n_annos = len(meet_mats)
-    fig, axs = plt.subplots(1, n_annos, figsize=(5*n_annos + 1, 4))
+    fig, axs = plt.subplots(1, track.num_annos(), figsize=(5*track.num_annos() + 1, 4))
     if isinstance(axs, matplotlib.axes.Axes):
-        axs = [axs] 
-    for anno_id in range(n_annos):
-        quadmesh = librosa.display.specshow(meet_mats[anno_id], x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=axs[anno_id])
+        axs = [axs]
+    
+    for anno_id in range(track.num_annos()):
+        anno_jam = track.segmentation_annotation(mode=mode, anno_id=anno_id)
+        quadmesh = librosa.display.specshow(ssdm.segmentation_to_meet(anno_jam, track.ts()), x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=axs[anno_id])
         fig.colorbar(quadmesh, ax=axs[anno_id])        
     return fig, axs
 
 
 def show_lsd_meet_mat(tid='384', rep_feature='openl3', loc_feature='mfcc', layer=10):
-    config = {'rec_width': 13, 
-              'rec_smooth': 7, 
-              'evec_smooth': 13,
-              'rep_ftype': rep_feature, 
-              'loc_ftype': loc_feature,
-              'rep_metric': 'cosine',
-              'hier': True,
-              'num_layers': 10}
+    lsd_config = {'rec_width': 13, 
+                  'rec_smooth': 7, 
+                  'evec_smooth': 13,
+                  'rep_ftype': rep_feature, 
+                  'loc_ftype': loc_feature,
+                  'rep_metric': 'cosine',
+                  'hier': True,
+                  'num_layers': 10}
     
     track = ssdm.Track(tid=tid)
-    hier_anno = track.lsd_anno(rep_feature=rep_feature, loc_feature=loc_feature)
-    lsd_meet_mat = ssdm._meet_mat(hier_anno[:layer], ts=track.common_ts())
+    lsd_seg = track.segmentation_lsd(lsd_config)
+    lsd_meet_mat = ssdm.segmentation_to_meet(lsd_seg, track.ts())
     fig, ax = plt.subplots(figsize=(5, 4))
     quadmesh = librosa.display.specshow(lsd_meet_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
     fig.colorbar(quadmesh, ax=ax)      
     return fig, ax
 
 
-def scatter_scores(compare_scores_df, x_heuristic, y_heuristic, ax=None):
-    if ax is None:
-        _, ax = plt.subplots()
+# def scatter_scores(compare_scores_df, x_heuristic, y_heuristic, ax=None):
+#     if ax is None:
+#         _, ax = plt.subplots()
    
-    compare_scores_df.plot.scatter(
-        x=x_heuristic, 
-        y=y_heuristic, 
-        alpha=0.5, 
-        s=3, 
-        xlim=(0,1), 
-        ylim=(0,1), 
-        ax=ax
-    )
-    ax.plot([0,1], [0,1], 'r:')
-    ax.set_aspect('equal', 'box')
-    ax.set_title('L-Recall scores')
-    return ax
+#     compare_scores_df.plot.scatter(
+#         x=x_heuristic, 
+#         y=y_heuristic, 
+#         alpha=0.5, 
+#         s=3, 
+#         xlim=(0,1), 
+#         ylim=(0,1), 
+#         ax=ax
+#     )
+#     ax.plot([0,1], [0,1], 'r:')
+#     ax.set_aspect('equal', 'box')
+#     ax.set_title('L-Recall scores')
+#     return ax
 
 
-def score_delta_kde(compare_scores_df, x_heuristic='Best Avg Pair', y_heuristic='Rep Pick', ax=None):
-    score_delta = compare_scores_df[x_heuristic] - compare_scores_df[y_heuristic]
+# def score_delta_kde(compare_scores_df, x_heuristic='Best Avg Pair', y_heuristic='Rep Pick', ax=None):
+#     score_delta = compare_scores_df[x_heuristic] - compare_scores_df[y_heuristic]
 
-    if ax is None:
-        _, ax = plt.subplots()
+#     if ax is None:
+#         _, ax = plt.subplots()
         
-    ax = sns.kdeplot(score_delta, ax=ax, common_grid=True)
-    ymax = ax.viewLim.ymax
-    ax.vlines([score_delta.mean()], ymin=0, ymax=ax.viewLim.ymax, color='red', linestyle=':', label=f'Mean gap: {score_delta.mean()*100:.2f}%')
-    ax.set_ylim((0, ymax))
-    ax.set_title(f'Distribution of performance gap between \n \
-    {x_heuristic} and {y_heuristic}')
-    ax.legend()
-    ax.grid()
-    return ax
+#     ax = sns.kdeplot(score_delta, ax=ax, common_grid=True)
+#     ymax = ax.viewLim.ymax
+#     ax.vlines([score_delta.mean()], ymin=0, ymax=ax.viewLim.ymax, color='red', linestyle=':', label=f'Mean gap: {score_delta.mean()*100:.2f}%')
+#     ax.set_ylim((0, ymax))
+#     ax.set_title(f'Distribution of performance gap between \n \
+#     {x_heuristic} and {y_heuristic}')
+#     ax.legend()
+#     ax.grid()
+#     return ax
 
 
 def update_cross_dmap(time):

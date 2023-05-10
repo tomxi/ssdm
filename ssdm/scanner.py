@@ -7,6 +7,7 @@ from datetime import datetime
 from scipy.spatial.distance import pdist, squareform
 
 import librosa
+import ssdm
 
 from tqdm import tqdm
 import numpy as np

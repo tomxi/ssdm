@@ -4,6 +4,7 @@ sbatch/
 notebooks/
 *.out
 *.sbatch
+*_old.py
 
 salami_old.py
 

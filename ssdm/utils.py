@@ -139,6 +139,15 @@ def collate_l_score(
         raise ParameterError('bad heuristic')
 
 
+def lucky_track(tids=get_ids(split='working'), announce=True):
+    """Randomly pick a track"""
+    rand_idx = int(np.floor(np.random.rand() * len(tids)))
+    tid = tids[rand_idx]
+    if announce:
+        print(f'track {tid} is the lucky track!')
+    return ssdm.Track(tid)
+
+
 # def score_comparison_df():
 #     l_score_path = pkg_resources.resource_filename('ssdm', 'l_score_df.pkl')
 #     l_score = pd.read_pickle(l_score_path)

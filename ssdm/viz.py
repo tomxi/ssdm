@@ -58,10 +58,10 @@ def lsd_meet_mat(track, rep_feature='openl3', loc_feature='mfcc', layer=10):
                   'loc_ftype': loc_feature,
                   'rep_metric': 'cosine',
                   'hier': True,
-                  'num_layers': layer}
+                  'num_layers': 10}
     
     lsd_seg = track.segmentation_lsd(lsd_config)
-    lsd_meet_mat = ssdm.segmentation_to_meet(lsd_seg, track.ts())
+    lsd_meet_mat = ssdm.segmentation_to_meet(lsd_seg, track.ts(), num_layers=layer)
     fig, ax = plt.subplots(figsize=(5, 4))
     quadmesh = librosa.display.specshow(lsd_meet_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
     fig.colorbar(quadmesh, ax=ax)      

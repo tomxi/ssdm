@@ -139,61 +139,68 @@ class Track:
         """
         upper_annos = self.jam().search(namespace='segment_salami_upper')
         lower_annos = self.jam().search(namespace='segment_salami_lower')
-        hier_annos = []
         if mode == 'normal':
-            return jams.JAMS(annotations=[upper_annos[anno_id], lower_annos[anno_id]])
+            out_jam = jams.JAMS(annotations=[upper_annos[anno_id], lower_annos[anno_id]])
         else:
             upper_expanded = ssdm.expand_hierarchy(upper_annos[anno_id])
             lower_expanded = ssdm.expand_hierarchy(lower_annos[anno_id])
             
             if mode == 'expand':
-                return  jams.JAMS(annotations=upper_expanded + lower_expanded)
+                out_jam = jams.JAMS(annotations=upper_expanded + lower_expanded)
             elif mode == 'refine':
                 upper_refined = upper_expanded[-1]
                 lower_refined = lower_expanded[-1]
-                return  jams.JAMS(annotations=[upper_refined, lower_refined])
+                out_jam = jams.JAMS(annotations=[upper_refined, lower_refined])
             elif mode == 'coarse':
                 upper_coarsened = upper_expanded[0]
                 lower_coarsened = lower_expanded[0]
-                return  jams.JAMS(annotations=[upper_coarsened, lower_coarsened])
+                out_jam = jams.JAMS(annotations=[upper_coarsened, lower_coarsened])
             else:
                 raise librosa.ParameterError("mode can only be one of 'normal', 'expand', 'refine', or 'coarse'.")
-
+        out_jam.file_metadata.duration = self.ts()[-1]
+        return out_jam
 
     def segmentation_lsd(
         self,
         config = None,
+        recompute = False,
     ) -> jams.JAMS:
         """
         A list of `jams.Annotation`s segmented with config
         """
         if config is None:
             config = ssdm.DEFAULT_LSD_CONFIG
-        
-        rep_kwarg = ssdm.REPRESENTATION_KWARGS[config['rep_ftype']]
-        loc_kwarg = ssdm.REPRESENTATION_KWARGS[config['loc_ftype']]
-        rep_f = self.representation(feat_type=config['rep_ftype'], **rep_kwarg)[:, :len(self.ts())]
-        loc_f = self.representation(feat_type=config['loc_ftype'], **loc_kwarg)[:, :len(self.ts())]
+        record_path = os.path.join(self.salami_dir, f'lsds/{self.tid}_{config["rep_ftype"]}_{config["loc_ftype"]}.jams')
+        if not os.path.exists(record_path):
+            recompute = True
 
-        # Spectral Clustering with Config
-        est_bdry_idxs, est_sgmt_labels = sc.do_segmentation(rep_f, loc_f, config)
+        if recompute:
+            rep_kwarg = ssdm.REPRESENTATION_KWARGS[config['rep_ftype']]
+            loc_kwarg = ssdm.REPRESENTATION_KWARGS[config['loc_ftype']]
+            rep_f = self.representation(feat_type=config['rep_ftype'], **rep_kwarg)[:, :len(self.ts())]
+            loc_f = self.representation(feat_type=config['loc_ftype'], **loc_kwarg)[:, :len(self.ts())]
 
-        # create jams annotation
-        hier_anno = []
-        for layer_bdry_idx, layer_labels in zip(est_bdry_idxs, est_sgmt_labels):
-            anno = jams.Annotation(namespace='segment_open')
-            for i, segment_label in enumerate(layer_labels):
-                start_time = self.ts()[layer_bdry_idx[i]]
-                end_time = self.ts()[layer_bdry_idx[i+1]]
-                anno.append(
-                    time=start_time, 
-                    duration=end_time - start_time,
-                    value=segment_label
-                )
-            hier_anno.append(anno)
+            # Spectral Clustering with Config
+            est_bdry_idxs, est_sgmt_labels = sc.do_segmentation(rep_f, loc_f, config)
 
-        lsd_jam = jams.JAMS(annotations=hier_anno, sandbox=config)
-        return lsd_jam
+            # create jams annotation
+            hier_anno = []
+            for layer_bdry_idx, layer_labels in zip(est_bdry_idxs, est_sgmt_labels):
+                anno = jams.Annotation(namespace='segment_open')
+                for i, segment_label in enumerate(layer_labels):
+                    start_time = self.ts()[layer_bdry_idx[i]]
+                    end_time = self.ts()[layer_bdry_idx[i+1]]
+                    anno.append(
+                        time=start_time, 
+                        duration=end_time - start_time,
+                        value=str(segment_label),
+                    )
+                hier_anno.append(anno)
+
+            lsd_jam = jams.JAMS(annotations=hier_anno, sandbox=config)
+            lsd_jam.file_metadata.duration = self.ts()[-1]
+            lsd_jam.save(record_path)
+        return jams.load(record_path)
 
 
     def segmentation_adobe(
@@ -214,6 +221,7 @@ class Track:
             hier_anno.append(ann)
             
         justin_jam = jams.JAMS(annotations=hier_anno, sandbox={'mu': 0.1, 'gamma': 0.1})
+        justin_jam.file_metadata.duration=self.ts()[-1]
         return justin_jam
 
 
@@ -355,11 +363,14 @@ class Track:
 def segmentation_to_meet(
     segmentation, 
     ts,
+    num_layers = None,
 ) -> np.array:
     """
     """
     # initialize a 3d array to store all the meet matrices for each layer
     hier_anno = segmentation.annotations
+    if num_layers:
+        hier_anno = hier_anno[:num_layers]
     n_level = len(hier_anno)
     n_frames = len(ts)
     meet_mat_per_level = np.zeros((n_level, n_frames, n_frames))

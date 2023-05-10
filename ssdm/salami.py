@@ -1,12 +1,11 @@
 import os, json
-import pkg_resources
 import numpy as np
 import librosa
 import jams
 import mir_eval
 import pandas as pd
 from sklearn import preprocessing
-from scipy import spatial, sparse, stats
+from scipy import spatial, stats
 
 import ssdm
 import ssdm.scluster as sc
@@ -218,7 +217,7 @@ class Track:
         return justin_jam
 
 
-    def report_tau(
+    def tau(
         self,
         anno_id: int = 0,
         recompute: bool = False,
@@ -292,12 +291,14 @@ class Track:
         return pd.read_pickle(record_path)
 
 
-    def report_lsd_l(
+    def lsd_l(
         self,
         anno_id: int = 0,
         recompute: bool = False,
+        anno_mode: str = 'expand', #see `segmentation_anno`'s `mode`.
+        l_type: str = 'l' # can also be 'lr' and 'lp' for recall and precision.
     ) -> pd.DataFrame:
-        record_path = os.path.join(self.salami_dir, f'ells/{self.tid}_a{anno_id}.pkl')
+        record_path = os.path.join(self.salami_dir, f'ells/{self.tid}_a{anno_id}_{anno_mode}.pkl')
         # test if record_path exist, if no, set recompute to true.
         if not os.path.exists(record_path):
             recompute = True
@@ -314,39 +315,43 @@ class Track:
                     lsd_config['loc_ftype'] = l_feat
                     l_score.loc[r_feat, (slice(None), l_feat)] = compute_l(
                         self.segmentation_lsd(lsd_config), 
-                        self.segmentation_annotation(anno_id=anno_id)
+                        self.segmentation_annotation(mode=anno_mode, anno_id=anno_id)
                     )
             # save to record_path
             l_score.to_pickle(record_path)
 
         # Read from record_path
-        return pd.read_pickle(record_path)
+        l_df = pd.read_pickle(record_path).astype('float')
+        l_sub_square = l_df.loc[slice(None), (l_type, slice(None))]
+        l_sub_square.columns = l_sub_square.columns.droplevel(0)
+        return l_sub_square
+    
 
+    def adobe_l(
+        self,
+        anno_id: int = 0,
+        recompute: bool = False,
+        anno_mode: str = 'expand', #see `segmentation_anno`'s `mode`.
+        l_type: str = 'l' # can also be 'lr' and 'lp' for recall and precision.
+    ) -> pd.DataFrame:
+        record_path = os.path.join(self.salami_dir, f'ells/{self.tid}_a{anno_id}_{anno_mode}_adobe.pkl')
+        # test if record_path exist, if no, set recompute to true.
+        if not os.path.exists(record_path):
+            recompute = True
+
+        if recompute:
+            l_score = pd.Series(index=['lp', 'lr', 'l'])
+            l_score[:]= compute_l(
+                self.segmentation_adobe(), 
+                self.segmentation_annotation(mode=anno_mode, anno_id=anno_id)
+            )
+            # save to record_path
+            l_score.to_pickle(record_path)
+
+        # Read from record_path
+        return pd.read_pickle(record_path).astype('float')[l_type]
 
 ### Stand alone functions
-def get_ids(
-    split: str = 'dev',
-    out_type: str = 'list' # one of {'set', 'list'}
-) -> list:
-    """ split can be ['audio', 'jams', 'excluded', 'new_val', 'new_test', 'new_train']
-        Dicts sotred in id_path json file.
-    """
-    id_path = pkg_resources.resource_filename('ssdm', 'split_ids.json')
-    with open(id_path, 'r') as f:
-        id_json = json.load(f)
-        
-    ids = id_json[split]
-        
-    if out_type == 'set':
-        return set(ids)
-    elif out_type == 'list':
-        ids.sort()
-        return ids
-    else:
-        print('invalid out_type')
-        return None
-
-
 def segmentation_to_meet(
     segmentation, 
     ts,

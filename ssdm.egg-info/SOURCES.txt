@@ -4,7 +4,6 @@ setup.py
 ssdm/__init__.py
 ssdm/feature.py
 ssdm/salami.py
-ssdm/salami_new.py
 ssdm/scanner.py
 ssdm/scluster.py
 ssdm/utils.py

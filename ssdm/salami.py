@@ -5,12 +5,42 @@ import jams
 import mir_eval
 import pandas as pd
 from sklearn import preprocessing
-from scipy import spatial, stats
+from scipy import spatial, stats, sparse
 
 import ssdm
 import ssdm.scluster as sc
 
+AVAL_FEAT_TYPES = ['chroma', 'crema', 'tempogram', 'mfcc', 'yamnet', 'openl3']
+DEFAULT_LSD_CONFIG = {
+    'rec_width': 13,
+    'rec_smooth': 7,
+    'rec_full': False,
+    'evec_smooth': 13,
+    'rep_ftype': 'chroma', # grid
+    'loc_ftype': 'mfcc', # grid
+    'rep_metric': 'cosine',
+    'loc_metric': 'cosine',
+    'hier': True,
+    'num_layers': 12
+}
 
+REP_FEAT_CONFIG = {
+    'chroma': {'add_noise': True, 'n_steps': 6, 'delay': 2},
+    'crema': {'add_noise': True, 'n_steps': 6, 'delay': 2},
+    'tempogram': {'add_noise': True, 'n_steps': 1, 'delay': 1},
+    'mfcc': {'add_noise': True, 'n_steps': 6, 'delay': 2},
+    'yamnet': {'add_noise': True, 'n_steps': 3, 'delay': 1},
+    'openl3': {'add_noise': True, 'n_steps': 3, 'delay': 1},
+}
+
+LOC_FEAT_CONFIG = {
+    'chroma': {'add_noise': True, 'n_steps': 3, 'delay': 1},
+    'crema': {'add_noise': True, 'n_steps': 3, 'delay': 1},
+    'tempogram': {'add_noise': True, 'n_steps': 1, 'delay': 1},
+    'mfcc': {'add_noise': True, 'n_steps': 3, 'delay': 1},
+    'yamnet': {'add_noise': True, 'n_steps': 1, 'delay': 1},
+    'openl3': {'add_noise': True, 'n_steps': 1, 'delay': 1},
+}
 
 class Track:
     def __init__(
@@ -71,7 +101,8 @@ class Track:
         self,
         feat_type: str = 'openl3',
         add_noise: bool = False,
-        time_delay_emb: bool = False,
+        n_steps: int = 1, # param for time_delay_emb
+        delay: int = 1, # param for time_delay_emb
     ) -> np.array:
         # THIS HAS SR FIXED AT 22050
         if feat_type == 'openl3':
@@ -95,19 +126,19 @@ class Track:
             noise = rng.random(feat_mat.shape) * (1e-9)
             feat_mat = feat_mat + noise
 
-        if time_delay_emb:
-            feat_mat = librosa.feature.stack_memory(
-                feat_mat, mode='edge', n_steps=6, delay=2
-            )
-        return feat_mat
+        feat_mat = librosa.feature.stack_memory(
+            feat_mat, mode='edge', n_steps=n_steps, delay=delay
+        )
+        return feat_mat[:, :len(self.ts())]
 
 
+    # DEPRE
     def sdm(
         self,
         feature: str = 'mfcc',
         distance: str = 'cosine',
         recompute: bool = False,
-        **kwargs, # add_noise, time_delay_emb; for preping features
+        **kwargs, # add_noise, n_steps, delay; for preping features
     ) -> np.array:
         # npy path
         sdm_path = os.path.join(self.salami_dir, f'sdms/{self.tid}_{feature}_{distance}.npy')
@@ -127,6 +158,112 @@ class Track:
         with open(sdm_path, 'rb') as f:
             dmat = np.load(sdm_path, allow_pickle=True)
         return dmat
+    
+
+    def ssm(
+        self,
+        feature: str = 'mfcc',
+        distance: str = 'cosine',
+        width = 13, # ~2.5 sec width param for librosa.segment.rec_mat
+        # bw: str = 'med_k_scalar', # one of {'med_k_scalar', 'mean_k', 'gmean_k', 'mean_k_avg', 'gmean_k_avg', 'mean_k_avg_and_pair'}
+        full: bool = False,
+        add_noise: bool = False, # padding representation with a little noise to avoid divide by 0 somewhere...
+        n_steps: int = 1, # Param for time delay embedding of representation
+        delay: int = 1, # Param for time delay embedding of representation
+        recompute: bool = False,
+    ) -> np.array:
+        # npy path
+        ssm_info_str = f'{feature}_{distance}{f"_fw{width}" if full else ""}'
+        feat_info_str = f's{n_steps}xd{delay}{"_n" if add_noise else ""}'
+        ssm_path = os.path.join(
+            self.salami_dir, 
+            f'ssms/{self.tid}_{ssm_info_str}_{feat_info_str}.npy'
+        )
+        # print(ssm_path)
+        
+        # see if desired ssm is already computed
+        if not os.path.exists(ssm_path):
+            recompute = True
+
+        if recompute:
+            # compute ssm
+            feat_mat = self.representation(
+                feat_type=feature, 
+                add_noise=add_noise,
+                n_steps=n_steps,
+                delay=delay,
+            )
+            ssm = librosa.segment.recurrence_matrix(
+                feat_mat, 
+                mode='affinity',
+                width=width,
+                sym=True,
+                full=full,
+                # bandwidth=bw,
+            )
+
+            # store ssm
+            with open(ssm_path, 'wb') as f:
+                np.save(f, ssm)
+        
+        # read npy file
+        with open(ssm_path, 'rb') as f:
+            ssm = np.load(ssm_path, allow_pickle=True)
+
+        if full:
+            # carve out width from the full ssm
+            ssm_lil = sparse.lil_matrix(ssm)
+            for diag in range(-width + 1, width):
+                ssm_lil.setdiag(0, diag)
+            ssm = ssm_lil.toarray()
+
+        return ssm
+
+
+    def path_sim(
+            self,
+            feature: str = 'mfcc',
+            distance: str = 'cosine',
+            add_noise: bool = False, # padding representation with a little noise to avoid divide by 0 somewhere...
+            n_steps: int = 1, # Param for time delay embedding of representation
+            delay: int = 1, # Param for time delay embedding of representation
+            recompute: bool = False,
+        ) -> np.array:
+        # npy path
+        path_info_str = f'path_{feature}_{distance}'
+        feat_info_str = f's{n_steps}xd{delay}{"_n" if add_noise else ""}'
+        path_sim_path = os.path.join(
+            self.salami_dir, 
+            f'ssms/{self.tid}_{path_info_str}_{feat_info_str}.npy'
+        )
+        # print(path_sim_path)
+        
+        # see if desired ssm is already computed
+        if not os.path.exists(path_sim_path):
+            recompute = True
+
+        if recompute:
+            feat_mat = self.representation(
+                feat_type=feature, 
+                add_noise=add_noise,
+                n_steps=n_steps,
+                delay=delay,
+            )
+
+            frames = feat_mat.shape[1]
+            path_dist = []
+            for i in range(frames-1):
+                pair_dist = spatial.distance.pdist(feat_mat[:, i:i + 2].T, metric=distance)
+                path_dist.append(pair_dist[0])
+            path_dist = np.array(path_dist)
+            sigma = np.median(path_dist)
+            path_sim = np.exp(-path_dist / sigma)
+
+            # store path_sim
+            with open(path_sim_path, 'wb') as f:
+                np.save(f, path_sim)
+
+        return np.load(path_sim_path, allow_pickle=True)
 
 
     def segmentation_annotation(
@@ -160,28 +297,41 @@ class Track:
         out_jam.file_metadata.duration = self.ts()[-1]
         return out_jam
 
+
     def segmentation_lsd(
         self,
         config = None,
-        recompute = False,
+        recompute = True,
     ) -> jams.JAMS:
         """
         A list of `jams.Annotation`s segmented with config
         """
         if config is None:
-            config = ssdm.DEFAULT_LSD_CONFIG
-        record_path = os.path.join(self.salami_dir, f'lsds/{self.tid}_{config["rep_ftype"]}_{config["loc_ftype"]}.jams')
+            config = DEFAULT_LSD_CONFIG
+
+        full_flag = 'full' if config['rec_full'] else 'sparse'
+        record_path = os.path.join(self.salami_dir, 
+                                   f'lsds/{self.tid}_{config["rep_ftype"]}_{config["loc_ftype"]}_{full_flag}.jams'
+                                  )
         if not os.path.exists(record_path):
             recompute = True
 
         if recompute:
-            rep_kwarg = ssdm.REPRESENTATION_KWARGS[config['rep_ftype']]
-            loc_kwarg = ssdm.REPRESENTATION_KWARGS[config['loc_ftype']]
-            rep_f = self.representation(feat_type=config['rep_ftype'], **rep_kwarg)[:, :len(self.ts())]
-            loc_f = self.representation(feat_type=config['loc_ftype'], **loc_kwarg)[:, :len(self.ts())]
+            # Compute/get SSM mats
+            rep_ssm = self.ssm(feature=config['rep_ftype'], 
+                               distance=config['rep_metric'],
+                               width=config['rec_width'],
+                               full=config['rec_full'],
+                               **REP_FEAT_CONFIG[config['rep_ftype']]
+                              )
 
+            
+            path_sim = self.path_sim(feature=config['loc_ftype'],
+                                     distance=config['loc_metric'],
+                                     **LOC_FEAT_CONFIG[config['loc_ftype']]
+                                    )
             # Spectral Clustering with Config
-            est_bdry_idxs, est_sgmt_labels = sc.do_segmentation(rep_f, loc_f, config)
+            est_bdry_idxs, est_sgmt_labels = sc.do_segmentation_ssm(rep_ssm, path_sim, config)
 
             # create jams annotation
             hier_anno = []
@@ -229,82 +379,72 @@ class Track:
         self,
         anno_id: int = 0,
         recompute: bool = False,
-        **kwargs,
+        quantize: bool = True,
+        quant_bins: int = 6,
+        lsd_config: any = DEFAULT_LSD_CONFIG,
     ) -> pd.DataFrame:
-        """
-        kwargs for compute_tau function: 
-            region: str = 'full', #{'full', 'path'}
-            quantize: bool = False, 
-            quant_bins: int = 16, # number of quantization bins, ignored whtn quantize is Flase
+        """  
         """
         # test if record_path exist, if no, set recompute to true.
-        record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_a{anno_id}.pkl')
+        suffix = f'_qbins{quant_bins}' if quantize else ''
+
+        record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_a{anno_id}{suffix}.pkl')
         if not os.path.exists(record_path):
             recompute = True
 
         if recompute:
             # creating a dataframe to store all different variations of kendall taus for each feature
             tau_score = pd.DataFrame(
-                index=ssdm.AVAL_FEAT_TYPES, 
-                columns=['full_expand', 'full_normal', 'full_refine', 'path_expand', 'path_normal', 'path_refine']
+                index=AVAL_FEAT_TYPES, 
+                columns=['full_expand', 'full_normal', 'full_refine', 'path_expand', 'path_normal', 'path_refine'],
+                dtype='float'
             )
-            for feat in ssdm.AVAL_FEAT_TYPES:
-                sdm = self.sdm(feature=feat, **ssdm.REPRESENTATION_KWARGS[feat])
-                tau_score.loc[feat]['full_expand'] = compute_tau(
-                    sdm, 
-                    self.segmentation_annotation(mode='expand', anno_id=anno_id),
-                    self.ts(),
-                    region='full',
-                    **kwargs
-                )
-                tau_score.loc[feat]['full_normal'] = compute_tau(
-                    sdm, 
-                    self.segmentation_annotation(mode='normal', anno_id=anno_id),
-                    self.ts(),
-                    region='full',
-                    **kwargs
-                )
-                tau_score.loc[feat]['full_refine'] = compute_tau(
-                    sdm, 
-                    self.segmentation_annotation(mode='refine', anno_id=anno_id),
-                    self.ts(),
-                    region='full',
-                    **kwargs
-                )
-                tau_score.loc[feat]['path_refine'] = compute_tau(
-                    sdm, 
-                    self.segmentation_annotation(mode='refine', anno_id=anno_id),
-                    self.ts(),
-                    region='path',
-                    **kwargs
-                )
-                tau_score.loc[feat]['path_normal'] = compute_tau(
-                    sdm, 
-                    self.segmentation_annotation(mode='normal', anno_id=anno_id),
-                    self.ts(),
-                    region='path',
-                    **kwargs
-                )
-                tau_score.loc[feat]['path_expand'] = compute_tau(
-                    sdm, 
-                    self.segmentation_annotation(mode='expand', anno_id=anno_id),
-                    self.ts(),
-                    region='path',
-                    **kwargs
-                )
+            for feat in AVAL_FEAT_TYPES:
+                ssm = self.ssm(feature=feat, 
+                               distance=lsd_config['rep_metric'],
+                               width=lsd_config['rec_width'],
+                               full=lsd_config['rec_full'],
+                               **REP_FEAT_CONFIG[feat]
+                              )
+
+            
+                path_sim = self.path_sim(feature=feat,
+                                         distance=lsd_config['loc_metric'],
+                                         **LOC_FEAT_CONFIG[feat]
+                                        )
+                
+                for mode in ['expand', 'normal', 'refine']:
+                    tau_score.loc[feat][f'full_{mode}'] = ssm_tau_full(
+                        ssm, 
+                        self.segmentation_annotation(mode=mode, anno_id=anno_id),
+                        self.ts(),
+                        quantize = quantize,
+                        quant_bins = quant_bins
+                    )
+                
+                    tau_score.loc[feat][f'path_{mode}'] = ssm_tau_path(
+                        path_sim, 
+                        self.segmentation_annotation(mode=mode, anno_id=anno_id),
+                        self.ts(),
+                        quantize = quantize,
+                        quant_bins = quant_bins
+                    )
+                
             # Save to record_path
             tau_score.to_pickle(record_path)
         
         # Read from record_path
-        return pd.read_pickle(record_path)
-
+        tau_score = pd.read_pickle(record_path)
+        return tau_score
+    
 
     def lsd_l(
         self,
         anno_id: int = 0,
         recompute: bool = False,
         anno_mode: str = 'expand', #see `segmentation_anno`'s `mode`.
-        l_type: str = 'l' # can also be 'lr' and 'lp' for recall and precision.
+        l_type: str = 'l', # can also be 'lr' and 'lp' for recall and precision.
+        lsd_config: dict = DEFAULT_LSD_CONFIG
     ) -> pd.DataFrame:
         record_path = os.path.join(self.salami_dir, f'ells/{self.tid}_a{anno_id}_{anno_mode}.pkl')
         # test if record_path exist, if no, set recompute to true.
@@ -313,16 +453,15 @@ class Track:
 
         if recompute:
             l_score = pd.DataFrame(
-                index=ssdm.AVAL_FEAT_TYPES,
-                columns=pd.MultiIndex.from_product([['lp', 'lr', 'l'], ssdm.AVAL_FEAT_TYPES])
+                index=AVAL_FEAT_TYPES,
+                columns=pd.MultiIndex.from_product([['lp', 'lr', 'l'], AVAL_FEAT_TYPES])
             )
-            lsd_config = ssdm.DEFAULT_LSD_CONFIG
-            for r_feat in ssdm.AVAL_FEAT_TYPES:
+            for r_feat in AVAL_FEAT_TYPES:
                 lsd_config['rep_ftype'] = r_feat
-                for l_feat in ssdm.AVAL_FEAT_TYPES:
+                for l_feat in AVAL_FEAT_TYPES:
                     lsd_config['loc_ftype'] = l_feat
                     l_score.loc[r_feat, (slice(None), l_feat)] = compute_l(
-                        self.segmentation_lsd(lsd_config), 
+                        self.segmentation_lsd(lsd_config, recompute=recompute), 
                         self.segmentation_annotation(mode=anno_mode, anno_id=anno_id)
                     )
             # save to record_path
@@ -358,6 +497,7 @@ class Track:
 
         # Read from record_path
         return pd.read_pickle(record_path).astype('float')[l_type]
+
 
 ### Stand alone functions
 def segmentation_to_meet(
@@ -402,35 +542,33 @@ def segmentation_to_mireval(
     return mir_eval_interval, mir_eval_label
 
 
-def compute_tau(
-    sdm: np.array, 
+def ssm_tau_full(
+    ssm: np.array,
     segmentation: jams.JAMS,
-    ts: np.array, 
-    region: str = 'full', #{'full', 'path'}
-    quantize: bool = False, 
-    quant_bins: int = 16, # number of quantization bins, ignored whtn quantize is Flase
+    ts: np.array,
+    quantize: bool = True, 
+    quant_bins: int = 6, # number of quantization bins, ignored whtn quantize is Flase
 ) -> float:
-    """
-    """
     meet_mat = segmentation_to_meet(segmentation, ts)
-    
-    if region == 'full':
-        if quantize:
-            normalized_sdm = sdm / (sdm.max() + 1e-9)
-            bins = np.arange(0, 1 + 1e-9, 1 / quant_bins)
-            sdm = np.digitize(normalized_sdm, bins=bins, right=False)
+    if quantize:
+        bins = [np.percentile(ssm, bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
+        ssm = np.digitize(ssm, bins=bins, right=False)
+    return stats.kendalltau(ssm.flatten(), meet_mat.flatten())[0]
 
-        return -stats.kendalltau(sdm.flatten(), meet_mat.flatten())[0]
-    elif region == 'path':
-        meet_diag = np.diag(meet_mat, k=1)
-        sdm_diag = np.diag(sdm, k=1)
-        if quantize:
-            normalized_sdm_diag = sdm_diag / (sdm_diag.max() + 1e-9)
-            bins = np.arange(0, 1 + 1e-9, 1 / quant_bins)
-            sdm_diag = np.digitize(normalized_sdm_diag, bins=bins, right=False)
-        return -stats.kendalltau(sdm_diag, meet_diag)[0]
-    else:
-        raise librosa.ParameterError('region can only be "full" or "path"')
+
+def ssm_tau_path(
+    path_sim: np.array,
+    segmentation: jams.JAMS,
+    ts: np.array,
+    quantize: bool = True, 
+    quant_bins: int = 6, # number of quantization bins, ignored whtn quantize is Flase
+) -> float:
+    meet_mat = segmentation_to_meet(segmentation, ts)
+    meet_diag = np.diag(meet_mat, k=1)
+    if quantize:
+        bins = [np.percentile(path_sim, bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
+        path_sim = np.digitize(path_sim, bins=bins, right=False)
+    return stats.kendalltau(path_sim, meet_diag)[0]
 
 
 def compute_l(

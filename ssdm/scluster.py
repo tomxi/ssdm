@@ -12,10 +12,45 @@ import sklearn.cluster
 
 import librosa
 
+# Being modification by tomxi
+def combine_ssms(rep_ssm, loc_path_sim, rec_smooth=7):
+
+    # Enhance diagonals with a median filter (Equation 2)
+    df = librosa.segment.timelag_filter(scipy.ndimage.median_filter)
+    Rf = df(rep_ssm, size=(1, rec_smooth))
+
+    R_path = np.diag(loc_path_sim, k=1) + np.diag(loc_path_sim, k=-1)
+
+    ##########################################################
+    # And compute the balanced combination (Equations 6, 7, 9)
+    deg_path = np.sum(R_path, axis=1)
+    deg_rec = np.sum(Rf, axis=1)
+
+    mu = deg_path.dot(deg_path + deg_rec) / np.sum((deg_path + deg_rec)**2)
+
+    aff_mat = mu * Rf + (1 - mu) * R_path
+    return aff_mat
+
+def embed_ssms(aff_mat, evec_smooth=13):
+    #####################################################
+    # Now let's compute the normalized Laplacian (Eq. 10)
+    L = scipy.sparse.csgraph.laplacian(aff_mat, normed=True)
+
+    # and its spectral decomposition
+    evals, evecs = scipy.linalg.eigh(L)
+
+    # We can clean this up further with a median filter.
+    # This can help smooth over small discontinuities
+    evecs = scipy.ndimage.median_filter(evecs, size=(evec_smooth, 1))
+    return evals, evecs
+
+### End modification
+
+
 def embed_features(A_rep, A_loc, 
-                   config={'rec_width': 25,
-                           'rec_smooth': 25,
-                           'evec_smooth': 25,
+                   config={'rec_width': 13,
+                           'rec_smooth': 7,
+                           'evec_smooth': 13,
                            'rep_metric': 'cosine'}):
 
     R = librosa.segment.recurrence_matrix(A_rep, width=config['rec_width'],
@@ -55,6 +90,7 @@ def embed_features(A_rep, A_loc,
     evecs = scipy.ndimage.median_filter(evecs, size=(config["evec_smooth"], 1))
 
     return evecs
+
 
 
 def cluster(evecs, Cnorm, k, in_bound_idxs=None):
@@ -126,6 +162,28 @@ def reindex(hierarchy):
 
 def do_segmentation(C, M, config, in_bound_idxs=None):
     embedding = embed_features(C, M, config)
+    Cnorm = np.cumsum(embedding ** 2, axis=1) ** 0.5
+
+    if config["hier"]:
+        est_idxs = []
+        est_labels = []
+        for k in range(1, config["num_layers"] + 1):
+            est_idx, est_label = cluster(embedding, Cnorm, k)
+            est_idx, est_label = remove_empty_segments(est_idx, est_label)
+            est_idxs.append(est_idx)
+            est_labels.append(np.asarray(est_label, dtype=np.int))
+
+    else:
+        est_idxs, est_labels = cluster(embedding, Cnorm, config["scluster_k"], in_bound_idxs)
+        est_labels = np.asarray(est_labels, dtype=np.int)
+
+    return est_idxs, est_labels
+
+
+# Tom Xi
+def do_segmentation_ssm(rep_ssm, loc_path_sim, config, in_bound_idxs=None):
+    A = combine_ssms(rep_ssm, loc_path_sim, rec_smooth=config['rec_smooth'])
+    _, embedding = embed_ssms(A, evec_smooth=config['evec_smooth'])
     Cnorm = np.cumsum(embedding ** 2, axis=1) ** 0.5
 
     if config["hier"]:

@@ -50,18 +50,10 @@ def anno_meet_mats(track, mode='normal'):
     return axs
 
 
-def lsd_meet_mat(track, rep_feature='openl3', loc_feature='mfcc', layer=10):
-    lsd_config = {'rec_width': 13, 
-                  'rec_smooth': 7, 
-                  'evec_smooth': 13,
-                  'rep_ftype': rep_feature, 
-                  'loc_ftype': loc_feature,
-                  'rep_metric': 'cosine',
-                  'hier': True,
-                  'num_layers': 10}
-    
-    lsd_seg = track.segmentation_lsd(lsd_config)
-    lsd_meet_mat = ssdm.segmentation_to_meet(lsd_seg, track.ts(), num_layers=layer)
+def lsd_meet_mat(track, config=ssdm.DEFAULT_LSD_CONFIG, layer_to_show=6):
+
+    lsd_seg = track.segmentation_lsd(config)
+    lsd_meet_mat = ssdm.segmentation_to_meet(lsd_seg, track.ts(), num_layers=layer_to_show)
     fig, ax = plt.subplots(figsize=(5, 4))
     quadmesh = librosa.display.specshow(lsd_meet_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
     fig.colorbar(quadmesh, ax=ax)      

@@ -10,28 +10,6 @@ import numpy as np
 
 import ssdm
 
-AVAL_FEAT_TYPES = ['chroma', 'crema', 'tempogram', 'mfcc', 'yamnet', 'openl3']
-DEFAULT_LSD_CONFIG = {
-    'rec_width': 13,
-    'rec_smooth': 7,
-    'evec_smooth': 13,
-    'rep_ftype': 'chroma', # grid
-    'loc_ftype': 'mfcc', # grid
-    'rep_metric': 'cosine',
-    'hier': True,
-    'num_layers': 10
-}
-
-REPRESENTATION_KWARGS = {
-    'chroma': {'add_noise': True, 'time_delay_emb': True},
-    'crema': {'add_noise': True, 'time_delay_emb': True},
-    'tempogram': {'add_noise': True, 'time_delay_emb': False},
-    'mfcc': {'add_noise': True, 'time_delay_emb': True},
-    'yamnet': {'add_noise': True, 'time_delay_emb': False},
-    'openl3': {'add_noise': True, 'time_delay_emb': False},
-}
-
-
 def get_ids(
     split: str = 'dev',
     out_type: str = 'list' # one of {'set', 'list'}
@@ -125,8 +103,8 @@ def collate_l_score(
                 elif heuristic == 'lsd_adaptive_oracle':
                     best_scores.append(track_score.max().max())
                 elif heuristic == 'lsd_tau_pick':
-                    tau_rep_pick = 'openl3' #TODO
-                    tau_loc_pick = 'mfcc' # TODO
+                    tau_rep_pick = track.tau(anno_id=anno_id).idxmax(axis=0)[f'full_{anno_mode}']
+                    tau_loc_pick = track.tau(anno_id=anno_id).idxmax(axis=0)[f'path_{anno_mode}']
                     best_scores.append(track_score.loc[tau_rep_pick, tau_loc_pick])
                 elif heuristic == 'lsd_tau_hat_pick':
                     tau_hat_rep_pick = 'openl3' #TODO
@@ -137,6 +115,25 @@ def collate_l_score(
     
     else:
         raise ParameterError('bad heuristic')
+    
+
+def collate_tau(
+    anno_mode: str = 'expand',
+    tau_type: str = 'rep', # or 'loc'
+    salami_split: str = 'working',
+) -> pd.Series:
+    """
+    """
+    tau_df = pd.DataFrame(columns=AVAL_FEAT_TYPES, dtype='float')
+    for tid in tqdm(get_ids(split=salami_split, out_type='list')):
+        track = ssdm.Track(tid=tid)
+        for anno_id in range(track.num_annos()):
+            track_tau = track.tau(anno_id=anno_id)
+            if tau_type == 'rep':
+                tau_df.loc[f'{tid}:{anno_id}'] = track_tau[f'full_{anno_mode}']
+            elif tau_type == 'loc':
+                tau_df.loc[f'{tid}:{anno_id}'] = track_tau[f'path_{anno_mode}']
+    return tau_df.astype('float')
 
 
 def lucky_track(tids=get_ids(split='working'), announce=True):
@@ -147,56 +144,3 @@ def lucky_track(tids=get_ids(split='working'), announce=True):
         print(f'track {tid} is the lucky track!')
     return ssdm.Track(tid)
 
-
-# def score_comparison_df():
-#     l_score_path = pkg_resources.resource_filename('ssdm', 'l_score_df.pkl')
-#     l_score = pd.read_pickle(l_score_path)
-
-#     tau_df = pd.read_pickle('./tau_df.pkl')
-#     tau_loc = tau_df.loc[:, (slice(None), ['loc'])]
-#     tau_rep = tau_df.loc[:, (slice(None), ['rep'])]
-
-#     taus_pick_loc = tau_loc.idxmax(axis=1)
-#     taus_pick_rep = tau_rep.idxmax(axis=1)
-
-#     lr_score = l_score.loc[(slice(None), ['lr']), :]
-#     lr_score.index = lr_score.index.droplevel(1)
-
-#     heuristics = [
-#         'Best Avg Pair',
-#         'Loc Pick',
-#         'Rep Pick',
-#         'Both Pick',
-#         'Oracle'
-#     ]
-
-#     compare_scores_df = pd.DataFrame(index=lr_score.index, columns=heuristics)
-
-#     for tid in compare_scores_df.index:
-#         loc_pick = taus_pick_loc.loc[tid][0]
-#         rep_pick = taus_pick_rep.loc[tid][0]
-        
-#         compare_scores_df.loc[tid]['Best Avg Pair'] =  lr_score.loc[tid]['openl3', 'mfcc']
-#         compare_scores_df.loc[tid]['Loc Pick'] =  lr_score.loc[tid]['openl3', loc_pick]
-#         compare_scores_df.loc[tid]['Rep Pick'] =  lr_score.loc[tid][rep_pick, 'mfcc']
-#         compare_scores_df.loc[tid]['Both Pick'] =  lr_score.loc[tid][rep_pick, loc_pick]
-        
-#     oracle_pick = lr_score.idxmax(axis=1)
-#     compare_scores_df['Oracle'] = lr_score.max(axis=1)
-#     return compare_scores_df
-
-
-# # DEPRE
-# def get_l_df(l_type = 'lr'):
-#     l_score_path = pkg_resources.resource_filename('ssdm', 'l_score_df.pkl')
-#     l_score = pd.read_pickle(l_score_path)
-
-#     l_df = l_score.loc[(slice(None), l_type), slice(None)]
-#     l_df.index = l_df.index.droplevel(1)
-#     return l_df
-
-# def get_adobe_l_df():
-#     l_score_path = pkg_resources.resource_filename('ssdm', 'l_score_justin_df.pkl')
-#     l_score = pd.read_pickle(l_score_path)
-
-#     return l_score

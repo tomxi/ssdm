@@ -1,6 +1,7 @@
+import os
+
 import tensorflow_hub as hub
 import openl3
-import os
 
 import numpy as np
 import librosa
@@ -126,46 +127,3 @@ def chroma(track, recompute=False):
         np.savez(feature_path, feature=chroma, ts=chroma_ts)
 
     return np.load(feature_path)
-
-# def prep(track, feat_type='openl3') -> tuple:
-#     if feat_type == 'openl3':
-#         feat_npz = openl3(track)
-#         add_noise = True
-#         time_delay_emb = False
-#     elif feat_type == 'yamnet':
-#         feat_npz = yamnet(track)
-#         add_noise = True
-#         time_delay_emb = False
-#     elif feat_type == 'mfcc':
-#         feat_npz = mfcc(track)
-#         add_noise = True
-#         time_delay_emb = True
-#     elif feat_type == 'tempogram':
-#         feat_npz = tempogram(track)
-#         add_noise = True
-#         time_delay_emb = False
-#     elif feat_type == 'chroma':
-#         feat_npz = chroma(track)
-#         add_noise = True
-#         time_delay_emb = True
-#     elif feat_type == 'crema':
-#         feat_npz = crema(track)
-#         add_noise = True
-#         time_delay_emb = True
-#     else:
-#         raise librosa.ParameterError('bad feature name')
-
-#     feat_mat = feat_npz['feature']
-#     ts = feat_npz['ts']
-#     common_ts = track.ts()
-#     feat_mat = feat_mat[:, :len(common_ts)]
-#     # add noise
-#     if add_noise:
-#         rng = np.random.default_rng()
-#         noise = rng.random(feat_mat.shape) * (1e-9)
-#         feat_mat = feat_mat + noise
-#     if time_delay_emb:
-#         feat_mat = librosa.feature.stack_memory(
-#             feat_mat, mode='edge', n_steps=6, delay=2
-#         )
-#     return feat_mat, ts

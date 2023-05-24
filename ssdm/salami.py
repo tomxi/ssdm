@@ -2,10 +2,8 @@ import os, json
 import numpy as np
 import librosa
 import jams
-import mir_eval
 import pandas as pd
-from sklearn import preprocessing
-from scipy import spatial, stats, sparse
+from scipy import spatial, sparse
 
 import ssdm
 import ssdm.scluster as sc
@@ -132,7 +130,6 @@ class Track:
         return feat_mat[:, :len(self.ts())]
 
 
-    # DEPRE
     def sdm(
         self,
         feature: str = 'mfcc',
@@ -164,7 +161,7 @@ class Track:
         self,
         feature: str = 'mfcc',
         distance: str = 'cosine',
-        width = 13, # ~2.5 sec width param for librosa.segment.rec_mat
+        width = 13, # ~2.5 sec width param for librosa.segment.rec_mat <= 1
         # bw: str = 'med_k_scalar', # one of {'med_k_scalar', 'mean_k', 'gmean_k', 'mean_k_avg', 'gmean_k_avg', 'mean_k_avg_and_pair'}
         full: bool = False,
         add_noise: bool = False, # padding representation with a little noise to avoid divide by 0 somewhere...
@@ -379,14 +376,15 @@ class Track:
         self,
         anno_id: int = 0,
         recompute: bool = False,
-        quantize: bool = True,
-        quant_bins: int = 6,
-        lsd_config: any = DEFAULT_LSD_CONFIG,
+        quantize: str = 'kmeans', # None, 'kemans' or 'percentile'
+        quant_bins: int = 6, # used for both quantization schemes
+        lsd_config: dict = DEFAULT_LSD_CONFIG,
+        combined: bool = False, # make a 6*6 square that's the gmean of tau_rep and loc
     ) -> pd.DataFrame:
         """  
         """
         # test if record_path exist, if no, set recompute to true.
-        suffix = f'_qbins{quant_bins}' if quantize else ''
+        suffix = f'_{quantize}{quant_bins}' if quantize is not None else ''
 
         record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_a{anno_id}{suffix}.pkl')
         if not os.path.exists(record_path):
@@ -394,9 +392,9 @@ class Track:
 
         if recompute:
             # creating a dataframe to store all different variations of kendall taus for each feature
-            tau_score = pd.DataFrame(
+            tau = pd.DataFrame(
                 index=AVAL_FEAT_TYPES, 
-                columns=['full_expand', 'full_normal', 'full_refine', 'path_expand', 'path_normal', 'path_refine'],
+                columns=['full_expand', 'path_expand'],
                 dtype='float'
             )
             for feat in AVAL_FEAT_TYPES:
@@ -406,36 +404,45 @@ class Track:
                                full=lsd_config['rec_full'],
                                **REP_FEAT_CONFIG[feat]
                               )
-
-            
                 path_sim = self.path_sim(feature=feat,
                                          distance=lsd_config['loc_metric'],
                                          **LOC_FEAT_CONFIG[feat]
                                         )
                 
-                for mode in ['expand', 'normal', 'refine']:
-                    tau_score.loc[feat][f'full_{mode}'] = ssm_tau_full(
-                        ssm, 
-                        self.segmentation_annotation(mode=mode, anno_id=anno_id),
-                        self.ts(),
-                        quantize = quantize,
-                        quant_bins = quant_bins
-                    )
-                
-                    tau_score.loc[feat][f'path_{mode}'] = ssm_tau_path(
-                        path_sim, 
-                        self.segmentation_annotation(mode=mode, anno_id=anno_id),
-                        self.ts(),
-                        quantize = quantize,
-                        quant_bins = quant_bins
-                    )
+                tau.loc[feat][f'full_expand'] = ssdm.tau_ssm(
+                    ssm, 
+                    self.segmentation_annotation(mode='expand', anno_id=anno_id),
+                    self.ts(),
+                    quantize = quantize,
+                    quant_bins = quant_bins
+                )
+                tau.loc[feat][f'path_expand'] = ssdm.tau_path(
+                    path_sim, 
+                    self.segmentation_annotation(mode='expand', anno_id=anno_id),
+                    self.ts(),
+                    quantize = quantize,
+                    quant_bins = quant_bins
+                )
                 
             # Save to record_path
-            tau_score.to_pickle(record_path)
+            tau.to_pickle(record_path)
         
         # Read from record_path
-        tau_score = pd.read_pickle(record_path)
-        return tau_score
+        tau = pd.read_pickle(record_path)
+        if combined:
+            tau -= tau.to_numpy().flatten().min()
+            tau += 1e-8
+
+            combined_score = pd.DataFrame(
+                np.outer(tau['full_expand'], tau['path_expand'])**0.5, 
+                index = list(tau['full_expand'].index), 
+                columns = tau['path_expand'].index
+            )
+            combined_score.index.name='tau_rep'
+            combined_score.columns.name='tau_loc'
+            return combined_score
+        else:
+            return tau
     
 
     def lsd_l(
@@ -460,7 +467,7 @@ class Track:
                 lsd_config['rep_ftype'] = r_feat
                 for l_feat in AVAL_FEAT_TYPES:
                     lsd_config['loc_ftype'] = l_feat
-                    l_score.loc[r_feat, (slice(None), l_feat)] = compute_l(
+                    l_score.loc[r_feat, (slice(None), l_feat)] = ssdm.compute_l(
                         self.segmentation_lsd(lsd_config, recompute=recompute), 
                         self.segmentation_annotation(mode=anno_mode, anno_id=anno_id)
                     )
@@ -470,7 +477,9 @@ class Track:
         # Read from record_path
         l_df = pd.read_pickle(record_path).astype('float')
         l_sub_square = l_df.loc[slice(None), (l_type, slice(None))]
+        l_sub_square.index.name = 'rep_feat'
         l_sub_square.columns = l_sub_square.columns.droplevel(0)
+        l_sub_square.columns.name = 'loc_feat'
         return l_sub_square
     
 
@@ -488,7 +497,7 @@ class Track:
 
         if recompute:
             l_score = pd.Series(index=['lp', 'lr', 'l'])
-            l_score[:]= compute_l(
+            l_score[:]= ssdm.compute_l(
                 self.segmentation_adobe(), 
                 self.segmentation_annotation(mode=anno_mode, anno_id=anno_id)
             )
@@ -497,97 +506,3 @@ class Track:
 
         # Read from record_path
         return pd.read_pickle(record_path).astype('float')[l_type]
-
-
-### Stand alone functions
-def segmentation_to_meet(
-    segmentation, 
-    ts,
-    num_layers = None,
-) -> np.array:
-    """
-    """
-    # initialize a 3d array to store all the meet matrices for each layer
-    hier_anno = segmentation.annotations
-    if num_layers:
-        hier_anno = hier_anno[:num_layers]
-    n_level = len(hier_anno)
-    n_frames = len(ts)
-    meet_mat_per_level = np.zeros((n_level, n_frames, n_frames))
-
-    # put meet mat of each level of hierarchy in axis=0
-    for level in range(n_level):
-        layer_anno = hier_anno[level]
-        label_samples = layer_anno.to_samples(ts)
-        le = preprocessing.LabelEncoder()
-        encoded_labels = le.fit_transform([l[0] if len(l) > 0 else 'NL' for l in label_samples])
-        meet_mat_per_level[level] = np.equal.outer(encoded_labels, encoded_labels).astype('float') * (level + 1)
-
-    # get the deepest level matched
-    return np.max(meet_mat_per_level, axis=0)
-
-
-def segmentation_to_mireval(
-    segmentation
-) -> tuple:
-    """
-    """
-    mir_eval_interval = []
-    mir_eval_label = []
-    for anno in segmentation.annotations:
-        interval, value = anno.to_interval_values()
-        mir_eval_interval.append(interval)
-        mir_eval_label.append(value)
-
-    return mir_eval_interval, mir_eval_label
-
-
-def ssm_tau_full(
-    ssm: np.array,
-    segmentation: jams.JAMS,
-    ts: np.array,
-    quantize: bool = True, 
-    quant_bins: int = 6, # number of quantization bins, ignored whtn quantize is Flase
-) -> float:
-    meet_mat = segmentation_to_meet(segmentation, ts)
-    if quantize:
-        bins = [np.percentile(ssm, bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
-        ssm = np.digitize(ssm, bins=bins, right=False)
-    return stats.kendalltau(ssm.flatten(), meet_mat.flatten())[0]
-
-
-def ssm_tau_path(
-    path_sim: np.array,
-    segmentation: jams.JAMS,
-    ts: np.array,
-    quantize: bool = True, 
-    quant_bins: int = 6, # number of quantization bins, ignored whtn quantize is Flase
-) -> float:
-    meet_mat = segmentation_to_meet(segmentation, ts)
-    meet_diag = np.diag(meet_mat, k=1)
-    if quantize:
-        bins = [np.percentile(path_sim, bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
-        path_sim = np.digitize(path_sim, bins=bins, right=False)
-    return stats.kendalltau(path_sim, meet_diag)[0]
-
-
-def compute_l(
-    proposal: jams.JAMS, 
-    annotation: jams.JAMS,
-) -> np.array:
-    """
-    """
-    anno_interval, anno_label = segmentation_to_mireval(annotation)
-    proposal_interval, proposal_label = segmentation_to_mireval(proposal)
-
-    # make last segment for estimation end at the same time as annotation
-    end = max(anno_interval[-1][-1, 1], proposal_interval[-1][-1, 1])
-    for i in range(len(proposal_interval)):
-        proposal_interval[i][-1, 1] = end
-    for i in range(len(anno_interval)):
-        anno_interval[i][-1, 1] = end
-
-    return mir_eval.hierarchy.lmeasure(
-        anno_interval, anno_label, proposal_interval, proposal_label,
-    )
-

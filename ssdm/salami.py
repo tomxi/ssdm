@@ -9,6 +9,7 @@ import ssdm
 import ssdm.scluster as sc
 
 AVAL_FEAT_TYPES = ['chroma', 'crema', 'tempogram', 'mfcc', 'yamnet', 'openl3']
+AVAL_DIST_TYPES = ['cosine', 'sqeuclidean', 'cityblock']
 DEFAULT_LSD_CONFIG = {
     'rec_width': 13,
     'rec_smooth': 7,
@@ -16,8 +17,8 @@ DEFAULT_LSD_CONFIG = {
     'evec_smooth': 13,
     'rep_ftype': 'chroma', # grid
     'loc_ftype': 'mfcc', # grid
-    'rep_metric': 'cosine',
-    'loc_metric': 'cosine',
+    'rep_metric': 'cosine', # grid
+    'loc_metric': 'cosine', # grid
     'hier': True,
     'num_layers': 12
 }
@@ -162,7 +163,7 @@ class Track:
         feature: str = 'mfcc',
         distance: str = 'cosine',
         width = 13, # ~2.5 sec width param for librosa.segment.rec_mat <= 1
-        # bw: str = 'med_k_scalar', # one of {'med_k_scalar', 'mean_k', 'gmean_k', 'mean_k_avg', 'gmean_k_avg', 'mean_k_avg_and_pair'}
+        bw: str = 'med_k_scalar', # one of {'med_k_scalar', 'mean_k', 'gmean_k', 'mean_k_avg', 'gmean_k_avg', 'mean_k_avg_and_pair'}
         full: bool = False,
         add_noise: bool = False, # padding representation with a little noise to avoid divide by 0 somewhere...
         n_steps: int = 1, # Param for time delay embedding of representation
@@ -174,7 +175,7 @@ class Track:
         feat_info_str = f's{n_steps}xd{delay}{"_n" if add_noise else ""}'
         ssm_path = os.path.join(
             self.salami_dir, 
-            f'ssms/{self.tid}_{ssm_info_str}_{feat_info_str}.npy'
+            f'ssms/{self.tid}_{ssm_info_str}_{feat_info_str}_{bw}.npy'
         )
         # print(ssm_path)
         
@@ -190,14 +191,24 @@ class Track:
                 n_steps=n_steps,
                 delay=delay,
             )
-            ssm = librosa.segment.recurrence_matrix(
-                feat_mat, 
-                mode='affinity',
-                width=width,
-                sym=True,
-                full=full,
-                # bandwidth=bw,
-            )
+            try:
+                ssm = librosa.segment.recurrence_matrix(
+                    feat_mat, 
+                    mode='affinity',
+                    width=width,
+                    sym=True,
+                    full=full,
+                    bandwidth=bw,
+                )
+            except:
+                ssm = librosa.segment.recurrence_matrix(
+                    feat_mat, 
+                    mode='affinity',
+                    width=width,
+                    sym=False,
+                    full=full,
+                    bandwidth=bw,
+                )
 
             # store ssm
             with open(ssm_path, 'wb') as f:
@@ -206,13 +217,6 @@ class Track:
         # read npy file
         with open(ssm_path, 'rb') as f:
             ssm = np.load(ssm_path, allow_pickle=True)
-
-        if full:
-            # carve out width from the full ssm
-            ssm_lil = sparse.lil_matrix(ssm)
-            for diag in range(-width + 1, width):
-                ssm_lil.setdiag(0, diag)
-            ssm = ssm_lil.toarray()
 
         return ssm
 
@@ -321,6 +325,8 @@ class Track:
                                full=config['rec_full'],
                                **REP_FEAT_CONFIG[config['rep_ftype']]
                               )
+            if config['rec_full']:
+                rep_ssm = ssdm.mask_diag(rep_ssm, width=config['rec_width'])
 
             
             path_sim = self.path_sim(feature=config['loc_ftype'],
@@ -445,6 +451,7 @@ class Track:
             return tau
     
 
+## TO CHANGE
     def lsd_l(
         self,
         anno_id: int = 0,

@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn import preprocessing
-from scipy import stats
+from scipy import stats, sparse
 from sklearn import cluster
 from tqdm import tqdm
 
@@ -189,8 +189,8 @@ def collate_tau(
         anno_tau_reps = []
         anno_tau_locs = []
         for anno_id in range(track.num_annos()):
-            anno_tau_rep = track.tau(anno_id=anno_id)[f'full_expand']
-            anno_tau_loc = track.tau(anno_id=anno_id)[f'path_expand']
+            anno_tau_rep = track.tau(anno_id=anno_id, quantize='kmeans')[f'full_expand']
+            anno_tau_loc = track.tau(anno_id=anno_id, quantize='kmeans')[f'path_expand']
 
             if anno_merge_fn is None:
                 tau_rep_df.loc[f'{tid}:{anno_id}'] = anno_tau_rep
@@ -255,19 +255,21 @@ def tau_ssm(
     ssm: np.array,
     segmentation: jams.JAMS,
     ts: np.array,
-    quantize: str = None, # can be 'percentile' or 'kmeans' 
+    quantize: str = 'kmeans', # can be 'percentile' or 'kmeans' or None
     quant_bins: int = 6, # number of quantization bins, ignored whtn quantize is Flase
 ) -> float:
     meet_mat_flat = segmentation_to_meet(segmentation, ts).flatten()
     if quantize == 'percentile':
-        bins = [np.percentile(ssm, bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
+        bins = [np.percentile(ssm[ssm > 0], bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
+        print(bins)
         ssm_flat = np.digitize(ssm.flatten(), bins=bins, right=False)
-    if quantize == 'kmeans':
+    elif quantize == 'kmeans':
         kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
-        ssm_flat = kmeans_clusterer.fit_predict(ssm.flatten())
+        ssm_flat = kmeans_clusterer.fit_predict(ssm.flatten()[:, None])
     else:
         ssm_flat = ssm.flatten()
 
+    # return ssm_flat, meet_mat_flat
     return stats.kendalltau(ssm_flat, meet_mat_flat)[0]
 
 
@@ -282,10 +284,11 @@ def tau_path(
     meet_diag = np.diag(meet_mat, k=1)
     if quantize == 'percentile':
         bins = [np.percentile(path_sim, bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
+        print('tau_loc_bins:', bins)
         path_sim = np.digitize(path_sim, bins=bins, right=False)
     elif quantize == 'kmeans':
         kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
-        path_sim = kmeans_clusterer.fit_predict(path_sim)
+        path_sim = kmeans_clusterer.fit_predict(path_sim[:, None])
     return stats.kendalltau(path_sim, meet_diag)[0]
 
 
@@ -308,4 +311,12 @@ def compute_l(
     return mir_eval.hierarchy.lmeasure(
         anno_interval, anno_label, proposal_interval, proposal_label,
     )
+
+
+def mask_diag(sq_mat, width=13):
+    # carve out width from the full ssm
+    sq_mat_lil = sparse.lil_matrix(sq_mat)
+    for diag in range(-width + 1, width):
+        sq_mat_lil.setdiag(0, diag)
+    sq_mat = sq_mat_lil.toarray()
 

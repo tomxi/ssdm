@@ -115,6 +115,12 @@ def update_cross_dmap(time):
     return vline * hline
 
 
+# TODO do holoview ploting 3 by 3 heatmaps.
+def explore_metric(track, bandwidth=None):
+    # 3 by 3 of 6 by 6 heatmaps
+    pass
+
+### DEPRE .......
 def explore_track(tid, rep_feature, loc_feature, lsd_layer=10):
     # init track object
     track = ssdm.Track(tid)

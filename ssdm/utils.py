@@ -292,6 +292,7 @@ def tau_path(
     return stats.kendalltau(path_sim, meet_diag)[0]
 
 
+## TODO add l score resolution as an argument.
 def compute_l(
     proposal: jams.JAMS, 
     annotation: jams.JAMS,

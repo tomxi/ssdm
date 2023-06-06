@@ -10,15 +10,17 @@ import ssdm.scluster as sc
 
 AVAL_FEAT_TYPES = ['chroma', 'crema', 'tempogram', 'mfcc', 'yamnet', 'openl3']
 AVAL_DIST_TYPES = ['cosine', 'sqeuclidean', 'cityblock']
+AVAL_BW_TYPES = ['med_k_scalar', 'gmean_k_avg', 'mean_k_avg_and_pair']
 DEFAULT_LSD_CONFIG = {
     'rec_width': 13,
     'rec_smooth': 7,
     'rec_full': False,
     'evec_smooth': 13,
-    'rep_ftype': 'chroma', # grid
-    'loc_ftype': 'mfcc', # grid
-    'rep_metric': 'cosine', # grid
-    'loc_metric': 'cosine', # grid
+    'rep_ftype': 'chroma', # grid 6
+    'loc_ftype': 'mfcc', # grid 6
+    'rep_metric': 'cosine', # grid 3 
+    'loc_metric': 'cosine', # grid 3
+    'bandwidth': 'med_k_scalar', # grid 3
     'hier': True,
     'num_layers': 12
 }
@@ -221,6 +223,7 @@ class Track:
         return ssm
 
 
+    # Always recompute now.
     def path_sim(
             self,
             feature: str = 'mfcc',
@@ -228,43 +231,24 @@ class Track:
             add_noise: bool = False, # padding representation with a little noise to avoid divide by 0 somewhere...
             n_steps: int = 1, # Param for time delay embedding of representation
             delay: int = 1, # Param for time delay embedding of representation
-            recompute: bool = False,
+            aff_kernel_sigma_percentile = 85, 
         ) -> np.array:
-        # npy path
-        path_info_str = f'path_{feature}_{distance}'
-        feat_info_str = f's{n_steps}xd{delay}{"_n" if add_noise else ""}'
-        path_sim_path = os.path.join(
-            self.salami_dir, 
-            f'ssms/{self.tid}_{path_info_str}_{feat_info_str}.npy'
+        feat_mat = self.representation(
+            feat_type=feature, 
+            add_noise=add_noise,
+            n_steps=n_steps,
+            delay=delay,
         )
-        # print(path_sim_path)
+
+        frames = feat_mat.shape[1]
+        path_dist = []
+        for i in range(frames-1):
+            pair_dist = spatial.distance.pdist(feat_mat[:, i:i + 2].T, metric=distance)
+            path_dist.append(pair_dist[0])
+        path_dist = np.array(path_dist)
+        sigma = np.percentile(path_dist, aff_kernel_sigma_percentile)
+        return np.exp(-path_dist / sigma)
         
-        # see if desired ssm is already computed
-        if not os.path.exists(path_sim_path):
-            recompute = True
-
-        if recompute:
-            feat_mat = self.representation(
-                feat_type=feature, 
-                add_noise=add_noise,
-                n_steps=n_steps,
-                delay=delay,
-            )
-
-            frames = feat_mat.shape[1]
-            path_dist = []
-            for i in range(frames-1):
-                pair_dist = spatial.distance.pdist(feat_mat[:, i:i + 2].T, metric=distance)
-                path_dist.append(pair_dist[0])
-            path_dist = np.array(path_dist)
-            sigma = np.median(path_dist)
-            path_sim = np.exp(-path_dist / sigma)
-
-            # store path_sim
-            with open(path_sim_path, 'wb') as f:
-                np.save(f, path_sim)
-
-        return np.load(path_sim_path, allow_pickle=True)
 
 
     def segmentation_annotation(
@@ -311,6 +295,7 @@ class Track:
             config = DEFAULT_LSD_CONFIG
 
         full_flag = 'full' if config['rec_full'] else 'sparse'
+        # TODO add bandwidth switch for config
         record_path = os.path.join(self.salami_dir, 
                                    f'lsds/{self.tid}_{config["rep_ftype"]}_{config["loc_ftype"]}_{full_flag}.jams'
                                   )
@@ -451,7 +436,7 @@ class Track:
             return tau
     
 
-## TO CHANGE
+## TO CHANGE TODO l-measure calculations should not be a track method. Should be in utils.
     def lsd_l(
         self,
         anno_id: int = 0,

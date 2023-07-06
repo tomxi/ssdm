@@ -224,7 +224,6 @@ class Track:
         return ssm
 
 
-    # TODO note: Always recompute now. (??) Check to make sure this is working
     def path_sim(
             self,
             feature: str = 'mfcc',
@@ -273,59 +272,37 @@ class Track:
             empty_jam = self.jam()
             empty_jam.annotations.clear()
             empty_jam.save(record_path)
+            self._lsd_jam = empty_jam
 
-        # try to see if the lsd_jam is already open with this project
-        lsd_jam = jams.load(record_path) if self._lsd_jam is None else self._lsd_jam
+        if self._lsd_jam is None:
+            print('loading lsd_jam')
+            self._lsd_jam = jams.load(record_path)
         
-        # search is config already stored in lsd_jam
+        # search if config already stored in lsd_jam
         config_sb = jams.Sandbox()
         config_sb.update(**config)
-        lsd_annos = lsd_jam.search(sandbox=config_sb)
+        print('trying to find...')
+        lsd_annos = self._lsd_jam.search(sandbox=config_sb)
 
         # check if multi_anno with config exist, if no, recompute = True
         if len(lsd_annos) == 0:
+            print('not found')
             recompute = True
         else:
+            print('found!')
             lsd_anno = lsd_annos[0]
     
         if recompute:
+            print('recomputing! -- lsd')
             # genearte new multi_segment annotation and store/overwrite it in the original jams file.
-            lsd_anno = self._run_lsd(config=config)
+            lsd_anno = _run_lsd(self, config=config, recompute_ssm=recompute)
             # update _lsd_jam
+            lsd_anno.sandbox=config_sb
             self._lsd_jam.annotations.append(lsd_anno)
+            self._lsd_jam.save(record_path)
         
         return lsd_anno
 
-
-    def _run_lsd(self, config: dict) -> jams.Annotation:
-        
-        def mask_diag(sq_mat, width=13):
-            # carve out width from the full ssm
-            sq_mat_lil = sparse.lil_matrix(sq_mat)
-            for diag in range(-width + 1, width):
-                sq_mat_lil.setdiag(0, diag)
-            sq_mat = sq_mat_lil.toarray()
-
-        # Compute/get SSM mats
-        rep_ssm = self.ssm(feature=config['rep_ftype'], 
-                           distance=config['rep_metric'],
-                           width=config['rec_width'],
-                           full=config['rec_full'],
-                           **REP_FEAT_CONFIG[config['rep_ftype']]
-                           )
-        if config['rec_full']:
-            rep_ssm = mask_diag(rep_ssm, width=config['rec_width'])
-
-        
-        path_sim = self.path_sim(feature=config['loc_ftype'],
-                                    distance=config['loc_metric'],
-                                    **LOC_FEAT_CONFIG[config['loc_ftype']]
-                                )
-        # Spectral Clustering with Config
-        est_bdry_idxs, est_sgmt_labels = sc.do_segmentation_ssm(rep_ssm, path_sim, config)
-        est_bdry_times = self.ts()[est_bdry_idxs]
-        
-        return ssdm.utils.mireval_to_multiseg(est_bdry_times, est_sgmt_labels)
 
     ### THE FOLLOWING THREE FUNCTIONS.... CAN THEY BE SOMEWHERE ELSE?
     # jams is not a good thing to pass around.... maybe annotation? Yes multi_segment annotation
@@ -526,3 +503,37 @@ class Track:
 
         # Read from record_path
         return pd.read_pickle(record_path).astype('float')[l_type]
+
+def _run_lsd(
+    track, 
+    config: dict, 
+    recompute_ssm: bool = False
+) -> jams.Annotation:
+    def mask_diag(sq_mat, width=13):
+        # carve out width from the full ssm
+        sq_mat_lil = sparse.lil_matrix(sq_mat)
+        for diag in range(-width + 1, width):
+            sq_mat_lil.setdiag(0, diag)
+        return sq_mat_lil.toarray()
+
+    # Compute/get SSM mats
+    rep_ssm = track.ssm(feature=config['rep_ftype'], 
+                        distance=config['rep_metric'],
+                        width=config['rec_width'],
+                        full=config['rec_full'],
+                        recompute=recompute_ssm,
+                        **REP_FEAT_CONFIG[config['rep_ftype']]
+                        )
+    if config['rec_full']:
+        rep_ssm = mask_diag(rep_ssm, width=config['rec_width'])
+
+    # track.path_sim alwasy recomputes.
+    path_sim = track.path_sim(feature=config['loc_ftype'],
+                              distance=config['loc_metric'],
+                              **LOC_FEAT_CONFIG[config['loc_ftype']]
+                            )
+    
+    # Spectral Clustering with Config
+    est_bdry_idxs, est_sgmt_labels = sc.do_segmentation_ssm(rep_ssm, path_sim, config)
+    est_bdry_itvls = [sc.times_to_intervals(track.ts()[lvl]) for lvl in est_bdry_idxs]
+    return ssdm.utils.mireval_to_multiseg(est_bdry_itvls, est_sgmt_labels)

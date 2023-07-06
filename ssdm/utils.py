@@ -327,10 +327,9 @@ def heir_to_multiseg(heir) -> jams.Annotation:
     anno = jams.Annotation(namespace='multi_segment')
     for layer, (bdry, labels) in enumerate(heir):
         for ival, label in zip(bdry, labels):
-            anno.append(time=ival[0], duration=ival[1]-ival[0], value={'label': label, 'level': layer})
+            anno.append(time=ival[0], duration=ival[1]-ival[0], value={'label': str(label), 'level': layer})
 
-    anno.duration = heir[0][0][-1]
-    anno.sandbox.update(num_layers=layer+1)
+    # anno.duration = heir[0][0][-1]
     return anno
 
 def heir_to_mireval(heir):

@@ -10,6 +10,7 @@ from holoviews import opts
 import panel as pn
 
 import ssdm
+import musicsections as ms
 
 
 hv.extension("bokeh", logo=False)
@@ -58,6 +59,13 @@ def lsd_meet_mat(track, config=ssdm.DEFAULT_LSD_CONFIG, layer_to_show=6):
     quadmesh = librosa.display.specshow(lsd_meet_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
     fig.colorbar(quadmesh, ax=ax)      
     return fig, ax
+
+
+def multi_seg(multi_seg):
+    heir = ssdm.multi_segment_to_heir(multi_seg)
+    return ms.plot_segmentation(heir)
+    #TODO: fig, ax =  ms.plot_levels()  
+    # return fig, ax
 
 
 def heatmap(df, ax=None, title=None, xlabel='Local Feature', ylabel='Repetition Feature'):   
@@ -115,10 +123,38 @@ def update_cross_dmap(time):
     return vline * hline
 
 
-# TODO do holoview ploting 3 by 3 heatmaps.
-def explore_metric(track, bandwidth=None):
+# do holoview ploting 3 by 3 heatmaps.
+def explore_metric(track, bandwidth='med_k_scalar', anno_id=0):
     # 3 by 3 of 6 by 6 heatmaps
-    pass
+
+    # create subplot grids:
+    fig, axs = plt.subplots(3, 3, sharex=True, sharey=True, figsize=(13, 13))
+
+    lsd_config = ssdm.DEFAULT_LSD_CONFIG
+    lsd_config['bandwidth'] = bandwidth
+
+    ax_id = 0
+    for r_metric in ssdm.AVAL_DIST_TYPES:
+        lsd_config['rep_metric'] = r_metric
+        for l_metric in ssdm.AVAL_DIST_TYPES:
+            lsd_config['loc_metric'] = l_metric
+            score_square = track.lsd_l_feature_grid(
+                anno_id=anno_id, 
+                recompute=False,
+                anno_mode='expand', #see `segmentation_anno`'s `mode`.
+                l_type='l', # can also be 'lr' and 'lp' for recall and precision.
+                l_frame_size=2.5,
+                lsd_config=lsd_config
+            )
+            heatmap(
+                score_square, 
+                ax=axs[ax_id // 3][ax_id % 3], 
+                title=f'{r_metric}, {l_metric}, \n {score_square.to_numpy().max():.3f}, {score_square.to_numpy().sum()/36:.3f}',
+            )
+            ax_id += 1
+
+    fig.tight_layout()
+    return fig, axs
 
 ### DEPRE .......
 def explore_track(tid, rep_feature, loc_feature, lsd_layer=10):

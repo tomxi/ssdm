@@ -1,6 +1,6 @@
 import pkg_resources
 from functools import reduce
-import json
+import json, os, glob
 
 import pandas as pd
 import numpy as np
@@ -15,6 +15,7 @@ import mir_eval
 from librosa import ParameterError
 
 import ssdm
+import musicsections as ms
 
 def get_ids(
     split: str = 'dev',
@@ -74,6 +75,7 @@ def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
 
 
 # Collaters:
+# NOTE: STALE
 def collate_l_score(
     heuristic: str = 'all_lsd_pairs',
     l_type: str = 'l',
@@ -92,7 +94,7 @@ def collate_l_score(
             track = ssdm.Track(tid=tid)
             anno_scores = dict()
             for anno_id in range(track.num_annos()):
-                anno_scores[str(anno_id)] = track.lsd_l(anno_mode='expand', l_type=l_type, anno_id=anno_id)
+                anno_scores[str(anno_id)] = track.lsd_l_feature_grid(anno_mode='expand', l_type=l_type, anno_id=anno_id)
 
             if anno_merge_fn is None:
                 index += [tid+f':{a}' for a in anno_scores.keys()]
@@ -136,7 +138,7 @@ def collate_l_score(
             track = ssdm.Track(tid=tid)
             anno_scores = dict()
             for anno_id in range(track.num_annos()):
-                anno_l_scores = track.lsd_l(anno_mode='expand', l_type=l_type, anno_id=anno_id)
+                anno_l_scores = track.lsd_l_feature_grid(anno_mode='expand', l_type=l_type, anno_id=anno_id)
                 if rep_heur in ssdm.AVAL_FEAT_TYPES:
                     rep_pick = rep_heur
                 elif rep_heur == 'tau':
@@ -236,19 +238,10 @@ def segmentation_to_meet(
     return np.max(meet_mat_per_level, axis=0)
 
 
-def segmentation_to_mireval(
-    segmentation
+def multi_segment_to_mireval(
+    anno
 ) -> tuple:
-    """
-    """
-    mir_eval_interval = []
-    mir_eval_label = []
-    for anno in segmentation.annotations:
-        interval, value = anno.to_interval_values()
-        mir_eval_interval.append(interval)
-        mir_eval_label.append(value)
-
-    return mir_eval_interval, mir_eval_label
+    return heir_to_mireval(multi_segment_to_heir(anno))
 
 
 def tau_ssm(
@@ -292,15 +285,13 @@ def tau_path(
     return stats.kendalltau(path_sim, meet_diag)[0]
 
 
-## TODO add l score resolution as an argument.
 def compute_l(
-    proposal: jams.JAMS, 
-    annotation: jams.JAMS,
+    proposal: jams.Annotation, 
+    annotation: jams.Annotation,
+    l_frame_size: float = 0.1
 ) -> np.array:
-    """
-    """
-    anno_interval, anno_label = segmentation_to_mireval(annotation)
-    proposal_interval, proposal_label = segmentation_to_mireval(proposal)
+    anno_interval, anno_label = multi_segment_to_mireval(annotation)
+    proposal_interval, proposal_label = multi_segment_to_mireval(proposal)
 
     # make last segment for estimation end at the same time as annotation
     end = max(anno_interval[-1][-1, 1], proposal_interval[-1][-1, 1])
@@ -310,7 +301,8 @@ def compute_l(
         anno_interval[i][-1, 1] = end
 
     return mir_eval.hierarchy.lmeasure(
-        anno_interval, anno_label, proposal_interval, proposal_label,
+        anno_interval, anno_label, proposal_interval, proposal_label, 
+        frame_size=l_frame_size
     )
 
 
@@ -321,3 +313,113 @@ def mask_diag(sq_mat, width=13):
         sq_mat_lil.setdiag(0, diag)
     sq_mat = sq_mat_lil.toarray()
 
+
+# collect jams for each track: 36(feat) * 9(dist) * 3(bw) combos for each track. Let's get the 36 * 9 feature distances collected in one jams.
+# This is used once and should be DEPRE, but don't delete the code!
+def collect_lsd_jams(track, bandwidth_mode='med_k_scalar'):
+    # load jams if lsd_jams_path already exist
+    # create if not
+    lsd_root = '/scratch/qx244/data/salami/lsds/'
+    fname = f'{track.tid}_{bandwidth_mode}.jams'
+
+    
+    lsd_jams_path = os.path.join(lsd_root, fname)
+    if os.path.exists(lsd_jams_path):
+        print('loading')
+        jam = jams.load(lsd_jams_path)
+        return jam
+    else:
+        print('collecting')
+        jam = jams.JAMS()
+        jam.file_metadata.duration = track.ts()[-1]
+
+    
+    
+    # a bunch of for statements
+    # loc_feat = 'crema' 
+    # l_dist = 'cityblock'
+    # rep_feat = 'chroma' 
+    # r_dist = 'cityblock'
+    rep_aff_mat_mode = 'sparse'
+    for loc_feat in ssdm.AVAL_FEAT_TYPES:
+        for l_dist in ssdm.AVAL_DIST_TYPES:
+            for rep_feat in ssdm.AVAL_FEAT_TYPES:
+                for r_dist in ssdm.AVAL_DIST_TYPES:
+                    # pull from legacy_jams if exisit, compute if not
+                    legacy_fname = f'{track.tid}_{loc_feat}{l_dist}_{rep_feat}{r_dist}_{bandwidth_mode}_{rep_aff_mat_mode}.jams'
+                    legacy_fp = os.path.join(lsd_root, legacy_fname)
+                    try:
+                        legacy_jam = jams.load(legacy_fp)
+                    except:
+                        continue
+                    multi_lvl_anno = jams.Annotation('multi_segment')
+                    multi_lvl_anno.sandbox = legacy_jam.sandbox
+                    # append to annotations
+                    for level, old_lvl_anno in enumerate(legacy_jam.annotations):
+                        for obs in old_lvl_anno:
+                            new_value = {'label': obs.value, 'level': level}
+                            multi_lvl_anno.append(time=obs.time, duration=obs.duration, value=new_value)
+
+                    jam.annotations.append(multi_lvl_anno)
+    
+    # save to lsd_jams_path
+    jam.save(lsd_jams_path)
+    # (after all is debugged) delete legacy_jams
+    # for legacy_file in glob.glob(os.path.join(lsd_root, f'{track.tid}*{bandwidth_mode}*sparse*')):
+    #     os.remove(legacy_file)
+
+    return jam
+
+
+def multi_segment_to_heir(anno):
+    n_lvl = anno.sandbox['num_layers']
+    heir = [[[],[]] for i in range(n_lvl)]
+    for obs in anno:
+        lvl = obs.value['level']
+        label = obs.value['label']
+        interval = [obs.time, obs.time+obs.duration]
+        heir[lvl][0].append(interval)
+        heir[lvl][1].append(f'{label}')
+    return heir
+
+
+def heir_to_multi_segment(heir):
+    anno = jams.Annotation(namespace='multi_segment')
+    for layer, (bdry, labels) in enumerate(heir):
+        for ival, label in zip(bdry, labels):
+            anno.append(time=ival[0], duration=ival[1]-ival[0], value={'label': label, 'level': layer})
+
+    anno.duration = heir[0][0][-1]
+    anno.sandbox.update(num_layers=layer+1)
+    return anno
+
+def heir_to_mireval(heir):
+    intervals = []
+    labels = []
+    for itv, lbl in heir:
+        intervals.append(np.asarray(itv))
+        labels.append(lbl)
+
+    return np.array(intervals, dtype=object), labels
+
+
+def clean_anno(anno, min_duration=8) -> list:
+    heir = multi_segment_to_heir(anno)
+    levels = ms.core.reindex(heir)
+    
+    # If min_duration is set, apply multi-level SECTION FUSION 
+    # to remove short sections
+    fixed_levels = None
+    if min_duration is None:
+        fixed_levels = levels
+    else:
+        segs_list = []
+        for i in range(1, len(levels) + 1):
+            segs_list.append(ms.core.clean_segments(levels, 
+                                                    min_duration=min_duration, 
+                                                    fix_level=i, 
+                                                    verbose=False))
+        
+        fixed_levels = ms.core.segments_to_levels(segs_list)
+    
+    return heir_to_multi_segment(fixed_levels)

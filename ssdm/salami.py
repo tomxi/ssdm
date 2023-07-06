@@ -57,6 +57,7 @@ class Track:
         self._sr = None # populate when .audio() is called.
         self._jam = None # populate when .jam() is called.
         self._common_ts = None # populate when .ts() is called.
+        self._lsd_jam = None # populate when .lsd() is called.
 
 
     def audio(
@@ -223,7 +224,7 @@ class Track:
         return ssm
 
 
-    # TODO note: Always recompute now. (??)
+    # TODO note: Always recompute now. (??) Check to make sure this is working
     def path_sim(
             self,
             feature: str = 'mfcc',
@@ -273,29 +274,62 @@ class Track:
             empty_jam.annotations.clear()
             empty_jam.save(record_path)
 
-        lsd_jam = jams.load(record_path)
-
+        # try to see if the lsd_jam is already open with this project
+        lsd_jam = jams.load(record_path) if self._lsd_jam is None else self._lsd_jam
+        
+        # search is config already stored in lsd_jam
         config_sb = jams.Sandbox()
         config_sb.update(**config)
         lsd_annos = lsd_jam.search(sandbox=config_sb)
+
         # check if multi_anno with config exist, if no, recompute = True
         if len(lsd_annos) == 0:
             recompute = True
+        else:
+            lsd_anno = lsd_annos[0]
     
         if recompute:
             # genearte new multi_segment annotation and store/overwrite it in the original jams file.
-            lsd_annos = [jams.Annotation(namespace='multi_segment')]
-            # TODO fill the holes of lsd config
+            lsd_anno = self._run_lsd(config=config)
+            # update _lsd_jam
+            self._lsd_jam.annotations.append(lsd_anno)
         
-        # return the 1 annotation only.
-        return lsd_annos[0]
+        return lsd_anno
 
 
+    def _run_lsd(self, config: dict) -> jams.Annotation:
+        
+        def mask_diag(sq_mat, width=13):
+            # carve out width from the full ssm
+            sq_mat_lil = sparse.lil_matrix(sq_mat)
+            for diag in range(-width + 1, width):
+                sq_mat_lil.setdiag(0, diag)
+            sq_mat = sq_mat_lil.toarray()
+
+        # Compute/get SSM mats
+        rep_ssm = self.ssm(feature=config['rep_ftype'], 
+                           distance=config['rep_metric'],
+                           width=config['rec_width'],
+                           full=config['rec_full'],
+                           **REP_FEAT_CONFIG[config['rep_ftype']]
+                           )
+        if config['rec_full']:
+            rep_ssm = mask_diag(rep_ssm, width=config['rec_width'])
+
+        
+        path_sim = self.path_sim(feature=config['loc_ftype'],
+                                    distance=config['loc_metric'],
+                                    **LOC_FEAT_CONFIG[config['loc_ftype']]
+                                )
+        # Spectral Clustering with Config
+        est_bdry_idxs, est_sgmt_labels = sc.do_segmentation_ssm(rep_ssm, path_sim, config)
+        est_bdry_times = self.ts()[est_bdry_idxs]
+        
+        return ssdm.utils.mireval_to_multiseg(est_bdry_times, est_sgmt_labels)
 
     ### THE FOLLOWING THREE FUNCTIONS.... CAN THEY BE SOMEWHERE ELSE?
-    # jams is not a good thing to pass around.... maybe annotation? mir_eval style output? or adobe_style oupout?
-    # TODO make this into a multi_segment annotation!
-    def segmentation_annotation(
+    # jams is not a good thing to pass around.... maybe annotation? Yes multi_segment annotation
+    def heir_anno(
         self,
         mode: str = 'normal', # {'normal', 'expand', 'refine', 'coarse'},
         anno_id: int = 0,
@@ -306,88 +340,26 @@ class Track:
         upper_annos = self.jam().search(namespace='segment_salami_upper')
         lower_annos = self.jam().search(namespace='segment_salami_lower')
         if mode == 'normal':
-            out_jam = jams.JAMS(annotations=[upper_annos[anno_id], lower_annos[anno_id]])
+
+            out_anno = ssdm.utils.openseg2multi([upper_annos[anno_id], lower_annos[anno_id]])
+            # multi_anno = jams.Annotation(namespace='multi_segment')
         else:
             upper_expanded = ssdm.expand_hierarchy(upper_annos[anno_id])
             lower_expanded = ssdm.expand_hierarchy(lower_annos[anno_id])
             
             if mode == 'expand':
-                out_jam = jams.JAMS(annotations=upper_expanded + lower_expanded)
+                out_anno = ssdm.utils.openseg2multi(upper_expanded + lower_expanded)
             elif mode == 'refine':
                 upper_refined = upper_expanded[-1]
                 lower_refined = lower_expanded[-1]
-                out_jam = jams.JAMS(annotations=[upper_refined, lower_refined])
+                out_anno = ssdm.utils.openseg2multi([upper_refined, lower_refined])
             elif mode == 'coarse':
                 upper_coarsened = upper_expanded[0]
                 lower_coarsened = lower_expanded[0]
-                out_jam = jams.JAMS(annotations=[upper_coarsened, lower_coarsened])
+                out_anno = ssdm.utils.openseg2multi([upper_coarsened, lower_coarsened])
             else:
                 raise librosa.ParameterError("mode can only be one of 'normal', 'expand', 'refine', or 'coarse'.")
-        out_jam.file_metadata.duration = self.ts()[-1]
-        return out_jam
-
-    # DONE: now the lsd jams files are different, fix this api
-    # What I want: this will return the jams file that stores all currently computed 'multi_segment' annotations, with the correct config
-    # load lsd jams
-    # check if multi_anno with config exist, if no, recompute = True
-    # if recompute, genearte new multi_segment annotation and store/overwrite it in the original jams file.
-    # return the 1 annotation only.
-    # def segmentation_lsd(
-    #     self,
-    #     config = None,
-    #     recompute = True,
-    # ) -> jams.Annotation:
-    #     """
-    #     A list of `jams.Annotation`s segmented with config
-    #     """
-    #     if config is None:
-    #         config = DEFAULT_LSD_CONFIG
-
-    #     full_flag = 'full' if config['rec_full'] else 'sparse'
-
-    #     record_path = os.path.join(self.salami_dir, 
-    #                                f'lsds/{self.tid}_{config["rep_ftype"]}{config["rep_metric"]}_{config["loc_ftype"]}{config["loc_metric"]}_{config["bandwidth"]}_{full_flag}.jams'
-    #                               )
-    #     if not os.path.exists(record_path):
-    #         recompute = True
-
-    #     if recompute:
-    #         # Compute/get SSM mats
-    #         rep_ssm = self.ssm(feature=config['rep_ftype'], 
-    #                            distance=config['rep_metric'],
-    #                            width=config['rec_width'],
-    #                            full=config['rec_full'],
-    #                            **REP_FEAT_CONFIG[config['rep_ftype']]
-    #                           )
-    #         if config['rec_full']:
-    #             rep_ssm = ssdm.mask_diag(rep_ssm, width=config['rec_width'])
-
-            
-    #         path_sim = self.path_sim(feature=config['loc_ftype'],
-    #                                  distance=config['loc_metric'],
-    #                                  **LOC_FEAT_CONFIG[config['loc_ftype']]
-    #                                 )
-    #         # Spectral Clustering with Config
-    #         est_bdry_idxs, est_sgmt_labels = sc.do_segmentation_ssm(rep_ssm, path_sim, config)
-
-    #         # create jams annotation
-    #         hier_anno = []
-    #         for layer_bdry_idx, layer_labels in zip(est_bdry_idxs, est_sgmt_labels):
-    #             anno = jams.Annotation(namespace='segment_open')
-    #             for i, segment_label in enumerate(layer_labels):
-    #                 start_time = self.ts()[layer_bdry_idx[i]]
-    #                 end_time = self.ts()[layer_bdry_idx[i+1]]
-    #                 anno.append(
-    #                     time=start_time, 
-    #                     duration=end_time - start_time,
-    #                     value=str(segment_label),
-    #                 )
-    #             hier_anno.append(anno)
-
-    #         lsd_jam = jams.JAMS(annotations=hier_anno, sandbox=config)
-    #         lsd_jam.file_metadata.duration = self.ts()[-1]
-    #         lsd_jam.save(record_path)
-    #     return jams.load(record_path)
+        return out_anno
 
     
     def adobe(
@@ -476,6 +448,14 @@ class Track:
         else:
             return tau
     
+
+
+
+
+
+
+
+
 
     # SHOULD BE SOMEWHERE ELSE?
     def lsd_l_feature_grid(

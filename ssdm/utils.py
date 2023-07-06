@@ -74,6 +74,7 @@ def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
     return train_set, val_set, test_set
 
 
+
 # Collaters:
 # NOTE: STALE
 def collate_l_score(
@@ -211,10 +212,11 @@ def collate_tau(
 
 
 ### Stand alone functions from Salami.py
+# FIXME update this so it consume jams.Annotation as opposed to jams.JAMS
 def segmentation_to_meet(
-    segmentation, 
-    ts,
-    num_layers = None,
+    segmentation: jams.Annotation, 
+    ts: list,
+    num_layers: int = None,
 ) -> np.array:
     """
     """
@@ -236,12 +238,6 @@ def segmentation_to_meet(
 
     # get the deepest level matched
     return np.max(meet_mat_per_level, axis=0)
-
-
-def multi_segment_to_mireval(
-    anno
-) -> tuple:
-    return heir_to_mireval(multi_segment_to_heir(anno))
 
 
 def tau_ssm(
@@ -290,8 +286,8 @@ def compute_l(
     annotation: jams.Annotation,
     l_frame_size: float = 0.1
 ) -> np.array:
-    anno_interval, anno_label = multi_segment_to_mireval(annotation)
-    proposal_interval, proposal_label = multi_segment_to_mireval(proposal)
+    anno_interval, anno_label = multiseg_to_mireval(annotation)
+    proposal_interval, proposal_label = multiseg_to_mireval(proposal)
 
     # make last segment for estimation end at the same time as annotation
     end = max(anno_interval[-1][-1, 1], proposal_interval[-1][-1, 1])
@@ -306,73 +302,17 @@ def compute_l(
     )
 
 
-def mask_diag(sq_mat, width=13):
-    # carve out width from the full ssm
-    sq_mat_lil = sparse.lil_matrix(sq_mat)
-    for diag in range(-width + 1, width):
-        sq_mat_lil.setdiag(0, diag)
-    sq_mat = sq_mat_lil.toarray()
+# def mask_diag(sq_mat, width=13):
+#     # carve out width from the full ssm
+#     sq_mat_lil = sparse.lil_matrix(sq_mat)
+#     for diag in range(-width + 1, width):
+#         sq_mat_lil.setdiag(0, diag)
+#     sq_mat = sq_mat_lil.toarray()
 
 
-# collect jams for each track: 36(feat) * 9(dist) * 3(bw) combos for each track. Let's get the 36 * 9 feature distances collected in one jams.
-# This is used once and should be DEPRE, but don't delete the code!
-def collect_lsd_jams(track, bandwidth_mode='med_k_scalar'):
-    # load jams if lsd_jams_path already exist
-    # create if not
-    lsd_root = '/scratch/qx244/data/salami/lsds/'
-    fname = f'{track.tid}_{bandwidth_mode}.jams'
 
-    
-    lsd_jams_path = os.path.join(lsd_root, fname)
-    if os.path.exists(lsd_jams_path):
-        print('loading')
-        jam = jams.load(lsd_jams_path)
-        return jam
-    else:
-        print('collecting')
-        jam = jams.JAMS()
-        jam.file_metadata.duration = track.ts()[-1]
-
-    
-    
-    # a bunch of for statements
-    # loc_feat = 'crema' 
-    # l_dist = 'cityblock'
-    # rep_feat = 'chroma' 
-    # r_dist = 'cityblock'
-    rep_aff_mat_mode = 'sparse'
-    for loc_feat in ssdm.AVAL_FEAT_TYPES:
-        for l_dist in ssdm.AVAL_DIST_TYPES:
-            for rep_feat in ssdm.AVAL_FEAT_TYPES:
-                for r_dist in ssdm.AVAL_DIST_TYPES:
-                    # pull from legacy_jams if exisit, compute if not
-                    legacy_fname = f'{track.tid}_{loc_feat}{l_dist}_{rep_feat}{r_dist}_{bandwidth_mode}_{rep_aff_mat_mode}.jams'
-                    legacy_fp = os.path.join(lsd_root, legacy_fname)
-                    try:
-                        legacy_jam = jams.load(legacy_fp)
-                    except:
-                        continue
-                    multi_lvl_anno = jams.Annotation('multi_segment')
-                    multi_lvl_anno.sandbox = legacy_jam.sandbox
-                    # append to annotations
-                    for level, old_lvl_anno in enumerate(legacy_jam.annotations):
-                        for obs in old_lvl_anno:
-                            new_value = {'label': obs.value, 'level': level}
-                            multi_lvl_anno.append(time=obs.time, duration=obs.duration, value=new_value)
-
-                    jam.annotations.append(multi_lvl_anno)
-    
-    # save to lsd_jams_path
-    jam.save(lsd_jams_path)
-    # (after all is debugged) delete legacy_jams
-    # for legacy_file in glob.glob(os.path.join(lsd_root, f'{track.tid}*{bandwidth_mode}*sparse*')):
-    #     os.remove(legacy_file)
-
-    return jam
-
-
-def multi_segment_to_heir(anno):
-    n_lvl = anno.sandbox['num_layers']
+def multiseg_to_heir(anno)-> list:
+    n_lvl = anno.data[-1].value['level'] + 1 # the last observation is always gives the deepest lvl.
     heir = [[[],[]] for i in range(n_lvl)]
     for obs in anno:
         lvl = obs.value['level']
@@ -383,7 +323,7 @@ def multi_segment_to_heir(anno):
     return heir
 
 
-def heir_to_multi_segment(heir):
+def heir_to_multiseg(heir) -> jams.Annotation:
     anno = jams.Annotation(namespace='multi_segment')
     for layer, (bdry, labels) in enumerate(heir):
         for ival, label in zip(bdry, labels):
@@ -403,8 +343,25 @@ def heir_to_mireval(heir):
     return np.array(intervals, dtype=object), labels
 
 
+def mireval_to_heir(itvls: np.ndarray, labels: list) -> list:
+    heir = []
+    n_lvl = len(labels)
+    for lvl in range(n_lvl):
+        lvl_anno = [itvls[lvl], labels[lvl]]
+        heir.append(lvl_anno)
+    return heir
+
+
+def multiseg_to_mireval(anno) -> tuple:
+    return heir_to_mireval(multiseg_to_heir(anno))
+
+
+def mireval_to_multiseg(itvls: np.ndarray, labels: list) -> jams.Annotation:
+    return heir_to_multiseg(mireval_to_heir(itvls, labels))
+
+
 def clean_anno(anno, min_duration=8) -> list:
-    heir = multi_segment_to_heir(anno)
+    heir = multiseg_to_heir(anno)
     levels = ms.core.reindex(heir)
     
     # If min_duration is set, apply multi-level SECTION FUSION 
@@ -422,4 +379,78 @@ def clean_anno(anno, min_duration=8) -> list:
         
         fixed_levels = ms.core.segments_to_levels(segs_list)
     
-    return heir_to_multi_segment(fixed_levels)
+    return heir_to_multiseg(fixed_levels)
+
+
+def openseg2multi(
+    annos: list
+) -> jams.Annotation:
+    multi_anno = jams.Annotation(namespace='multi_segment')
+
+    for lvl, openseg in enumerate(annos):
+        for obs in openseg:
+            multi_anno.append(time=obs.time,
+                              duration=obs.duration,
+                              value={'label': obs.value, 'level': lvl},
+                             )
+    
+    return multi_anno
+
+
+
+# collect jams for each track: 36(feat) * 9(dist) * 3(bw) combos for each track. Let's get the 36 * 9 feature distances collected in one jams.
+# This is used once and should be DEPRE, but don't delete the code yet!
+# def collect_lsd_jams(track, bandwidth_mode='med_k_scalar'):
+#     # load jams if lsd_jams_path already exist
+#     # create if not
+#     lsd_root = '/scratch/qx244/data/salami/lsds/'
+#     fname = f'{track.tid}_{bandwidth_mode}.jams'
+
+    
+#     lsd_jams_path = os.path.join(lsd_root, fname)
+#     if os.path.exists(lsd_jams_path):
+#         print('loading')
+#         jam = jams.load(lsd_jams_path)
+#         return jam
+#     else:
+#         print('collecting')
+#         jam = jams.JAMS()
+#         jam.file_metadata.duration = track.ts()[-1]
+
+    
+    
+#     # a bunch of for statements
+#     # loc_feat = 'crema' 
+#     # l_dist = 'cityblock'
+#     # rep_feat = 'chroma' 
+#     # r_dist = 'cityblock'
+#     rep_aff_mat_mode = 'sparse'
+#     for loc_feat in ssdm.AVAL_FEAT_TYPES:
+#         for l_dist in ssdm.AVAL_DIST_TYPES:
+#             for rep_feat in ssdm.AVAL_FEAT_TYPES:
+#                 for r_dist in ssdm.AVAL_DIST_TYPES:
+#                     # pull from legacy_jams if exisit, compute if not
+#                     legacy_fname = f'{track.tid}_{loc_feat}{l_dist}_{rep_feat}{r_dist}_{bandwidth_mode}_{rep_aff_mat_mode}.jams'
+#                     legacy_fp = os.path.join(lsd_root, legacy_fname)
+#                     try:
+#                         legacy_jam = jams.load(legacy_fp)
+#                     except:
+#                         continue
+#                     multi_lvl_anno = jams.Annotation('multiseg')
+#                     multi_lvl_anno.sandbox = legacy_jam.sandbox
+#                     # append to annotations
+#                     for level, old_lvl_anno in enumerate(legacy_jam.annotations):
+#                         for obs in old_lvl_anno:
+#                             new_value = {'label': obs.value, 'level': level}
+#                             multi_lvl_anno.append(time=obs.time, duration=obs.duration, value=new_value)
+
+#                     jam.annotations.append(multi_lvl_anno)
+    
+#     # save to lsd_jams_path
+#     jam.save(lsd_jams_path)
+#     # (after all is debugged) delete legacy_jams
+#     # for legacy_file in glob.glob(os.path.join(lsd_root, f'{track.tid}*{bandwidth_mode}*sparse*')):
+#     #     os.remove(legacy_file)
+
+#     return jam
+

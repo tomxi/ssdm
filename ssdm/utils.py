@@ -401,6 +401,7 @@ def clean_anno(anno, min_duration=8) -> jams.Annotation:
         fixed_levels = ms.core.segments_to_levels(segs_list)
     
     return hier_to_multiseg(fixed_levels)
+    return hier_to_multiseg(fixed_levels)
 
 
 def openseg2multi(

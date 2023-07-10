@@ -289,7 +289,7 @@ class Track:
             print('not found')
             recompute = True
         else:
-            print('found!')
+            print(f'found {len(lsd_annos)}!')
             lsd_anno = lsd_annos[0]
     
         if recompute:
@@ -298,6 +298,8 @@ class Track:
             lsd_anno = _run_lsd(self, config=config, recompute_ssm=recompute)
             # update _lsd_jam
             lsd_anno.sandbox=config_sb
+            for old_anno in lsd_annos:
+                self._lsd_jam.annotations.remove(old_anno)
             self._lsd_jam.annotations.append(lsd_anno)
             self._lsd_jam.save(record_path)
         
@@ -424,14 +426,6 @@ class Track:
             return combined_score
         else:
             return tau
-    
-
-
-
-
-
-
-
 
 
     # SHOULD BE SOMEWHERE ELSE?

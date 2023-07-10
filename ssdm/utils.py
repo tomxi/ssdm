@@ -229,8 +229,8 @@ def anno_to_meet(
     # initialize a 3d array to store all the meet matrices for each layer
     meet_mat_per_level = np.zeros((num_layers, n_frames, n_frames))
 
-    # build hier samples array
-    hier_samples = np.zeros((num_layers, n_frames))
+    # build hier samples list of list
+    hier_labels = [[] for _ in range(num_layers)]
 
     # run through sampled observations in multi_seg anno
     for t, sample in enumerate(sampled_anno):
@@ -238,11 +238,23 @@ def anno_to_meet(
             lvl = label_per_level['level']
             label = label_per_level['label']
             if lvl < num_layers:
-                hier_samples[lvl, t] = label
+                # this is to ensure there's only 1 label per lvl per time point
+                try:
+                    hier_labels[lvl][t] = label
+                except IndexError:
+                    hier_labels[lvl].append(label)
+
+    # clean labels
+    le = preprocessing.LabelEncoder()
+    hier_encoded_labels = []
+    for lvl_label in hier_labels:
+        hier_encoded_labels.append(
+            le.fit_transform([l[0] if len(l) > 0 else 'NL' for l in lvl_label])
+        )
 
     # put meet mat of each level of hierarchy in axis=0           
     for l in range(num_layers):
-        meet_mat_per_level[l] = np.equal.outer(hier_samples[l], hier_samples[l]).astype('float') * (l + 1)
+        meet_mat_per_level[l] = np.equal.outer(hier_encoded_labels[l], hier_encoded_labels[l]).astype('float') * (l + 1)
 
     # get the deepest level matched
     return np.max(meet_mat_per_level, axis=0)
@@ -255,7 +267,7 @@ def tau_ssm(
     quantize: str = 'kmeans', # can be 'percentile' or 'kmeans' or None
     quant_bins: int = 6, # number of quantization bins, ignored whtn quantize is Flase
 ) -> float:
-    meet_mat_flat = segmentation_to_meet(segmentation, ts).flatten()
+    meet_mat_flat = anno_to_meet(segmentation, ts).flatten()
     if quantize == 'percentile':
         bins = [np.percentile(ssm[ssm > 0], bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
         print(bins)
@@ -277,7 +289,7 @@ def tau_path(
     quantize: str = 'kmeans',  # None, 'kmeans', and 'percentil'
     quant_bins: int = 6, # number of quantization bins, ignored whtn quantize is Flase
 ) -> float:
-    meet_mat = segmentation_to_meet(segmentation, ts)
+    meet_mat = anno_to_meet(segmentation, ts)
     meet_diag = np.diag(meet_mat, k=1)
     if quantize == 'percentile':
         bins = [np.percentile(path_sim, bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
@@ -334,11 +346,11 @@ def multiseg_to_hier(anno)-> list:
 
 def hier_to_multiseg(hier) -> jams.Annotation:
     anno = jams.Annotation(namespace='multi_segment')
-    for layer, (bdry, labels) in enumerate(hier):
-        for ival, label in zip(bdry, labels):
-            anno.append(time=ival[0], duration=ival[1]-ival[0], value={'label': str(label), 'level': layer})
-
-    # anno.duration = hier[0][0][-1]
+    for layer, (intervals, labels) in enumerate(hier):
+        for ival, label in zip(intervals, labels):
+            anno.append(time=ival[0], 
+                        duration=ival[1]-ival[0],
+                        value={'label': str(label), 'level': layer})
     return anno
 
 def hier_to_mireval(hier) -> tuple:
@@ -368,7 +380,7 @@ def mireval_to_multiseg(itvls: np.ndarray, labels: list) -> jams.Annotation:
     return hier_to_multiseg(mireval_to_hier(itvls, labels))
 
 
-def clean_anno(anno, min_duration=8) -> list:
+def clean_anno(anno, min_duration=8) -> jams.Annotation:
     """wrapper around adobe's clean_segments function"""
     hier = multiseg_to_hier(anno)
     levels = ms.core.reindex(hier)

@@ -26,7 +26,7 @@ def sdm(track, feat='mfcc', ax=None):
     ax.set_title(f"track: {track.tid} | feature: {feat}")
     plt.colorbar(quadmesh)
     return quadmesh
-    
+
 
 def all_sdms(track):
     fig, axs = plt.subplots(3,2, sharex=True, sharey=True, figsize=(9,10))
@@ -65,11 +65,9 @@ def multi_seg(multi_seg):
     return ms.plot_segmentation(hier)
 
 
-
 def heatmap(df, ax=None, title=None, xlabel='Local Feature', ylabel='Repetition Feature'):   
     if ax is None:
         _, ax = plt.subplots(figsize=(5,5))
-
 
     im = ax.imshow(df, cmap='coolwarm')
     ax.set_xticks(np.arange(6), labels=df.columns)
@@ -115,16 +113,9 @@ def scatter_scores(
     return ax
 
 
-def update_cross_dmap(time):
-    vline = hv.VLine(time).opts(color='cyan', line_width=1.5)
-    hline = hv.HLine(time).opts(color='cyan', line_width=1.5)
-    return vline * hline
-
-
 # do holoview ploting 3 by 3 heatmaps.
 def explore_metric(track, bandwidth='med_k_scalar', anno_id=0):
     # 3 by 3 of 6 by 6 heatmaps
-
     # create subplot grids:
     fig, axs = plt.subplots(3, 3, sharex=True, sharey=True, figsize=(13, 13))
 
@@ -154,7 +145,14 @@ def explore_metric(track, bandwidth='med_k_scalar', anno_id=0):
     fig.tight_layout()
     return fig, axs
 
+
 ### DEPRE .......
+def update_cross_dmap(time):
+    vline = hv.VLine(time).opts(color='cyan', line_width=1.5)
+    hline = hv.HLine(time).opts(color='cyan', line_width=1.5)
+    return vline * hline
+
+
 def explore_track(tid, rep_feature, loc_feature, lsd_layer=10):
     # init track object
     track = ssdm.Track(tid)

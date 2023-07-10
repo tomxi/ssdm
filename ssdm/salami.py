@@ -306,11 +306,11 @@ class Track:
 
     ### THE FOLLOWING THREE FUNCTIONS.... CAN THEY BE SOMEWHERE ELSE?
     # jams is not a good thing to pass around.... maybe annotation? Yes multi_segment annotation
-    def heir_anno(
+    def ref(
         self,
         mode: str = 'normal', # {'normal', 'expand', 'refine', 'coarse'},
         anno_id: int = 0,
-    ) -> jams.JAMS: 
+    ) -> jams.Annotation: 
         """
         A list of `jams.Annotation`s with two modes: {'normal', 'expand'}
         """
@@ -346,9 +346,9 @@ class Track:
         filename = f'{self.tid}.mp3.msdclasscsnmagic.json'
 
         with open(os.path.join(result_dir, filename), 'rb') as f:
-            adobe_heir = json.load(f)
+            adobe_hier = json.load(f)
 
-        anno = ssdm.heir_to_multi_segment(adobe_heir)
+        anno = ssdm.utils.hier_to_multiseg(adobe_hier)
         anno.sandbox.update(mu=0.1, gamma=0.1)
         return anno
 

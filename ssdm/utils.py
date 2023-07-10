@@ -212,29 +212,37 @@ def collate_tau(
 
 
 ### Stand alone functions from Salami.py
-# FIXME update this so it consume jams.Annotation as opposed to jams.JAMS
-def segmentation_to_meet(
-    segmentation: jams.Annotation, 
+def anno_to_meet(
+    anno: jams.Annotation, 
     ts: list,
     num_layers: int = None,
 ) -> np.array:
     """
+    returns a square mat that's the meet matrix
     """
-    # initialize a 3d array to store all the meet matrices for each layer
-    hier_anno = segmentation.annotations
-    if num_layers:
-        hier_anno = hier_anno[:num_layers]
-    n_level = len(hier_anno)
+    #sample the annotation first and input cleaning:
+    sampled_anno = anno.to_samples(ts)
+    if num_layers is None:
+        num_layers = len(sampled_anno[0])
     n_frames = len(ts)
-    meet_mat_per_level = np.zeros((n_level, n_frames, n_frames))
+    
+    # initialize a 3d array to store all the meet matrices for each layer
+    meet_mat_per_level = np.zeros((num_layers, n_frames, n_frames))
 
-    # put meet mat of each level of hierarchy in axis=0
-    for level in range(n_level):
-        layer_anno = hier_anno[level]
-        label_samples = layer_anno.to_samples(ts)
-        le = preprocessing.LabelEncoder()
-        encoded_labels = le.fit_transform([l[0] if len(l) > 0 else 'NL' for l in label_samples])
-        meet_mat_per_level[level] = np.equal.outer(encoded_labels, encoded_labels).astype('float') * (level + 1)
+    # build hier samples array
+    hier_samples = np.zeros((num_layers, n_frames))
+
+    # run through sampled observations in multi_seg anno
+    for t, sample in enumerate(sampled_anno):
+        for label_per_level in sample:
+            lvl = label_per_level['level']
+            label = label_per_level['label']
+            if lvl < num_layers:
+                hier_samples[lvl, t] = label
+
+    # put meet mat of each level of hierarchy in axis=0           
+    for l in range(num_layers):
+        meet_mat_per_level[l] = np.equal.outer(hier_samples[l], hier_samples[l]).astype('float') * (l + 1)
 
     # get the deepest level matched
     return np.max(meet_mat_per_level, axis=0)
@@ -311,57 +319,59 @@ def compute_l(
 
 
 
-def multiseg_to_heir(anno)-> list:
-    n_lvl = anno.data[-1].value['level'] + 1 # the last observation is always gives the deepest lvl.
-    heir = [[[],[]] for i in range(n_lvl)]
+def multiseg_to_hier(anno)-> list:
+    n_lvl_list = [obs.value['level'] for obs in anno]
+    n_lvl = max(n_lvl_list) + 1
+    hier = [[[],[]] for i in range(n_lvl)]
     for obs in anno:
         lvl = obs.value['level']
         label = obs.value['label']
         interval = [obs.time, obs.time+obs.duration]
-        heir[lvl][0].append(interval)
-        heir[lvl][1].append(f'{label}')
-    return heir
+        hier[lvl][0].append(interval)
+        hier[lvl][1].append(f'{label}')
+    return hier
 
 
-def heir_to_multiseg(heir) -> jams.Annotation:
+def hier_to_multiseg(hier) -> jams.Annotation:
     anno = jams.Annotation(namespace='multi_segment')
-    for layer, (bdry, labels) in enumerate(heir):
+    for layer, (bdry, labels) in enumerate(hier):
         for ival, label in zip(bdry, labels):
             anno.append(time=ival[0], duration=ival[1]-ival[0], value={'label': str(label), 'level': layer})
 
-    # anno.duration = heir[0][0][-1]
+    # anno.duration = hier[0][0][-1]
     return anno
 
-def heir_to_mireval(heir):
+def hier_to_mireval(hier) -> tuple:
     intervals = []
     labels = []
-    for itv, lbl in heir:
+    for itv, lbl in hier:
         intervals.append(np.asarray(itv))
         labels.append(lbl)
 
     return np.array(intervals, dtype=object), labels
 
 
-def mireval_to_heir(itvls: np.ndarray, labels: list) -> list:
-    heir = []
+def mireval_to_hier(itvls: np.ndarray, labels: list) -> list:
+    hier = []
     n_lvl = len(labels)
     for lvl in range(n_lvl):
         lvl_anno = [itvls[lvl], labels[lvl]]
-        heir.append(lvl_anno)
-    return heir
+        hier.append(lvl_anno)
+    return hier
 
 
 def multiseg_to_mireval(anno) -> tuple:
-    return heir_to_mireval(multiseg_to_heir(anno))
+    return hier_to_mireval(multiseg_to_hier(anno))
 
 
 def mireval_to_multiseg(itvls: np.ndarray, labels: list) -> jams.Annotation:
-    return heir_to_multiseg(mireval_to_heir(itvls, labels))
+    return hier_to_multiseg(mireval_to_hier(itvls, labels))
 
 
 def clean_anno(anno, min_duration=8) -> list:
-    heir = multiseg_to_heir(anno)
-    levels = ms.core.reindex(heir)
+    """wrapper around adobe's clean_segments function"""
+    hier = multiseg_to_hier(anno)
+    levels = ms.core.reindex(hier)
     
     # If min_duration is set, apply multi-level SECTION FUSION 
     # to remove short sections
@@ -378,7 +388,7 @@ def clean_anno(anno, min_duration=8) -> list:
         
         fixed_levels = ms.core.segments_to_levels(segs_list)
     
-    return heir_to_multiseg(fixed_levels)
+    return hier_to_multiseg(fixed_levels)
 
 
 def openseg2multi(

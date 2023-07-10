@@ -52,7 +52,6 @@ def anno_meet_mats(track, mode='normal'):
 
 
 def lsd_meet_mat(track, config=ssdm.DEFAULT_LSD_CONFIG, layer_to_show=6):
-
     lsd_seg = track.segmentation_lsd(config)
     lsd_meet_mat = ssdm.segmentation_to_meet(lsd_seg, track.ts(), num_layers=layer_to_show)
     fig, ax = plt.subplots(figsize=(5, 4))
@@ -62,10 +61,9 @@ def lsd_meet_mat(track, config=ssdm.DEFAULT_LSD_CONFIG, layer_to_show=6):
 
 
 def multi_seg(multi_seg):
-    heir = ssdm.multi_segment_to_heir(multi_seg)
-    return ms.plot_segmentation(heir)
-    #TODO: fig, ax =  ms.plot_levels()  
-    # return fig, ax
+    hier = ssdm.multiseg_to_hier(multi_seg)
+    return ms.plot_segmentation(hier)
+
 
 
 def heatmap(df, ax=None, title=None, xlabel='Local Feature', ylabel='Repetition Feature'):   

@@ -3,6 +3,7 @@ import numpy as np
 import librosa
 import jams
 import pandas as pd
+import xarray as xr
 from scipy import spatial, sparse
 
 import ssdm
@@ -14,8 +15,8 @@ AVAL_BW_TYPES = ['med_k_scalar', 'gmean_k_avg', 'mean_k_avg_and_pair']
 DEFAULT_LSD_CONFIG = {
     'rec_width': 13,
     'rec_smooth': 7,
-    'rec_full': False,
     'evec_smooth': 13,
+    'rec_full': False, # grid 2
     'rep_ftype': 'chroma', # grid 6
     'loc_ftype': 'mfcc', # grid 6
     'rep_metric': 'cosine', # grid 3 
@@ -42,6 +43,14 @@ LOC_FEAT_CONFIG = {
     'yamnet': {'add_noise': True, 'n_steps': 1, 'delay': 1},
     'openl3': {'add_noise': True, 'n_steps': 1, 'delay': 1},
 }
+
+LSD_SEARCH_GRID = dict(rep_ftype=AVAL_FEAT_TYPES, 
+                       rep_metric=AVAL_DIST_TYPES, 
+                       loc_ftype=AVAL_FEAT_TYPES, 
+                       loc_metric=AVAL_DIST_TYPES, 
+                       rec_full=[True, False],
+                       bandwidth=AVAL_BW_TYPES,
+                      )
 
 class Track:
     def __init__(
@@ -310,7 +319,7 @@ class Track:
     # jams is not a good thing to pass around.... maybe annotation? Yes multi_segment annotation
     def ref(
         self,
-        mode: str = 'normal', # {'normal', 'expand', 'refine', 'coarse'},
+        mode: str = 'expand', # {'normal', 'expand', 'refine', 'coarse'},
         anno_id: int = 0,
     ) -> jams.Annotation: 
         """
@@ -320,22 +329,22 @@ class Track:
         lower_annos = self.jam().search(namespace='segment_salami_lower')
         if mode == 'normal':
 
-            out_anno = ssdm.utils.openseg2multi([upper_annos[anno_id], lower_annos[anno_id]])
+            out_anno = ssdm.openseg2multi([upper_annos[anno_id], lower_annos[anno_id]])
             # multi_anno = jams.Annotation(namespace='multi_segment')
         else:
             upper_expanded = ssdm.expand_hierarchy(upper_annos[anno_id])
             lower_expanded = ssdm.expand_hierarchy(lower_annos[anno_id])
             
             if mode == 'expand':
-                out_anno = ssdm.utils.openseg2multi(upper_expanded + lower_expanded)
+                out_anno = ssdm.openseg2multi(upper_expanded + lower_expanded)
             elif mode == 'refine':
                 upper_refined = upper_expanded[-1]
                 lower_refined = lower_expanded[-1]
-                out_anno = ssdm.utils.openseg2multi([upper_refined, lower_refined])
+                out_anno = ssdm.openseg2multi([upper_refined, lower_refined])
             elif mode == 'coarse':
                 upper_coarsened = upper_expanded[0]
                 lower_coarsened = lower_expanded[0]
-                out_anno = ssdm.utils.openseg2multi([upper_coarsened, lower_coarsened])
+                out_anno = ssdm.openseg2multi([upper_coarsened, lower_coarsened])
             else:
                 raise librosa.ParameterError("mode can only be one of 'normal', 'expand', 'refine', or 'coarse'.")
         return out_anno
@@ -427,20 +436,121 @@ class Track:
         else:
             return tau
 
+    # TODO......
+    def lsd_score(
+        self,
+        lsd_sel_dict: dict,
+        anno_id: int = 0,
+        # l_type: list = 'lr',
+        recompute: bool = False,
+        l_frame_size: float = 0.1,
+    ) -> xr.DataArray:
+        #initialize file if doesn't exist or load the xarray nc file
+        nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}.nc')
+        if not os.path.exists(nc_path):
+        # if True:
+            init_grid = LSD_SEARCH_GRID.copy()
+            init_grid.update(dict(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm']))
+            lsd_score_da = ssdm.init_empty_xr(init_grid, name=self.tid)
+            lsd_score_da.to_netcdf(nc_path)
+        else:
+            lsd_score_da = xr.open_dataarray(nc_path)
+        
+        # build lsd_configs from lsd_sel_dict
+        config = DEFAULT_LSD_CONFIG.copy()
+        for opt in lsd_sel_dict:
+            if opt in config:
+                config[opt] = lsd_sel_dict[opt]
 
-    # SHOULD BE SOMEWHERE ELSE?
+        midx = lsd_score_da.sel(**lsd_sel_dict).coords.to_index()
+        for opts in midx: # midx is a option combo indexed by name
+            pass
+
+        return midx
+
+
+
+
+        ##TODO
+
+
+
+        # if score_slice.isnull().any():
+        #     recompute = True
+        exp_config_grid = score_slice.coords.to_index()
+        
+        # initilize the lsd_config with the fixed options
+        lsd_config=DEFAULT_LSD_CONFIG
+        for opt in lsd_sel_dict:
+            lsd_config[opt]
+        
+        # now do grid search
+        options = exp_config_grid.names
+        for selections in exp_config_grid:
+            # check if needs to be recomputed:
+            # get the selection index and values of the lsd experiment
+            if recompute:
+                # compute with selection
+                # update lsd_config
+                for opt, selection in zip(options, selections):
+                    lsd_config[opt] = selection
+                exp_configs.append(lsd_config.copy())
+            else:
+                # get from storage
+                pass
+
+
+        return exp_configs
+
+        # for k in lsd_sel_dict:
+        #     lsd_configs[k] = lsd_sel_dict[k]
+        # for k in search_grid
+
+        # lsd_sel_dict.update({'anno_id': anno_id, 'l_type':['lp', 'lr', 'lm']})
+        # search for the required value
+        if lsd_score_da.sel(lsd_sel_dict).isnull().any():
+            recompute = True
+            return lsd_score_da
+        
+        # build lsd_config here with xarray idx lsd_score_da.coords.to_index()
+        # for config in grid, compute_l and store
+
+        if recompute:
+            proposal = self.lsd(lsd_config)
+            annotation = self.ref(anno_id=anno_id)
+            # search l_score from old places first?
+            l_score = ssdm.compute_l(proposal, annotation, l_frame_size=l_frame_size)
+            l_score = list(l_score)
+            print(l_score)
+            print(lsd_score_da.loc[lsd_sel_dict])
+            # save computed l_score
+            lsd_score_da.loc[lsd_sel_dict] = list(l_score)
+            lsd_score_da.to_netcdf(nc_path)
+
+        return lsd_score_da.sel(**lsd_sel_dict)
+
+
+
+
+
+    # SHOULD BE SOMEWHERE ELSE? Replace with lsd_l
     def lsd_l_feature_grid(
         self,
         anno_id: int = 0,
-        recompute: bool = False,
+        recompute: bool = True,
         anno_mode: str = 'expand', #see `segmentation_anno`'s `mode`.
         l_type: str = 'l', # can also be 'lr' and 'lp' for recall and precision.
         l_frame_size: float = 0.1,
         lsd_config: dict = DEFAULT_LSD_CONFIG,
         debug: bool = False,
     ) -> pd.DataFrame:
-        metrics_and_bw = '_'.join(['r', lsd_config['rep_metric'], 'l', lsd_config['loc_metric'], lsd_config['bandwidth']])
-        record_path = os.path.join(self.salami_dir, f'ells/{self.tid}_a{anno_id}_{anno_mode}_{metrics_and_bw}_{str(l_frame_size)}.pkl')
+        config_str = '_'.join(['r', lsd_config['rep_metric'], 
+                                'l', lsd_config['loc_metric'], 
+                                lsd_config['bandwidth'],
+                                'full' if lsd_config['rec_full'] else 'sparse',
+                                'l_frame_size'
+                               ])
+        record_path = os.path.join(self.salami_dir, f'ells/{self.tid}_a{anno_id}_{config_str}.pkl')
         if debug:
             print(record_path)
         # test if record_path exist, if no, set recompute to true.
@@ -457,10 +567,11 @@ class Track:
                 for l_feat in AVAL_FEAT_TYPES:
                     lsd_config['loc_ftype'] = l_feat
                     l_score.loc[r_feat, (slice(None), l_feat)] = ssdm.compute_l(
-                        self.segmentation_lsd(lsd_config, recompute=False), 
-                        self.segmentation_annotation(mode=anno_mode, anno_id=anno_id),
+                        self.lsd(lsd_config), 
+                        self.ref(mode=anno_mode, anno_id=anno_id),
                         l_frame_size=l_frame_size
                     )
+            
             # save to record_path
             l_score.to_pickle(record_path)
 
@@ -530,4 +641,4 @@ def _run_lsd(
     # Spectral Clustering with Config
     est_bdry_idxs, est_sgmt_labels = sc.do_segmentation_ssm(rep_ssm, path_sim, config)
     est_bdry_itvls = [sc.times_to_intervals(track.ts()[lvl]) for lvl in est_bdry_idxs]
-    return ssdm.utils.mireval_to_multiseg(est_bdry_itvls, est_sgmt_labels)
+    return ssdm.mireval_to_multiseg(est_bdry_itvls, est_sgmt_labels)

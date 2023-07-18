@@ -16,27 +16,38 @@ import musicsections as ms
 hv.extension("bokeh", logo=False)
 
 # get it to consume ax object for easier ploting.
-def sdm(track, feat='mfcc', ax=None):
+# def sdm(track, feat='mfcc', ax=None):
+#     if ax is None:
+#         _, ax = plt.subplots()
+    
+#     # Get track with tid and get sdm
+#     sdm = track.sdm(feature=feat, distance='cosine')
+#     quadmesh = librosa.display.specshow(sdm, y_axis='time', x_axis='time', ax=ax, hop_length=4096, sr=22050)
+#     ax.set_title(f"track: {track.tid} | feature: {feat}")
+#     plt.colorbar(quadmesh)
+#     return quadmesh
+
+
+def square(rec_mat, sr=4096/22050, ax=None, title=''):
     if ax is None:
         _, ax = plt.subplots()
-    
-    # Get track with tid and get sdm
-    sdm = track.sdm(feature=feat, distance='cosine')
-    quadmesh = librosa.display.specshow(sdm, y_axis='time', x_axis='time', ax=ax, hop_length=4096, sr=22050)
-    ax.set_title(f"track: {track.tid} | feature: {feat}")
+
+    quadmesh = librosa.display.specshow(rec_mat, y_axis='time', x_axis='time', ax=ax, hop_length=1, sr=sr)
+    ax.set_title(title)
     plt.colorbar(quadmesh)
     return quadmesh
 
 
-def all_sdms(track):
-    fig, axs = plt.subplots(3,2, sharex=True, sharey=True, figsize=(9,10))
-    for i, feat in enumerate(ssdm.AVAL_FEAT_TYPES):
-        quadmesh = sdm(track, feat=feat, ax=axs[i // 2][i % 2]);
-    fig.tight_layout()
-    return fig, axs
+
+# def all_sdms(track):
+#     fig, axs = plt.subplots(3,2, sharex=True, sharey=True, figsize=(9,10))
+#     for i, feat in enumerate(ssdm.AVAL_FEAT_TYPES):
+#         quadmesh = sdm(track, feat=feat, ax=axs[i // 2][i % 2]);
+#     fig.tight_layout()
+#     return fig, axs
 
 
-def anno_meet_mats(track, mode='normal'):
+def anno_meet_mats(track, mode='expand'):
     """
     mode can be one of {'normal', 'expand', 'refine', 'coarse'}
     """
@@ -114,13 +125,14 @@ def scatter_scores(
 
 
 # do holoview ploting 3 by 3 heatmaps.
-def explore_metric(track, bandwidth='med_k_scalar', anno_id=0):
+def explore_metric(track, bandwidth='med_k_scalar', full=False, anno_id=0):
     # 3 by 3 of 6 by 6 heatmaps
     # create subplot grids:
     fig, axs = plt.subplots(3, 3, sharex=True, sharey=True, figsize=(13, 13))
 
     lsd_config = ssdm.DEFAULT_LSD_CONFIG
     lsd_config['bandwidth'] = bandwidth
+    lsd_config['rec_full'] = full
 
     ax_id = 0
     for r_metric in ssdm.AVAL_DIST_TYPES:

@@ -1,6 +1,7 @@
 import pkg_resources
 from functools import reduce
 import json, os, glob
+import xarray as xr
 
 import pandas as pd
 import numpy as np
@@ -401,7 +402,6 @@ def clean_anno(anno, min_duration=8) -> jams.Annotation:
         fixed_levels = ms.core.segments_to_levels(segs_list)
     
     return hier_to_multiseg(fixed_levels)
-    return hier_to_multiseg(fixed_levels)
 
 
 def openseg2multi(
@@ -419,6 +419,15 @@ def openseg2multi(
     return multi_anno
 
 
+def init_empty_xr(grid_coords, name=None):
+    shape = [len(grid_coords[option]) for option in grid_coords]
+    empty_data = np.empty(shape)
+    empty_data[:] = np.nan
+    return xr.DataArray(empty_data,
+                        dims=grid_coords.keys(),
+                        coords=grid_coords,
+                        name=name,
+                        )
 
 # collect jams for each track: 36(feat) * 9(dist) * 3(bw) combos for each track. Let's get the 36 * 9 feature distances collected in one jams.
 # This is used once and should be DEPRE, but don't delete the code yet!

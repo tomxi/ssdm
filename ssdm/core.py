@@ -5,6 +5,7 @@ import jams
 import pandas as pd
 import xarray as xr
 from scipy import spatial, sparse
+from tqdm import tqdm
 
 import ssdm
 import ssdm.scluster as sc
@@ -48,7 +49,7 @@ LSD_SEARCH_GRID = dict(rep_ftype=AVAL_FEAT_TYPES,
                        rep_metric=AVAL_DIST_TYPES, 
                        loc_ftype=AVAL_FEAT_TYPES, 
                        loc_metric=AVAL_DIST_TYPES, 
-                       rec_full=[True, False],
+                       rec_full=[False, True],
                        bandwidth=AVAL_BW_TYPES,
                       )
 
@@ -182,6 +183,7 @@ class Track:
         delay: int = 1, # Param for time delay embedding of representation
         recompute: bool = False,
     ) -> np.array:
+        full = bool(full)
         # npy path
         ssm_info_str = f'{feature}_{distance}{f"_fw{width}" if full else ""}'
         feat_info_str = f's{n_steps}xd{delay}{"_n" if add_noise else ""}'
@@ -436,10 +438,10 @@ class Track:
         else:
             return tau
 
-    # TODO......
+
     def lsd_score(
         self,
-        lsd_sel_dict: dict,
+        lsd_sel_dict: dict = dict(),
         anno_id: int = 0,
         # l_type: list = 'lr',
         recompute: bool = False,
@@ -449,7 +451,7 @@ class Track:
         nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}.nc')
         if not os.path.exists(nc_path):
             init_grid = LSD_SEARCH_GRID.copy()
-            init_grid.update(dict(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm']))
+            init_grid.update(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm'])
             lsd_score_da = ssdm.init_empty_xr(init_grid, name=self.tid)
             lsd_score_da.to_netcdf(nc_path)
         else:
@@ -463,13 +465,17 @@ class Track:
             for opt in lsd_sel_dict:
                 if opt in DEFAULT_LSD_CONFIG:
                     exp_config[opt] = lsd_sel_dict[opt]
-            for opt, value in zip(config_midx.names, option_values):
-                if opt in DEFAULT_LSD_CONFIG:
-                    exp_config[opt] = value
-            configs.append(exp_config)
+            try:
+                for opt, value in zip(config_midx.names, option_values):
+                    if opt in DEFAULT_LSD_CONFIG:
+                        exp_config[opt] = value
+            except TypeError:
+                pass
+            if exp_config not in configs:
+                configs.append(exp_config)
 
-        for lsd_conf in configs:
-            
+        # run through the configs list and populate / readout scores
+        for lsd_conf in tqdm(configs):
             # first build the index dict
             coord_idx = lsd_conf.copy()
             coord_idx.update(anno_id=anno_id, l_type=['lp', 'lr', 'lm'])
@@ -482,148 +488,70 @@ class Track:
                 # Only compute if value doesn't exist:
                 ###
                 print('recomputing l score')
-                proposal = self.lsd(lsd_conf)
+                proposal = self.lsd(lsd_conf, print_config=True)
                 annotation = self.ref(anno_id=anno_id)
                 # search l_score from old places first?
                 l_score = ssdm.compute_l(proposal, annotation, l_frame_size=l_frame_size)
                 lsd_score_da.loc[coord_idx] = list(l_score)
-                # update the file:
+                # update the file with 10% chance:
+                if np.random.rand() > 0.1:
+                    lsd_score_da.to_netcdf(nc_path)
 
         lsd_score_da.to_netcdf(nc_path)
         # return lsd_score_da
         return lsd_score_da.sel(anno_id=anno_id, **lsd_sel_dict)
 
+
+    # # TODO Try to get rid of.... low prio 
+    # # SHOULD BE SOMEWHERE ELSE? Replace with lsd_l
+    # def lsd_l_feature_grid(
+    #     self,
+    #     anno_id: int = 0,
+    #     recompute: bool = True,
+    #     anno_mode: str = 'expand', #see `segmentation_anno`'s `mode`.
+    #     l_type: str = 'l', # can also be 'lr' and 'lp' for recall and precision.
+    #     l_frame_size: float = 0.1,
+    #     lsd_config: dict = DEFAULT_LSD_CONFIG,
+    #     debug: bool = False,
+    # ) -> pd.DataFrame:
+    #     config_str = '_'.join(['r', lsd_config['rep_metric'], 
+    #                             'l', lsd_config['loc_metric'], 
+    #                             lsd_config['bandwidth'],
+    #                             'full' if lsd_config['rec_full'] else 'sparse',
+    #                             'l_frame_size'
+    #                            ])
+    #     record_path = os.path.join(self.salami_dir, f'ells/{self.tid}_a{anno_id}_{config_str}.pkl')
+    #     if debug:
+    #         print(record_path)
+    #     # test if record_path exist, if no, set recompute to true.
+    #     if not os.path.exists(record_path):
+    #         recompute = True
+
+    #     if recompute:
+    #         l_score = pd.DataFrame(
+    #             index=AVAL_FEAT_TYPES,
+    #             columns=pd.MultiIndex.from_product([['lp', 'lr', 'l'], AVAL_FEAT_TYPES])
+    #         )
+    #         for r_feat in AVAL_FEAT_TYPES:
+    #             lsd_config['rep_ftype'] = r_feat
+    #             for l_feat in AVAL_FEAT_TYPES:
+    #                 lsd_config['loc_ftype'] = l_feat
+    #                 l_score.loc[r_feat, (slice(None), l_feat)] = ssdm.compute_l(
+    #                     self.lsd(lsd_config), 
+    #                     self.ref(mode=anno_mode, anno_id=anno_id),
+    #                     l_frame_size=l_frame_size
+    #                 )
             
+    #         # save to record_path
+    #         l_score.to_pickle(record_path)
 
-        #     # save computed l_score
-        #     # first build the index dict
-        #     coord_idx = lsd_conf.copy()
-        #     coord_idx['anno_id'] = anno_id
-        #     for k in coord_idx:
-        #         if k not in lsd_score_da.coords:
-        #             del coord_idx[k]
-
-        #     lsd_score_da.loc[lsd_sel_dict] = list(l_score)
-        #     lsd_score_da.to_netcdf(nc_path)
-
-
-        #     da_sel = lsd_conf.copy()
-        
-        # return configs, lsd_score_da
-
-
-
-        ##TODO
-
-
-
-        # # if score_slice.isnull().any():
-        # #     recompute = True
-        # exp_config_grid = score_slice.coords.to_index()
-        
-        # # initilize the lsd_config with the fixed options
-        # lsd_config=DEFAULT_LSD_CONFIG
-        # for opt in lsd_sel_dict:
-        #     lsd_config[opt]
-        
-        # # now do grid search
-        # options = exp_config_grid.names
-        # for selections in exp_config_grid:
-        #     # check if needs to be recomputed:
-        #     # get the selection index and values of the lsd experiment
-        #     if recompute:
-        #         # compute with selection
-        #         # update lsd_config
-        #         for opt, selection in zip(options, selections):
-        #             lsd_config[opt] = selection
-        #         exp_configs.append(lsd_config.copy())
-        #     else:
-        #         # get from storage
-        #         pass
-
-
-        # return exp_configs
-
-        # # for k in lsd_sel_dict:
-        # #     lsd_configs[k] = lsd_sel_dict[k]
-        # # for k in search_grid
-
-        # # lsd_sel_dict.update({'anno_id': anno_id, 'l_type':['lp', 'lr', 'lm']})
-        # # search for the required value
-        # if lsd_score_da.sel(lsd_sel_dict).isnull().any():
-        #     recompute = True
-        #     return lsd_score_da
-        
-        # # build lsd_config here with xarray idx lsd_score_da.coords.to_index()
-        # # for config in grid, compute_l and store
-
-        # if recompute:
-        #     proposal = self.lsd(lsd_config)
-        #     annotation = self.ref(anno_id=anno_id)
-        #     # search l_score from old places first?
-        #     l_score = ssdm.compute_l(proposal, annotation, l_frame_size=l_frame_size)
-        #     l_score = list(l_score)
-        #     print(l_score)
-        #     print(lsd_score_da.loc[lsd_sel_dict])
-        #     # save computed l_score
-        #     lsd_score_da.loc[lsd_sel_dict] = list(l_score)
-        #     lsd_score_da.to_netcdf(nc_path)
-
-        # return lsd_score_da.sel(**lsd_sel_dict)
-
-
-
-
-
-    # SHOULD BE SOMEWHERE ELSE? Replace with lsd_l
-    def lsd_l_feature_grid(
-        self,
-        anno_id: int = 0,
-        recompute: bool = True,
-        anno_mode: str = 'expand', #see `segmentation_anno`'s `mode`.
-        l_type: str = 'l', # can also be 'lr' and 'lp' for recall and precision.
-        l_frame_size: float = 0.1,
-        lsd_config: dict = DEFAULT_LSD_CONFIG,
-        debug: bool = False,
-    ) -> pd.DataFrame:
-        config_str = '_'.join(['r', lsd_config['rep_metric'], 
-                                'l', lsd_config['loc_metric'], 
-                                lsd_config['bandwidth'],
-                                'full' if lsd_config['rec_full'] else 'sparse',
-                                'l_frame_size'
-                               ])
-        record_path = os.path.join(self.salami_dir, f'ells/{self.tid}_a{anno_id}_{config_str}.pkl')
-        if debug:
-            print(record_path)
-        # test if record_path exist, if no, set recompute to true.
-        if not os.path.exists(record_path):
-            recompute = True
-
-        if recompute:
-            l_score = pd.DataFrame(
-                index=AVAL_FEAT_TYPES,
-                columns=pd.MultiIndex.from_product([['lp', 'lr', 'l'], AVAL_FEAT_TYPES])
-            )
-            for r_feat in AVAL_FEAT_TYPES:
-                lsd_config['rep_ftype'] = r_feat
-                for l_feat in AVAL_FEAT_TYPES:
-                    lsd_config['loc_ftype'] = l_feat
-                    l_score.loc[r_feat, (slice(None), l_feat)] = ssdm.compute_l(
-                        self.lsd(lsd_config), 
-                        self.ref(mode=anno_mode, anno_id=anno_id),
-                        l_frame_size=l_frame_size
-                    )
-            
-            # save to record_path
-            l_score.to_pickle(record_path)
-
-        # Read from record_path
-        l_df = pd.read_pickle(record_path).astype('float')
-        l_sub_square = l_df.loc[slice(None), (l_type, slice(None))]
-        l_sub_square.index.name = 'rep_feat'
-        l_sub_square.columns = l_sub_square.columns.droplevel(0)
-        l_sub_square.columns.name = 'loc_feat'
-        return l_sub_square
+    #     # Read from record_path
+    #     l_df = pd.read_pickle(record_path).astype('float')
+    #     l_sub_square = l_df.loc[slice(None), (l_type, slice(None))]
+    #     l_sub_square.index.name = 'rep_feat'
+    #     l_sub_square.columns = l_sub_square.columns.droplevel(0)
+    #     l_sub_square.columns.name = 'loc_feat'
+    #     return l_sub_square
     
 
     # SHOULD BE SOMEWHERE ELSE?

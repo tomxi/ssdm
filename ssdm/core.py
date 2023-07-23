@@ -17,7 +17,7 @@ DEFAULT_LSD_CONFIG = {
     'rec_width': 13,
     'rec_smooth': 7,
     'evec_smooth': 13,
-    'rec_full': False, # grid 2
+    'rec_full': 0, # grid 2
     'rep_ftype': 'chroma', # grid 6
     'loc_ftype': 'mfcc', # grid 6
     'rep_metric': 'cosine', # grid 3 
@@ -49,7 +49,7 @@ LSD_SEARCH_GRID = dict(rep_ftype=AVAL_FEAT_TYPES,
                        rep_metric=AVAL_DIST_TYPES, 
                        loc_ftype=AVAL_FEAT_TYPES, 
                        loc_metric=AVAL_DIST_TYPES, 
-                       rec_full=[False, True],
+                       rec_full=[0, 1],
                        bandwidth=AVAL_BW_TYPES,
                       )
 
@@ -67,8 +67,6 @@ class Track:
         self._sr = None # populate when .audio() is called.
         self._jam = None # populate when .jam() is called.
         self._common_ts = None # populate when .ts() is called.
-        self._lsd_jam = None # populate when .lsd() is called.
-
 
     def audio(
         self, 
@@ -83,7 +81,7 @@ class Track:
         self, 
     ) -> jams.JAMS:
         if self._jam is None:
-            self._jam = jams.load(os.path.join(self.salami_dir, f'jams/{self.tid}.jams'))
+            self._jam = jams.load(os.path.join(self.salami_dir, f'jams/{self.tid}.jams'), validate=False)
         return self._jam
 
 
@@ -273,27 +271,25 @@ class Track:
         if print_config:
             print(config)
 
-        record_path = os.path.join(self.salami_dir, 
-                                   f'lsds/{self.tid}_{config["bandwidth"]}.jams'
+        record_path = os.path.join('/vast/qx244/lsds/', 
+                                   f'{self.tid}_{config["bandwidth"]}_{config["rep_ftype"]}_{config["loc_ftype"]}.jams'
                                   )
         
         if not os.path.exists(record_path):
             # create and save jams file
             print('creating new jams file')
-            empty_jam = self.jam()
-            empty_jam.annotations.clear()
+            empty_jam = jams.JAMS(file_metadata=self.jam().file_metadata)
             empty_jam.save(record_path)
-            self._lsd_jam = empty_jam
 
-        if self._lsd_jam is None:
-            print('loading lsd_jam')
-            self._lsd_jam = jams.load(record_path)
+        # print('loading lsd_jam')
+        lsd_jam = jams.load(record_path)
+        # print('done')
         
         # search if config already stored in lsd_jam
         config_sb = jams.Sandbox()
         config_sb.update(**config)
         # print('trying to find...')
-        lsd_annos = self._lsd_jam.search(sandbox=config_sb)
+        lsd_annos = lsd_jam.search(sandbox=config_sb)
 
         # check if multi_anno with config exist, if no, recompute = True
         if len(lsd_annos) == 0:
@@ -307,12 +303,12 @@ class Track:
             print('recomputing! -- lsd')
             # genearte new multi_segment annotation and store/overwrite it in the original jams file.
             lsd_anno = _run_lsd(self, config=config, recompute_ssm=recompute)
-            # update _lsd_jam
+            # update jams file
             lsd_anno.sandbox=config_sb
             for old_anno in lsd_annos:
-                self._lsd_jam.annotations.remove(old_anno)
-            self._lsd_jam.annotations.append(lsd_anno)
-            self._lsd_jam.save(record_path)
+                lsd_jam.annotations.remove(old_anno)
+            lsd_jam.annotations.append(lsd_anno)
+            lsd_jam.save(record_path)
         
         return lsd_anno
 
@@ -395,7 +391,7 @@ class Track:
                 ssm = self.ssm(feature=feat, 
                                distance=lsd_config['rep_metric'],
                                width=lsd_config['rec_width'],
-                               full=lsd_config['rec_full'],
+                               full=bool(lsd_config['rec_full']),
                                **REP_FEAT_CONFIG[feat]
                               )
                 path_sim = self.path_sim(feature=feat,
@@ -487,8 +483,8 @@ class Track:
             if recompute or exp_slice.isnull().any():
                 # Only compute if value doesn't exist:
                 ###
-                print('recomputing l score')
-                proposal = self.lsd(lsd_conf, print_config=True)
+                # print('recomputing l score')
+                proposal = self.lsd(lsd_conf, print_config=False)
                 annotation = self.ref(anno_id=anno_id)
                 # search l_score from old places first?
                 l_score = ssdm.compute_l(proposal, annotation, l_frame_size=l_frame_size)
@@ -595,7 +591,7 @@ def _run_lsd(
     rep_ssm = track.ssm(feature=config['rep_ftype'], 
                         distance=config['rep_metric'],
                         width=config['rec_width'],
-                        full=config['rec_full'],
+                        full=bool(config['rec_full']),
                         recompute=recompute_ssm,
                         **REP_FEAT_CONFIG[config['rep_ftype']]
                         )

@@ -8,6 +8,7 @@ from scipy import spatial, sparse
 from tqdm import tqdm
 
 import ssdm
+from ssdm.utils import *
 import ssdm.scluster as sc
 
 AVAL_FEAT_TYPES = ['chroma', 'crema', 'tempogram', 'mfcc', 'yamnet', 'openl3']
@@ -327,22 +328,22 @@ class Track:
         lower_annos = self.jam().search(namespace='segment_salami_lower')
         if mode == 'normal':
 
-            out_anno = ssdm.openseg2multi([upper_annos[anno_id], lower_annos[anno_id]])
+            out_anno = openseg2multi([upper_annos[anno_id], lower_annos[anno_id]])
             # multi_anno = jams.Annotation(namespace='multi_segment')
         else:
             upper_expanded = ssdm.expand_hierarchy(upper_annos[anno_id])
             lower_expanded = ssdm.expand_hierarchy(lower_annos[anno_id])
             
             if mode == 'expand':
-                out_anno = ssdm.openseg2multi(upper_expanded + lower_expanded)
+                out_anno = openseg2multi(upper_expanded + lower_expanded)
             elif mode == 'refine':
                 upper_refined = upper_expanded[-1]
                 lower_refined = lower_expanded[-1]
-                out_anno = ssdm.openseg2multi([upper_refined, lower_refined])
+                out_anno = openseg2multi([upper_refined, lower_refined])
             elif mode == 'coarse':
                 upper_coarsened = upper_expanded[0]
                 lower_coarsened = lower_expanded[0]
-                out_anno = ssdm.openseg2multi([upper_coarsened, lower_coarsened])
+                out_anno = openseg2multi([upper_coarsened, lower_coarsened])
             else:
                 raise librosa.ParameterError("mode can only be one of 'normal', 'expand', 'refine', or 'coarse'.")
         return out_anno
@@ -357,11 +358,12 @@ class Track:
         with open(os.path.join(result_dir, filename), 'rb') as f:
             adobe_hier = json.load(f)
 
-        anno = ssdm.utils.hier_to_multiseg(adobe_hier)
+        anno = hier_to_multiseg(adobe_hier)
         anno.sandbox.update(mu=0.1, gamma=0.1)
         return anno
 
 
+# NEED TO REVIEW AND REDO
     def tau(
         self,
         anno_id: int = 0,
@@ -399,14 +401,14 @@ class Track:
                                          **LOC_FEAT_CONFIG[feat]
                                         )
                 
-                tau.loc[feat][f'full_expand'] = ssdm.tau_ssm(
+                tau.loc[feat][f'full_expand'] = tau_ssm(
                     ssm, 
                     self.segmentation_annotation(mode='expand', anno_id=anno_id),
                     self.ts(),
                     quantize = quantize,
                     quant_bins = quant_bins
                 )
-                tau.loc[feat][f'path_expand'] = ssdm.tau_path(
+                tau.loc[feat][f'path_expand'] = tau_path(
                     path_sim, 
                     self.segmentation_annotation(mode='expand', anno_id=anno_id),
                     self.ts(),
@@ -442,13 +444,15 @@ class Track:
         # l_type: list = 'lr',
         recompute: bool = False,
         l_frame_size: float = 0.1,
+        section_fusion_min_dur = None, # 8 sec in Adobe, if None then don't do section fusion
     ) -> xr.DataArray:
         #initialize file if doesn't exist or load the xarray nc file
-        nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}.nc')
+        fusion_flag = f'_f{section_fusion_min_dur}' if section_fusion_min_dur else ''
+        nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}{fusion_flag}.nc')
         if not os.path.exists(nc_path):
             init_grid = LSD_SEARCH_GRID.copy()
             init_grid.update(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm'])
-            lsd_score_da = ssdm.init_empty_xr(init_grid, name=self.tid)
+            lsd_score_da = init_empty_xr(init_grid, name=self.tid)
             lsd_score_da.to_netcdf(nc_path)
         else:
             lsd_score_da = xr.open_dataarray(nc_path)
@@ -485,9 +489,10 @@ class Track:
                 ###
                 # print('recomputing l score')
                 proposal = self.lsd(lsd_conf, print_config=False)
+                cleaned_proposal = clean_anno(proposal, section_fusion_min_dur)
                 annotation = self.ref(anno_id=anno_id)
                 # search l_score from old places first?
-                l_score = ssdm.compute_l(proposal, annotation, l_frame_size=l_frame_size)
+                l_score = compute_l(cleaned_proposal, annotation, l_frame_size=l_frame_size)
                 lsd_score_da.loc[coord_idx] = list(l_score)
                 # update the file with 10% chance:
                 if np.random.rand() > 0.1:
@@ -532,7 +537,7 @@ class Track:
     #             lsd_config['rep_ftype'] = r_feat
     #             for l_feat in AVAL_FEAT_TYPES:
     #                 lsd_config['loc_ftype'] = l_feat
-    #                 l_score.loc[r_feat, (slice(None), l_feat)] = ssdm.compute_l(
+    #                 l_score.loc[r_feat, (slice(None), l_feat)] = compute_l(
     #                     self.lsd(lsd_config), 
     #                     self.ref(mode=anno_mode, anno_id=anno_id),
     #                     l_frame_size=l_frame_size
@@ -565,7 +570,7 @@ class Track:
 
         if recompute:
             l_score = pd.Series(index=['lp', 'lr', 'l'])
-            l_score[:]= ssdm.compute_l(
+            l_score[:]= compute_l(
                 self.segmentation_adobe(), 
                 self.segmentation_annotation(mode=anno_mode, anno_id=anno_id)
             )
@@ -607,4 +612,4 @@ def _run_lsd(
     # Spectral Clustering with Config
     est_bdry_idxs, est_sgmt_labels = sc.do_segmentation_ssm(rep_ssm, path_sim, config)
     est_bdry_itvls = [sc.times_to_intervals(track.ts()[lvl]) for lvl in est_bdry_idxs]
-    return ssdm.mireval_to_multiseg(est_bdry_itvls, est_sgmt_labels)
+    return mireval_to_multiseg(est_bdry_itvls, est_sgmt_labels)

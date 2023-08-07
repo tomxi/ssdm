@@ -358,10 +358,10 @@ def hier_to_mireval(hier) -> tuple:
     intervals = []
     labels = []
     for itv, lbl in hier:
-        intervals.append(np.asarray(itv))
+        intervals.append(np.array(itv, dtype=float))
         labels.append(lbl)
 
-    return np.array(intervals, dtype=object), labels
+    return intervals, labels
 
 
 def mireval_to_hier(itvls: np.ndarray, labels: list) -> list:
@@ -428,6 +428,25 @@ def init_empty_xr(grid_coords, name=None):
                         coords=grid_coords,
                         name=name,
                         )
+
+
+def get_scores(
+        tids=[], 
+        anno_col_fn=lambda stack: stack.mean(dim='anno_id'), 
+        **lsd_score_kwargs
+) -> xr.DataArray:
+    score_per_track = []
+    for tid in tids:
+        track = ssdm.Track(tid)
+        score_per_anno = []
+        for anno_id in range(track.num_annos()):
+            score_per_anno.append(track.lsd_score(anno_id=anno_id, **lsd_score_kwargs))
+        
+        anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
+        track_flat = anno_col_fn(anno_stack)
+        score_per_track.append(track_flat)
+    
+    return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
 
 # collect jams for each track: 36(feat) * 9(dist) * 3(bw) combos for each track. Let's get the 36 * 9 feature distances collected in one jams.
 # This is used once and should be DEPRE, but don't delete the code yet!

@@ -12,7 +12,7 @@ def mfcc(track, recompute=False):
         track.salami_dir, f'features/{track.tid}_mfcc.npz')
     if recompute or not os.path.exists(feature_path):
         print(f'computing feature: mfcc for track {track.tid}...')
-        track.get_audio()        
+        track.audio()        
         mfcc = librosa.feature.mfcc(
             y=track.y, sr=track.sr, n_mfcc=40, 
             hop_length=4096, n_fft=8192, lifter=0.6)
@@ -51,7 +51,7 @@ def yamnet(track, recompute=False):
     if recompute or not os.path.exists(feature_path):
         print(f'computing feature: yamnet for track {track.tid}...')
         model = hub.load('https://tfhub.dev/google/yamnet/1')
-        yamnet_audio, yamnet_sr = track.get_audio(sr=16000)
+        yamnet_audio, yamnet_sr = track.audio(sr=16000)
         _, yamnet_emb, _ = model(yamnet_audio)
         resampled_yamnet_emb = librosa.resample(
             yamnet_emb.numpy().T,
@@ -70,7 +70,7 @@ def tempogram(track, recompute=False):
         track.salami_dir, f'features/{track.tid}_tempogram.npz')
 
     if recompute or not os.path.exists(feature_path):
-        track.get_audio()
+        track.audio()
         print(f'computing feature: tempogram for track {track.tid}...')
         novelty = track._novelty(hop_length=512, sr=track.sr)
         tempogram = librosa.feature.tempogram(
@@ -92,9 +92,9 @@ def openl3(track, recompute=False):
         track.salami_dir, f'features/{track.tid}_openl3.npz')
 
     if recompute or not os.path.exists(feature_path):
-        track.get_audio()
+        track.audio()
         print(f'computing feature: openl3 for track {track.tid}...')
-        emb, ts = openl3.get_audio_embedding(
+        emb, ts = openl3.audio_embedding(
             track.y, track.sr, 
             embedding_size=512, content_type='music'
         )
@@ -116,7 +116,7 @@ def chroma(track, recompute=False):
         track.salami_dir, f'features/{track.tid}_chroma.npz')
 
     if recompute or not os.path.exists(feature_path):
-        track.get_audio()
+        track.audio()
         print(f'computing feature: chroma for track {track.tid}...')
         chroma = librosa.feature.chroma_cqt(
             y=librosa.effects.harmonic(track.y, margin=8), 

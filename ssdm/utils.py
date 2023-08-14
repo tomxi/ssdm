@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 import jams
 import mir_eval
+import librosa
 from librosa import ParameterError
 
 import ssdm
@@ -75,143 +76,6 @@ def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
     return train_set, val_set, test_set
 
 
-
-# Collaters:
-# NOTE: STALE
-def collate_l_score(
-    heuristic: str = 'all_lsd_pairs',
-    l_type: str = 'l',
-    salami_split: str = 'working',
-    anno_merge_fn: any = None,
-) -> pd.Series:
-    """
-    heuristic in {'all_lsd_pairs', 'adobe_oracle', 'lsd_best_pair', 'lsd_adaptive_oracle', 'lsd_tau_pick', 'lsd_tau_hat_pick'}
-    returns a series of dataframes
-    """
-    if heuristic == 'all_lsd_pairs':
-        # get average for all pairs by lsd_l
-        scores = []
-        index = []
-        for tid in tqdm(get_ids(split=salami_split, out_type='list')):
-            track = ssdm.Track(tid=tid)
-            anno_scores = dict()
-            for anno_id in range(track.num_annos()):
-                anno_scores[str(anno_id)] = track.lsd_l_feature_grid(anno_mode='expand', l_type=l_type, anno_id=anno_id)
-
-            if anno_merge_fn is None:
-                index += [tid+f':{a}' for a in anno_scores.keys()]
-                scores += [anno_scores[a] for a in anno_scores.keys()]
-            else:
-                index.append(tid)
-                anno_scores = [anno_scores[a] for a in anno_scores.keys()]
-                anno_scores_out = pd.DataFrame(data=anno_merge_fn(anno_scores, axis=0),
-                                               index=anno_scores[0].index, 
-                                               columns=anno_scores[0].columns,
-                                               )
-                scores.append(anno_scores_out)
-            
-        return pd.Series(scores, index=index)
-    
-    elif heuristic == 'adobe_oracle':
-        scores = []
-        index = []
-        for tid in tqdm(get_ids(split=salami_split, out_type='list')):
-            track = ssdm.Track(tid=tid)
-            anno_scores = dict()
-            for anno_id in range(track.num_annos()):
-                anno_scores[str(anno_id)] = track.adobe_l(anno_mode='expand', l_type=l_type, anno_id=anno_id)
-
-            if anno_merge_fn is None:
-                index += [tid+f':{a}' for a in anno_scores.keys()]
-                scores += [anno_scores[a] for a in anno_scores.keys()]
-            else:
-                index.append(tid)
-                anno_scores = [anno_scores[a] for a in anno_scores.keys()]
-                scores.append(anno_merge_fn(anno_scores, axis=0))
-
-        return pd.Series(scores, index=index)
-    
-    # All kinds of heuristics for picking feature combinations for LSD
-    elif heuristic.split('_')[0] == 'lsd':
-        scores = []
-        index = []
-        rep_heur, loc_heur = heuristic.split('_')[1:3]
-        for tid in tqdm(get_ids(split=salami_split, out_type='list')):
-            track = ssdm.Track(tid=tid)
-            anno_scores = dict()
-            for anno_id in range(track.num_annos()):
-                anno_l_scores = track.lsd_l_feature_grid(anno_mode='expand', l_type=l_type, anno_id=anno_id)
-                if rep_heur in ssdm.AVAL_FEAT_TYPES:
-                    rep_pick = rep_heur
-                elif rep_heur == 'tau':
-                    rep_pick = track.tau(anno_id=anno_id)['full_expand'].idxmax()
-                elif rep_heur == 'tauhat':
-                    pass
-
-                if loc_heur in ssdm.AVAL_FEAT_TYPES:
-                    loc_pick = loc_heur
-                elif loc_heur == 'tau':
-                    loc_pick = track.tau(anno_id=anno_id)['path_expand'].idxmax()
-                elif loc_heur == 'tauhat':
-                    pass
-
-                if rep_heur == 'orc' and loc_heur == 'orc':
-                    rep_pick = anno_l_scores.max(axis=1).idxmax()
-                    loc_pick = anno_l_scores.max(axis=0).idxmax()
-                elif rep_heur == 'orc':
-                    rep_pick = anno_l_scores[loc_pick].idxmax()
-                elif loc_heur == 'orc':
-                    loc_pick = anno_l_scores.loc[rep_pick].idxmax()
-                
-                heur_score = anno_l_scores.loc[rep_pick, loc_pick]
-                anno_scores[str(anno_id)] = heur_score
-
-            if anno_merge_fn is None:
-                index += [tid+f':{a}' for a in anno_scores]
-                scores += [anno_scores[a] for a in anno_scores]
-            else:
-                index.append(tid)
-                anno_scores = [anno_scores[a] for a in anno_scores]
-                scores.append(anno_merge_fn(anno_scores, axis=0))
-
-        return pd.Series(scores, index=index)
-    
-    else:
-        raise ParameterError('bad heuristic')
-    
-
-def collate_tau(
-    salami_split: str = 'working',
-    anno_merge_fn: any = None,
-) -> tuple:
-    """
-    """
-    tau_rep_df = pd.DataFrame(columns=ssdm.AVAL_FEAT_TYPES, dtype='float')
-    tau_loc_df = pd.DataFrame(columns=ssdm.AVAL_FEAT_TYPES, dtype='float')
-    for tid in tqdm(get_ids(split=salami_split, out_type='list')):
-        track = ssdm.Track(tid=tid)
-        anno_tau_reps = []
-        anno_tau_locs = []
-        for anno_id in range(track.num_annos()):
-            anno_tau_rep = track.tau(anno_id=anno_id, quantize='kmeans')[f'full_expand']
-            anno_tau_loc = track.tau(anno_id=anno_id, quantize='kmeans')[f'path_expand']
-
-            if anno_merge_fn is None:
-                tau_rep_df.loc[f'{tid}:{anno_id}'] = anno_tau_rep
-                tau_loc_df.loc[f'{tid}:{anno_id}'] = anno_tau_loc
-            else:
-                anno_tau_reps.append(anno_tau_rep)
-                anno_tau_locs.append(anno_tau_loc)
-        # return anno_tau_reps
-
-        if anno_merge_fn is not None:
-            tau_rep_df.loc[f'{tid}'] = anno_merge_fn(anno_tau_reps, axis=0)
-            tau_rep_df.columns.name='tau_rep'
-            tau_loc_df.loc[f'{tid}'] = anno_merge_fn(anno_tau_locs, axis=0)
-            tau_loc_df.columns.name='tau_loc'
-    return tau_rep_df.astype('float'), tau_loc_df.astype('float')
-
-
 ### Stand alone functions from Salami.py
 def anno_to_meet(
     anno: jams.Annotation, 
@@ -231,7 +95,7 @@ def anno_to_meet(
     meet_mat_per_level = np.zeros((num_layers, n_frames, n_frames))
 
     # build hier samples list of list
-    hier_labels = [[] for _ in range(num_layers)]
+    hier_labels = [[''] * n_frames for _ in range(num_layers)]
 
     # run through sampled observations in multi_seg anno
     for t, sample in enumerate(sampled_anno):
@@ -239,18 +103,15 @@ def anno_to_meet(
             lvl = label_per_level['level']
             label = label_per_level['label']
             if lvl < num_layers:
-                # this is to ensure there's only 1 label per lvl per time point
-                try:
-                    hier_labels[lvl][t] = label
-                except IndexError:
-                    hier_labels[lvl].append(label)
+                hier_labels[lvl][t] = label
 
+    
     # clean labels
     le = preprocessing.LabelEncoder()
     hier_encoded_labels = []
     for lvl_label in hier_labels:
         hier_encoded_labels.append(
-            le.fit_transform([l[0] if len(l) > 0 else 'NL' for l in lvl_label])
+            le.fit_transform([l if len(l) > 0 else 'NL' for l in lvl_label])
         )
 
     # put meet mat of each level of hierarchy in axis=0           
@@ -265,13 +126,13 @@ def tau_ssm(
     ssm: np.array,
     segmentation: jams.JAMS,
     ts: np.array,
-    quantize: str = 'kmeans', # can be 'percentile' or 'kmeans' or None
+    quantize: str = 'percentile', # can be 'percentile' or 'kmeans' or None
     quant_bins: int = 6, # number of quantization bins, ignored whtn quantize is Flase
 ) -> float:
     meet_mat_flat = anno_to_meet(segmentation, ts).flatten()
     if quantize == 'percentile':
         bins = [np.percentile(ssm[ssm > 0], bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
-        print(bins)
+        # print(bins)
         ssm_flat = np.digitize(ssm.flatten(), bins=bins, right=False)
     elif quantize == 'kmeans':
         kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
@@ -287,14 +148,14 @@ def tau_path(
     path_sim: np.array,
     segmentation: jams.JAMS,
     ts: np.array,
-    quantize: str = 'kmeans',  # None, 'kmeans', and 'percentil'
+    quantize: str = 'percentil',  # None, 'kmeans', and 'percentil'
     quant_bins: int = 6, # number of quantization bins, ignored whtn quantize is Flase
 ) -> float:
     meet_mat = anno_to_meet(segmentation, ts)
     meet_diag = np.diag(meet_mat, k=1)
     if quantize == 'percentile':
         bins = [np.percentile(path_sim, bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
-        print('tau_loc_bins:', bins)
+        # print('tau_loc_bins:', bins)
         path_sim = np.digitize(path_sim, bins=bins, right=False)
     elif quantize == 'kmeans':
         kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
@@ -321,15 +182,6 @@ def compute_l(
         anno_interval, anno_label, proposal_interval, proposal_label, 
         frame_size=l_frame_size
     )
-
-
-# def mask_diag(sq_mat, width=13):
-#     # carve out width from the full ssm
-#     sq_mat_lil = sparse.lil_matrix(sq_mat)
-#     for diag in range(-width + 1, width):
-#         sq_mat_lil.setdiag(0, diag)
-#     sq_mat = sq_mat_lil.toarray()
-
 
 
 def multiseg_to_hier(anno)-> list:
@@ -381,7 +233,10 @@ def mireval_to_multiseg(itvls: np.ndarray, labels: list) -> jams.Annotation:
     return hier_to_multiseg(mireval_to_hier(itvls, labels))
 
 
-def clean_anno(anno, min_duration=8) -> jams.Annotation:
+def clean_anno(
+    anno, 
+    min_duration=8
+) -> jams.Annotation:
     """wrapper around adobe's clean_segments function"""
     hier = multiseg_to_hier(anno)
     levels = ms.core.reindex(hier)
@@ -430,13 +285,13 @@ def init_empty_xr(grid_coords, name=None):
                         )
 
 
-def get_scores(
-        tids=[], 
-        anno_col_fn=lambda stack: stack.mean(dim='anno_id'), 
-        **lsd_score_kwargs
+def get_lsd_scores(
+    tids=[], 
+    anno_col_fn=lambda stack: stack.mean(dim='anno_id'), 
+    **lsd_score_kwargs
 ) -> xr.DataArray:
     score_per_track = []
-    for tid in tids:
+    for tid in tqdm(tids):
         track = ssdm.Track(tid)
         score_per_anno = []
         for anno_id in range(track.num_annos()):
@@ -448,59 +303,45 @@ def get_scores(
     
     return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
 
-# collect jams for each track: 36(feat) * 9(dist) * 3(bw) combos for each track. Let's get the 36 * 9 feature distances collected in one jams.
-# This is used once and should be DEPRE, but don't delete the code yet!
-# def collect_lsd_jams(track, bandwidth_mode='med_k_scalar'):
-#     # load jams if lsd_jams_path already exist
-#     # create if not
-#     lsd_root = '/scratch/qx244/data/salami/lsds/'
-#     fname = f'{track.tid}_{bandwidth_mode}.jams'
 
+def get_adobe_scores(
+    tids=[],
+    anno_col_fn=lambda stack: stack.mean(dim='anno_id'),
+    l_frame_size=0.1
+) -> xr.DataArray:
+    score_per_track = []
+    for tid in tqdm(tids):
+        track = ssdm.Track(tid)
+        score_per_anno = []
+        for anno_id in range(track.num_annos()):
+            score_per_anno.append(track.adobe_l(anno_id=anno_id, l_frame_size=l_frame_size))
+        
+        anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
+        track_flat = anno_col_fn(anno_stack)
+        score_per_track.append(track_flat)
     
-#     lsd_jams_path = os.path.join(lsd_root, fname)
-#     if os.path.exists(lsd_jams_path):
-#         print('loading')
-#         jam = jams.load(lsd_jams_path)
-#         return jam
-#     else:
-#         print('collecting')
-#         jam = jams.JAMS()
-#         jam.file_metadata.duration = track.ts()[-1]
+    return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
 
+
+def get_taus(
+    tids=[], 
+    anno_col_fn=lambda stack: stack.max(dim='anno_id'),
+) -> xr.DataArray:
+    tau_per_track = []
+    for tid in tqdm(tids):
+        track = ssdm.Track(tid)
+        tau_per_anno = []
+        for anno_id in range(track.num_annos()):
+            tau_per_anno.append(track.tau(anno_id=anno_id))
+        
+        anno_stack = xr.concat(tau_per_anno, pd.Index(range(len(tau_per_anno)), name='anno_id'))
+        track_flat = anno_col_fn(anno_stack)
+        tau_per_track.append(track_flat)
     
-    
-#     # a bunch of for statements
-#     # loc_feat = 'crema' 
-#     # l_dist = 'cityblock'
-#     # rep_feat = 'chroma' 
-#     # r_dist = 'cityblock'
-#     rep_aff_mat_mode = 'sparse'
-#     for loc_feat in ssdm.AVAL_FEAT_TYPES:
-#         for l_dist in ssdm.AVAL_DIST_TYPES:
-#             for rep_feat in ssdm.AVAL_FEAT_TYPES:
-#                 for r_dist in ssdm.AVAL_DIST_TYPES:
-#                     # pull from legacy_jams if exisit, compute if not
-#                     legacy_fname = f'{track.tid}_{loc_feat}{l_dist}_{rep_feat}{r_dist}_{bandwidth_mode}_{rep_aff_mat_mode}.jams'
-#                     legacy_fp = os.path.join(lsd_root, legacy_fname)
-#                     try:
-#                         legacy_jam = jams.load(legacy_fp)
-#                     except:
-#                         continue
-#                     multi_lvl_anno = jams.Annotation('multiseg')
-#                     multi_lvl_anno.sandbox = legacy_jam.sandbox
-#                     # append to annotations
-#                     for level, old_lvl_anno in enumerate(legacy_jam.annotations):
-#                         for obs in old_lvl_anno:
-#                             new_value = {'label': obs.value, 'level': level}
-#                             multi_lvl_anno.append(time=obs.time, duration=obs.duration, value=new_value)
+    return xr.concat(tau_per_track, pd.Index(tids, name='tid')).rename()
 
-#                     jam.annotations.append(multi_lvl_anno)
-    
-#     # save to lsd_jams_path
-#     jam.save(lsd_jams_path)
-#     # (after all is debugged) delete legacy_jams
-#     # for legacy_file in glob.glob(os.path.join(lsd_root, f'{track.tid}*{bandwidth_mode}*sparse*')):
-#     #     os.remove(legacy_file)
 
-#     return jam
 
+def resample_representation(feature, old_ts, new_ts):
+    librosa.resample()
+    return new_feature, new_ts

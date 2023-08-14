@@ -59,15 +59,18 @@ class Track:
         self, 
         tid: str = '384', 
         salami_dir: str = '/scratch/qx244/data/salami/',
+        feature_sr: float = None,
     ):
         self.tid = tid
         self.salami_dir = salami_dir
         self.audio_path = os.path.join(salami_dir, f'audio/{tid}/audio.mp3')
+        self._feature_sr = 4096/22050 if feature_sr is None else feature_sr
 
         self._y = None # populate when .audio() is called.
-        self._sr = None # populate when .audio() is called.
+        self._sr = None # changed when .audio() is called.
         self._jam = None # populate when .jam() is called.
         self._common_ts = None # populate when .ts() is called.
+
 
     def audio(
         self, 
@@ -260,6 +263,90 @@ class Track:
         return np.exp(-path_dist / sigma)
         
 
+    def tau(
+        self,
+        tau_sel_dict: dict = dict(),
+        anno_id: int = 0,
+        recompute: bool = False,
+        quantize: str = 'percentile', # None, 'kemans' or 'percentile'
+        quant_bins: int = 6, # used for both quantization schemes
+    ) -> xr.DataArray:
+        # test if record_path exist, if no, set recompute to true.
+        suffix = f'_{quantize}{quant_bins}' if quantize is not None else ''
+        record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_a{anno_id}{suffix}.nc')
+        if not os.path.exists(record_path):
+            recompute = True
+            grid_coords = dict(f_type=AVAL_FEAT_TYPES, tau_type=AVAL_DIST_TYPES+['rep'])
+            tau = init_empty_xr(grid_coords)
+            tau.to_netcdf(record_path)
+        else:
+            tau = xr.open_dataarray(record_path)
+
+
+        # build lsd_configs from tau_sel_dict
+        config_midx = tau.sel(**tau_sel_dict).coords.to_index()
+
+        if recompute or tau.sel(**tau_sel_dict).isnull().any():
+            for f_type, tau_type in config_midx:
+                if tau_type == 'rep':
+                    ssm = self.ssm(
+                        feature=f_type, distance='cosine', **REP_FEAT_CONFIG[f_type]
+                    )
+                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = tau_ssm(
+                        ssm, 
+                        self.ref(mode='expand', anno_id=anno_id),
+                        self.ts(),
+                        quantize = quantize,
+                        quant_bins = quant_bins
+                    )
+
+                else: #path_sim
+                    path_sim = self.path_sim(feature=f_type, distance=tau_type, **LOC_FEAT_CONFIG[f_type])
+                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = tau_path(
+                        path_sim, 
+                        self.ref(mode='expand', anno_id=anno_id),
+                        self.ts(),
+                        quantize = quantize,
+                        quant_bins = quant_bins
+                    )
+            
+                tau.to_netcdf(record_path)
+
+        # return tau
+        return tau.sel(**tau_sel_dict)
+
+
+    def tau_rep(self, anno_col_fn=lambda stack: stack.max(dim='anno_id')):
+        return get_taus([self.tid], anno_col_fn).sel(tau_type='rep')
+    
+
+    def tau_loc(self, anno_col_fn=lambda stack: stack.max(dim='anno_id')):
+        return get_taus([self.tid], anno_col_fn).drop_sel(tau_type='rep')
+    
+
+    def tau_choice(self, anno_col_fn=lambda stack: stack.max(dim='anno_id')):
+        tau_locs =  self.tau_loc(anno_col_fn)
+        max_tau_loc = tau_locs.where(tau_locs == tau_locs.values.max(), drop=True).squeeze()
+        try:
+            rep_ftype = self.tau_rep(anno_col_fn).idxmax(dim='f_type').item()
+        except: 
+            rep_ftype = self.tau_rep(anno_col_fn).idxmax(dim='f_type').values[0]
+        try:
+            loc_ftype = max_tau_loc.f_type.item()
+        except:
+            loc_ftype = max_tau_loc.f_type.values[0]
+        try:
+            loc_metric = max_tau_loc.tau_type.item()
+        except:
+            loc_metric = max_tau_loc.tau_type.values[0]
+        return dict(rep_ftype=rep_ftype,
+                    loc_ftype=loc_ftype, 
+                    loc_metric=loc_metric)
+
+    
+
+    ############ RETURES JAMS.ANNOTATIONS BELOW
+    ## TODO add option for fast and loose? 3 times less res, and add flag for record_path
     def lsd(
             self,
             config: dict = None,
@@ -304,6 +391,7 @@ class Track:
             print('recomputing! -- lsd')
             # genearte new multi_segment annotation and store/overwrite it in the original jams file.
             lsd_anno = _run_lsd(self, config=config, recompute_ssm=recompute)
+            print('Done! -- lsd')
             # update jams file
             lsd_anno.sandbox=config_sb
             for old_anno in lsd_annos:
@@ -314,8 +402,6 @@ class Track:
         return lsd_anno
 
 
-    ### THE FOLLOWING THREE FUNCTIONS.... CAN THEY BE SOMEWHERE ELSE?
-    # jams is not a good thing to pass around.... maybe annotation? Yes multi_segment annotation
     def ref(
         self,
         mode: str = 'expand', # {'normal', 'expand', 'refine', 'coarse'},
@@ -363,90 +449,18 @@ class Track:
         return anno
 
 
-# NEED TO REVIEW AND REDO
-    def tau(
-        self,
-        anno_id: int = 0,
-        recompute: bool = False,
-        quantize: str = 'kmeans', # None, 'kemans' or 'percentile'
-        quant_bins: int = 6, # used for both quantization schemes
-        lsd_config: dict = DEFAULT_LSD_CONFIG,
-        combined: bool = False, # make a 6*6 square that's the gmean of tau_rep and loc
-    ) -> pd.DataFrame:
-        """  
-        """
-        # test if record_path exist, if no, set recompute to true.
-        suffix = f'_{quantize}{quant_bins}' if quantize is not None else ''
-
-        record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_a{anno_id}{suffix}.pkl')
-        if not os.path.exists(record_path):
-            recompute = True
-
-        if recompute:
-            # creating a dataframe to store all different variations of kendall taus for each feature
-            tau = pd.DataFrame(
-                index=AVAL_FEAT_TYPES, 
-                columns=['full_expand', 'path_expand'],
-                dtype='float'
-            )
-            for feat in AVAL_FEAT_TYPES:
-                ssm = self.ssm(feature=feat, 
-                               distance=lsd_config['rep_metric'],
-                               width=lsd_config['rec_width'],
-                               full=bool(lsd_config['rec_full']),
-                               **REP_FEAT_CONFIG[feat]
-                              )
-                path_sim = self.path_sim(feature=feat,
-                                         distance=lsd_config['loc_metric'],
-                                         **LOC_FEAT_CONFIG[feat]
-                                        )
-                
-                tau.loc[feat][f'full_expand'] = tau_ssm(
-                    ssm, 
-                    self.segmentation_annotation(mode='expand', anno_id=anno_id),
-                    self.ts(),
-                    quantize = quantize,
-                    quant_bins = quant_bins
-                )
-                tau.loc[feat][f'path_expand'] = tau_path(
-                    path_sim, 
-                    self.segmentation_annotation(mode='expand', anno_id=anno_id),
-                    self.ts(),
-                    quantize = quantize,
-                    quant_bins = quant_bins
-                )
-                
-            # Save to record_path
-            tau.to_pickle(record_path)
-        
-        # Read from record_path
-        tau = pd.read_pickle(record_path)
-        if combined:
-            tau -= tau.to_numpy().flatten().min()
-            tau += 1e-8
-
-            combined_score = pd.DataFrame(
-                np.outer(tau['full_expand'], tau['path_expand'])**0.5, 
-                index = list(tau['full_expand'].index), 
-                columns = tau['path_expand'].index
-            )
-            combined_score.index.name='tau_rep'
-            combined_score.columns.name='tau_loc'
-            return combined_score
-        else:
-            return tau
-
-
+    ############# RETURNS l-scores in xr.DataArray
     def lsd_score(
         self,
         lsd_sel_dict: dict = dict(),
         anno_id: int = 0,
-        # l_type: list = 'lr',
         recompute: bool = False,
         l_frame_size: float = 0.1,
         section_fusion_min_dur = None, # 8 sec in Adobe, if None then don't do section fusion
     ) -> xr.DataArray:
         #initialize file if doesn't exist or load the xarray nc file
+
+        # TODO this line... make this a fast and loose flag
         fusion_flag = f'_f{section_fusion_min_dur}' if section_fusion_min_dur else ''
         nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}{fusion_flag}.nc')
         if not os.path.exists(nc_path):
@@ -475,7 +489,7 @@ class Track:
                 configs.append(exp_config)
 
         # run through the configs list and populate / readout scores
-        for lsd_conf in tqdm(configs):
+        for lsd_conf in configs:
             # first build the index dict
             coord_idx = lsd_conf.copy()
             coord_idx.update(anno_id=anno_id, l_type=['lp', 'lr', 'lm'])
@@ -503,67 +517,15 @@ class Track:
         return lsd_score_da.sel(anno_id=anno_id, **lsd_sel_dict)
 
 
-    # # TODO Try to get rid of.... low prio 
-    # # SHOULD BE SOMEWHERE ELSE? Replace with lsd_l
-    # def lsd_l_feature_grid(
-    #     self,
-    #     anno_id: int = 0,
-    #     recompute: bool = True,
-    #     anno_mode: str = 'expand', #see `segmentation_anno`'s `mode`.
-    #     l_type: str = 'l', # can also be 'lr' and 'lp' for recall and precision.
-    #     l_frame_size: float = 0.1,
-    #     lsd_config: dict = DEFAULT_LSD_CONFIG,
-    #     debug: bool = False,
-    # ) -> pd.DataFrame:
-    #     config_str = '_'.join(['r', lsd_config['rep_metric'], 
-    #                             'l', lsd_config['loc_metric'], 
-    #                             lsd_config['bandwidth'],
-    #                             'full' if lsd_config['rec_full'] else 'sparse',
-    #                             'l_frame_size'
-    #                            ])
-    #     record_path = os.path.join(self.salami_dir, f'ells/{self.tid}_a{anno_id}_{config_str}.pkl')
-    #     if debug:
-    #         print(record_path)
-    #     # test if record_path exist, if no, set recompute to true.
-    #     if not os.path.exists(record_path):
-    #         recompute = True
-
-    #     if recompute:
-    #         l_score = pd.DataFrame(
-    #             index=AVAL_FEAT_TYPES,
-    #             columns=pd.MultiIndex.from_product([['lp', 'lr', 'l'], AVAL_FEAT_TYPES])
-    #         )
-    #         for r_feat in AVAL_FEAT_TYPES:
-    #             lsd_config['rep_ftype'] = r_feat
-    #             for l_feat in AVAL_FEAT_TYPES:
-    #                 lsd_config['loc_ftype'] = l_feat
-    #                 l_score.loc[r_feat, (slice(None), l_feat)] = compute_l(
-    #                     self.lsd(lsd_config), 
-    #                     self.ref(mode=anno_mode, anno_id=anno_id),
-    #                     l_frame_size=l_frame_size
-    #                 )
-            
-    #         # save to record_path
-    #         l_score.to_pickle(record_path)
-
-    #     # Read from record_path
-    #     l_df = pd.read_pickle(record_path).astype('float')
-    #     l_sub_square = l_df.loc[slice(None), (l_type, slice(None))]
-    #     l_sub_square.index.name = 'rep_feat'
-    #     l_sub_square.columns = l_sub_square.columns.droplevel(0)
-    #     l_sub_square.columns.name = 'loc_feat'
-    #     return l_sub_square
-    
-
-    # SHOULD BE SOMEWHERE ELSE?
     def adobe_l(
         self,
         anno_id: int = 0,
         recompute: bool = False,
         anno_mode: str = 'expand', #see `segmentation_anno`'s `mode`.
-        l_type: str = 'l' # can also be 'lr' and 'lp' for recall and precision.
-    ) -> pd.DataFrame:
-        record_path = os.path.join(self.salami_dir, f'ells/{self.tid}_a{anno_id}_{anno_mode}_adobe.pkl')
+        # l_type: str = 'l', # can also be 'lr' and 'lp' for recall and precision.
+        l_frame_size = 0.1
+    ) -> xr.DataArray:
+        record_path = os.path.join(self.salami_dir, f'ells/{self.tid}_a{anno_id}_{anno_mode}{l_frame_size}_adobe.pkl')
         # test if record_path exist, if no, set recompute to true.
         if not os.path.exists(record_path):
             recompute = True
@@ -571,15 +533,21 @@ class Track:
         if recompute:
             l_score = pd.Series(index=['lp', 'lr', 'l'])
             l_score[:]= compute_l(
-                self.segmentation_adobe(), 
-                self.segmentation_annotation(mode=anno_mode, anno_id=anno_id)
+                self.adobe(), 
+                self.ref(mode=anno_mode, anno_id=anno_id),
+                l_frame_size=l_frame_size
             )
             # save to record_path
             l_score.to_pickle(record_path)
 
         # Read from record_path
-        return pd.read_pickle(record_path).astype('float')[l_type]
+        pd_series = pd.read_pickle(record_path).astype('float')
+        pd_series.index.name = 'l_type'
+        return pd_series.to_xarray()
 
+
+
+# HELPER functin to run laplacean spectral decomposition TODO this is where the rescaling happens
 def _run_lsd(
     track, 
     config: dict, 

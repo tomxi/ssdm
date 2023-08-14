@@ -76,20 +76,28 @@ def multi_seg(multi_seg):
     return ms.plot_segmentation(hier)
 
 
-def heatmap(df, ax=None, title=None, xlabel='Local Feature', ylabel='Repetition Feature'):   
+def heatmap(da, ax=None, title=None, xlabel='Local Feature', ylabel='Repetition Feature'):   
     if ax is None:
         _, ax = plt.subplots(figsize=(5,5))
 
-    im = ax.imshow(df, cmap='coolwarm')
-    ax.set_xticks(np.arange(6), labels=df.columns)
-    ax.set_yticks(np.arange(6), labels=df.index)
+    da = da.squeeze()
+    
+    im = ax.imshow(da, cmap='coolwarm')
+    
+    ycoord, xcoord = da.dims
+    xticks = da.indexes[xcoord]
+    yticks = da.indexes[ycoord]
+    
+    ax.set_xticks(np.arange(len(xticks)), labels=xticks)
+    ax.set_yticks(np.arange(len(yticks)), labels=yticks)
+
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor");
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     
-    for i in range(6):
-        for j in range(6):
-            ax.text(j, i, f"{df.to_numpy()[i, j]:.3f}",
+    for i in range(len(yticks)):
+        for j in range(len(xticks)):
+            ax.text(j, i, f"{da.values[i, j]:.3f}",
                     ha="center", va="center", color="k")
 
     ax.set_title(title)

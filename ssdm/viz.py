@@ -76,7 +76,7 @@ def multi_seg(multi_seg):
     return ms.plot_segmentation(hier)
 
 
-def heatmap(da, ax=None, title=None, xlabel='Local Feature', ylabel='Repetition Feature'):   
+def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None):   
     if ax is None:
         _, ax = plt.subplots(figsize=(5,5))
 
@@ -87,6 +87,10 @@ def heatmap(da, ax=None, title=None, xlabel='Local Feature', ylabel='Repetition 
     ycoord, xcoord = da.dims
     xticks = da.indexes[xcoord]
     yticks = da.indexes[ycoord]
+    if xlabel is None:
+        xlabel = xcoord
+    if ylabel is None:
+        ylabel = ycoord
     
     ax.set_xticks(np.arange(len(xticks)), labels=xticks)
     ax.set_yticks(np.arange(len(yticks)), labels=yticks)
@@ -105,6 +109,7 @@ def heatmap(da, ax=None, title=None, xlabel='Local Feature', ylabel='Repetition 
     return ax
 
 
+## FIXME DEPRE NEED NEW VERSION THO
 def scatter_scores(
     x_data: pd.Series, 
     y_data: pd.Series,
@@ -132,7 +137,8 @@ def scatter_scores(
     return ax
 
 
-# do holoview ploting 3 by 3 heatmaps.
+####### THE BELOW ARE DEPRECATED
+# do holoview ploting 3 by 3 heatmaps. DEPRE
 def explore_metric(track, bandwidth='med_k_scalar', full=False, anno_id=0):
     # 3 by 3 of 6 by 6 heatmaps
     # create subplot grids:

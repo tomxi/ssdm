@@ -11,19 +11,19 @@ import ssdm
 from ssdm.utils import *
 import ssdm.scluster as sc
 
-AVAL_FEAT_TYPES = ['chroma', 'crema', 'tempogram', 'mfcc', 'yamnet', 'openl3']
-AVAL_DIST_TYPES = ['cosine', 'sqeuclidean', 'cityblock']
-AVAL_BW_TYPES = ['med_k_scalar', 'gmean_k_avg', 'mean_k_avg_and_pair']
+AVAL_FEAT_TYPES = ['crema', 'tempogram', 'mfcc', 'yamnet', 'openl3']
+AVAL_DIST_TYPES = ['cosine', 'sqeuclidean']
+AVAL_BW_TYPES = ['med_k_scalar', 'gmean_k_avg']
 DEFAULT_LSD_CONFIG = {
-    'rec_width': 13,
-    'rec_smooth': 7,
-    'evec_smooth': 13,
-    'rec_full': 0, # grid 2
-    'rep_ftype': 'chroma', # grid 6
-    'loc_ftype': 'mfcc', # grid 6
-    'rep_metric': 'cosine', # grid 3 
-    'loc_metric': 'cosine', # grid 3
-    'bandwidth': 'med_k_scalar', # grid 3
+    'rec_width': 4,
+    'rec_smooth': 20, 
+    'evec_smooth': 20,
+    'rec_full': 0,
+    'rep_ftype': 'crema', # grid 5
+    'loc_ftype': 'mfcc', # grid 5
+    'rep_metric': 'cosine', # grid 2
+    'loc_metric': 'cosine', # grid 2
+    'bandwidth': 'med_k_scalar', # grid 2
     'hier': True,
     'num_layers': 12
 }
@@ -50,8 +50,8 @@ LSD_SEARCH_GRID = dict(rep_ftype=AVAL_FEAT_TYPES,
                        rep_metric=AVAL_DIST_TYPES, 
                        loc_ftype=AVAL_FEAT_TYPES, 
                        loc_metric=AVAL_DIST_TYPES, 
-                       rec_full=[0, 1],
                        bandwidth=AVAL_BW_TYPES,
+                       rec_width=[3, 4, 5, 6],
                       )
 
 class Track:
@@ -85,7 +85,8 @@ class Track:
         self, 
     ) -> jams.JAMS:
         if self._jam is None:
-            self._jam = jams.load(os.path.join(self.salami_dir, f'jams/{self.tid}.jams'), validate=False)
+            jams_path = os.path.join(self.salami_dir, f'jams/{self.tid}.jams')
+            self._jam = jams.load(jams_path, validate=False)
         return self._jam
 
 
@@ -270,6 +271,7 @@ class Track:
         recompute: bool = False,
         quantize: str = 'percentile', # None, 'kemans' or 'percentile'
         quant_bins: int = 6, # used for both quantization schemes
+        aff_kernel_sigma_percentile=85 # used for self.path_sim
     ) -> xr.DataArray:
         # test if record_path exist, if no, set recompute to true.
         suffix = f'_{quantize}{quant_bins}' if quantize is not None else ''
@@ -301,7 +303,10 @@ class Track:
                     )
 
                 else: #path_sim
-                    path_sim = self.path_sim(feature=f_type, distance=tau_type, **LOC_FEAT_CONFIG[f_type])
+                    path_sim = self.path_sim(feature=f_type, 
+                                             distance=tau_type,
+                                             aff_kernel_sigma_percentile=aff_kernel_sigma_percentile,
+                                             **LOC_FEAT_CONFIG[f_type])
                     tau.loc[dict(f_type=f_type, tau_type=tau_type)] = tau_path(
                         path_sim, 
                         self.ref(mode='expand', anno_id=anno_id),
@@ -352,6 +357,7 @@ class Track:
             config: dict = None,
             recompute: bool  = False,
             print_config: bool = False,
+            path_sim_sigma_percentile: float = 85,
     ) -> jams.Annotation:
         # load lsd jams and file/log handeling...
         if config is None:
@@ -359,8 +365,8 @@ class Track:
         if print_config:
             print(config)
 
-        record_path = os.path.join('/vast/qx244/lsds/', 
-                                   f'{self.tid}_{config["bandwidth"]}_{config["rep_ftype"]}_{config["loc_ftype"]}.jams'
+        record_path = os.path.join('/vast/qx244/lsd/', 
+                                   f'{self.tid}_{config["rep_ftype"]}_{config["loc_metric"]}.jams'
                                   )
         
         if not os.path.exists(record_path):
@@ -381,23 +387,25 @@ class Track:
 
         # check if multi_anno with config exist, if no, recompute = True
         if len(lsd_annos) == 0:
-            # print('not found')
+            # print('multi_anno not found')
             recompute = True
         else:
-            # print(f'found {len(lsd_annos)}!')
+            # print(f'found {len(lsd_annos)} multi_annos!')
             lsd_anno = lsd_annos[0]
     
         if recompute:
             print('recomputing! -- lsd')
             # genearte new multi_segment annotation and store/overwrite it in the original jams file.
-            lsd_anno = _run_lsd(self, config=config, recompute_ssm=recompute)
+            lsd_anno = _run_lsd(self, config=config, recompute_ssm=recompute, loc_sigma=path_sim_sigma_percentile)
             print('Done! -- lsd')
             # update jams file
+            # print('updating jams! -- lsd')
             lsd_anno.sandbox=config_sb
             for old_anno in lsd_annos:
                 lsd_jam.annotations.remove(old_anno)
             lsd_jam.annotations.append(lsd_anno)
             lsd_jam.save(record_path)
+            # print('Done! -- lsd')
         
         return lsd_anno
 
@@ -456,13 +464,14 @@ class Track:
         anno_id: int = 0,
         recompute: bool = False,
         l_frame_size: float = 0.1,
+        path_sim_sigma_percent: float = 85,
         section_fusion_min_dur = None, # 8 sec in Adobe, if None then don't do section fusion
     ) -> xr.DataArray:
         #initialize file if doesn't exist or load the xarray nc file
 
         # TODO this line... make this a fast and loose flag
         fusion_flag = f'_f{section_fusion_min_dur}' if section_fusion_min_dur else ''
-        nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}{fusion_flag}.nc')
+        nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}{fusion_flag}{path_sim_sigma_percent}.nc')
         if not os.path.exists(nc_path):
             init_grid = LSD_SEARCH_GRID.copy()
             init_grid.update(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm'])
@@ -502,7 +511,7 @@ class Track:
                 # Only compute if value doesn't exist:
                 ###
                 # print('recomputing l score')
-                proposal = self.lsd(lsd_conf, print_config=False)
+                proposal = self.lsd(lsd_conf, print_config=False, path_sim_sigma_percentile=path_sim_sigma_percent, recompute=recompute)
                 cleaned_proposal = clean_anno(proposal, section_fusion_min_dur)
                 annotation = self.ref(anno_id=anno_id)
                 # search l_score from old places first?
@@ -551,7 +560,8 @@ class Track:
 def _run_lsd(
     track, 
     config: dict, 
-    recompute_ssm: bool = False
+    recompute_ssm: bool = False,
+    loc_sigma: float = 85
 ) -> jams.Annotation:
     def mask_diag(sq_mat, width=13):
         # carve out width from the full ssm
@@ -574,8 +584,9 @@ def _run_lsd(
     # track.path_sim alwasy recomputes.
     path_sim = track.path_sim(feature=config['loc_ftype'],
                               distance=config['loc_metric'],
+                              aff_kernel_sigma_percentile=loc_sigma,
                               **LOC_FEAT_CONFIG[config['loc_ftype']]
-                            )
+                             )
     
     # Spectral Clustering with Config
     est_bdry_idxs, est_sgmt_labels = sc.do_segmentation_ssm(rep_ssm, path_sim, config)

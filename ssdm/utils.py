@@ -328,7 +328,7 @@ def get_taus(
     anno_col_fn=lambda stack: stack.max(dim='anno_id'),
 ) -> xr.DataArray:
     tau_per_track = []
-    for tid in tqdm(tids):
+    for tid in tids:
         track = ssdm.Track(tid)
         tau_per_anno = []
         for anno_id in range(track.num_annos()):
@@ -342,6 +342,24 @@ def get_taus(
 
 
 
-def resample_representation(feature, old_ts, new_ts):
-    librosa.resample()
-    return new_feature, new_ts
+def undone_lsd_tids(
+    tids=[], 
+    lsd_sel_dict=dict(rep_metric='cosine',bandwidth='med_k_scalar',rec_full=0,), 
+    l_frame_size=0.1, 
+    section_fusion_min_dur=None
+):
+    undone_ids = []
+    for tid in tqdm(tids):
+        track = ssdm.Track(tid)
+        fusion_flag = f'_f{section_fusion_min_dur}' if section_fusion_min_dur else ''
+        nc_path = os.path.join(track.salami_dir, f'ells/{track.tid}_{l_frame_size}{fusion_flag}.nc')
+        try:
+            lsd_score_da = xr.open_dataarray(nc_path)
+        except FileNotFoundError:
+            undone_ids.append(tid)
+            continue
+
+        if lsd_score_da.sel(lsd_sel_dict).isnull().any():
+            undone_ids.append(tid)
+
+    return undone_ids

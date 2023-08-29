@@ -127,7 +127,7 @@ def tau_ssm(
     segmentation: jams.JAMS,
     ts: np.array,
     quantize: str = 'percentile', # can be 'percentile' or 'kmeans' or None
-    quant_bins: int = 6, # number of quantization bins, ignored whtn quantize is Flase
+    quant_bins: int = 7, # number of quantization bins, ignored whtn quantize is Flase
 ) -> float:
     meet_mat_flat = anno_to_meet(segmentation, ts).flatten()
     if quantize == 'percentile':
@@ -326,13 +326,14 @@ def get_adobe_scores(
 def get_taus(
     tids=[], 
     anno_col_fn=lambda stack: stack.max(dim='anno_id'),
+    **tau_kwargs,
 ) -> xr.DataArray:
     tau_per_track = []
-    for tid in tids:
+    for tid in tqdm(tids):
         track = ssdm.Track(tid)
         tau_per_anno = []
         for anno_id in range(track.num_annos()):
-            tau_per_anno.append(track.tau(anno_id=anno_id))
+            tau_per_anno.append(track.tau(anno_id=anno_id, **tau_kwargs))
         
         anno_stack = xr.concat(tau_per_anno, pd.Index(range(len(tau_per_anno)), name='anno_id'))
         track_flat = anno_col_fn(anno_stack)

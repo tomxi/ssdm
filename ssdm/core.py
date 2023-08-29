@@ -51,7 +51,6 @@ LSD_SEARCH_GRID = dict(rep_ftype=AVAL_FEAT_TYPES,
                        loc_ftype=AVAL_FEAT_TYPES, 
                        loc_metric=AVAL_DIST_TYPES, 
                        bandwidth=AVAL_BW_TYPES,
-                       rec_width=[3, 4, 5, 6],
                       )
 
 class Track:
@@ -178,7 +177,7 @@ class Track:
         self,
         feature: str = 'mfcc',
         distance: str = 'cosine',
-        width = 13, # ~2.5 sec width param for librosa.segment.rec_mat <= 1
+        width = 4, # ~2.5 sec width param for librosa.segment.rec_mat <= 1
         bw: str = 'med_k_scalar', # one of {'med_k_scalar', 'mean_k', 'gmean_k', 'mean_k_avg', 'gmean_k_avg', 'mean_k_avg_and_pair'}
         full: bool = False,
         add_noise: bool = False, # padding representation with a little noise to avoid divide by 0 somewhere...
@@ -270,7 +269,7 @@ class Track:
         anno_id: int = 0,
         recompute: bool = False,
         quantize: str = 'percentile', # None, 'kemans' or 'percentile'
-        quant_bins: int = 6, # used for both quantization schemes
+        quant_bins: int = 8, # used for loc tau quant schemes
         aff_kernel_sigma_percentile=85 # used for self.path_sim
     ) -> xr.DataArray:
         # test if record_path exist, if no, set recompute to true.
@@ -278,7 +277,7 @@ class Track:
         record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_a{anno_id}{suffix}.nc')
         if not os.path.exists(record_path):
             recompute = True
-            grid_coords = dict(f_type=AVAL_FEAT_TYPES, tau_type=AVAL_DIST_TYPES+['rep'])
+            grid_coords = dict(f_type=AVAL_FEAT_TYPES, d_type=AVAL_DIST_TYPES, tau_type=['rep', 'loc'])
             tau = init_empty_xr(grid_coords)
             tau.to_netcdf(record_path)
         else:
@@ -289,25 +288,25 @@ class Track:
         config_midx = tau.sel(**tau_sel_dict).coords.to_index()
 
         if recompute or tau.sel(**tau_sel_dict).isnull().any():
-            for f_type, tau_type in config_midx:
+            for f_type, d_type, tau_type in config_midx:
                 if tau_type == 'rep':
                     ssm = self.ssm(
-                        feature=f_type, distance='cosine', **REP_FEAT_CONFIG[f_type]
+                        feature=f_type, distance=d_type, **REP_FEAT_CONFIG[f_type]
                     )
-                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = tau_ssm(
+                    tau.loc[dict(f_type=f_type, d_type=d_type, tau_type=tau_type)] = tau_ssm(
                         ssm, 
                         self.ref(mode='expand', anno_id=anno_id),
                         self.ts(),
-                        quantize = quantize,
-                        quant_bins = quant_bins
+                        quantize = None,
+                        # quant_bins = quant_bins
                     )
 
                 else: #path_sim
                     path_sim = self.path_sim(feature=f_type, 
-                                             distance=tau_type,
+                                             distance=d_type,
                                              aff_kernel_sigma_percentile=aff_kernel_sigma_percentile,
                                              **LOC_FEAT_CONFIG[f_type])
-                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = tau_path(
+                    tau.loc[dict(f_type=f_type, d_type=d_type, tau_type=tau_type)] = tau_path(
                         path_sim, 
                         self.ref(mode='expand', anno_id=anno_id),
                         self.ts(),
@@ -321,6 +320,7 @@ class Track:
         return tau.sel(**tau_sel_dict)
 
 
+    # The below 3 functions are ..... superflous?
     def tau_rep(self, anno_col_fn=lambda stack: stack.max(dim='anno_id')):
         return get_taus([self.tid], anno_col_fn).sel(tau_type='rep')
     
@@ -465,20 +465,18 @@ class Track:
         recompute: bool = False,
         l_frame_size: float = 0.1,
         path_sim_sigma_percent: float = 85,
-        section_fusion_min_dur = None, # 8 sec in Adobe, if None then don't do section fusion
     ) -> xr.DataArray:
         #initialize file if doesn't exist or load the xarray nc file
 
         # TODO this line... make this a fast and loose flag
-        fusion_flag = f'_f{section_fusion_min_dur}' if section_fusion_min_dur else ''
-        nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}{fusion_flag}{path_sim_sigma_percent}.nc')
+        nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}{path_sim_sigma_percent}.nc')
         if not os.path.exists(nc_path):
             init_grid = LSD_SEARCH_GRID.copy()
             init_grid.update(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm'])
             lsd_score_da = init_empty_xr(init_grid, name=self.tid)
             lsd_score_da.to_netcdf(nc_path)
-        else:
-            lsd_score_da = xr.open_dataarray(nc_path)
+
+        lsd_score_da = xr.open_dataarray(nc_path)
         
         # build lsd_configs from lsd_sel_dict
         configs = []
@@ -511,15 +509,15 @@ class Track:
                 # Only compute if value doesn't exist:
                 ###
                 # print('recomputing l score')
-                proposal = self.lsd(lsd_conf, print_config=False, path_sim_sigma_percentile=path_sim_sigma_percent, recompute=recompute)
-                cleaned_proposal = clean_anno(proposal, section_fusion_min_dur)
+                proposal = self.lsd(lsd_conf, print_config=False, path_sim_sigma_percentile=path_sim_sigma_percent, recompute=False)
+                # cleaned_proposal = clean_anno(proposal, section_fusion_min_dur)
                 annotation = self.ref(anno_id=anno_id)
                 # search l_score from old places first?
-                l_score = compute_l(cleaned_proposal, annotation, l_frame_size=l_frame_size)
+                l_score = compute_l(proposal, annotation, l_frame_size=l_frame_size)
                 lsd_score_da.loc[coord_idx] = list(l_score)
                 # update the file with 10% chance:
-                if np.random.rand() > 0.1:
-                    lsd_score_da.to_netcdf(nc_path)
+                # if np.random.rand() > 0.1:
+                #     lsd_score_da.to_netcdf(nc_path)
 
         lsd_score_da.to_netcdf(nc_path)
         # return lsd_score_da

@@ -20,15 +20,23 @@ import ssdm
 import musicsections as ms
 
 def get_ids(
-    split: str = 'dev',
+    split: str = 'working',
     out_type: str = 'list' # one of {'set', 'list'}
 ) -> list:
     """ split can be ['audio', 'jams', 'excluded', 'new_val', 'new_test', 'new_train']
         Dicts sotred in id_path json file.
     """
     id_path = pkg_resources.resource_filename('ssdm', 'split_ids.json')
-    with open(id_path, 'r') as f:
-        id_json = json.load(f)
+    try:
+        with open(id_path, 'r') as f:
+            id_json = json.load(f)
+    except FileNotFoundError:
+        id_json = dict()
+        id_json[split] = []
+        with open(id_path, 'w') as f:
+            json.dump(id_json, f)
+
+    
         
     ids = id_json[split]
         
@@ -56,8 +64,15 @@ def update_split_json(split_name='', split_idx=[]):
     # add new splits to split_id.json file at json_path
     # read from json and get dict
     json_path = pkg_resources.resource_filename('ssdm', 'split_ids.json')
-    with open(json_path, 'r') as f:
-        split_dict = json.load(f)
+    try:
+        with open(json_path, 'r') as f:
+            split_dict = json.load(f)
+    except FileNotFoundError:
+        split_dict = dict()
+        split_dict[split_name] = split_idx
+        with open(json_path, 'w') as f:
+            json.dump(split_dict, f)
+        return split_dict
     
     # add new split to dict
     split_dict[split_name] = split_idx

@@ -324,11 +324,9 @@ class Track:
     def tau_rep(self, anno_col_fn=lambda stack: stack.max(dim='anno_id')):
         return get_taus([self.tid], anno_col_fn).sel(tau_type='rep')
     
-
     def tau_loc(self, anno_col_fn=lambda stack: stack.max(dim='anno_id')):
         return get_taus([self.tid], anno_col_fn).drop_sel(tau_type='rep')
     
-
     def tau_choice(self, anno_col_fn=lambda stack: stack.max(dim='anno_id')):
         tau_locs =  self.tau_loc(anno_col_fn)
         max_tau_loc = tau_locs.where(tau_locs == tau_locs.values.max(), drop=True).squeeze()
@@ -347,8 +345,6 @@ class Track:
         return dict(rep_ftype=rep_ftype,
                     loc_ftype=loc_ftype, 
                     loc_metric=loc_metric)
-
-    
 
     ############ RETURES JAMS.ANNOTATIONS BELOW
     ## TODO add option for fast and loose? 3 times less res, and add flag for record_path

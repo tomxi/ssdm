@@ -357,7 +357,6 @@ def get_taus(
     return xr.concat(tau_per_track, pd.Index(tids, name='tid')).rename()
 
 
-
 def undone_lsd_tids(
     tids=[], 
     lsd_sel_dict=dict(rep_metric='cosine',bandwidth='med_k_scalar',rec_full=0,), 

@@ -373,7 +373,11 @@ class Track:
             empty_jam.save(record_path)
 
         # print('loading lsd_jam')
-        lsd_jam = jams.load(record_path)
+        try:
+            lsd_jam = jams.load(record_path)
+        except json.decoder.JSONDecodeError:
+            lsd_jam = jams.JAMS(file_metadata=self.jam().file_metadata)
+            lsd_jam.save(record_path)
         # print('done')
         
         # search if config already stored in lsd_jam

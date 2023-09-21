@@ -22,7 +22,7 @@ DEFAULT_LSD_CONFIG = {
     'rep_ftype': 'crema', # grid 5
     'loc_ftype': 'mfcc', # grid 5
     'rep_metric': 'cosine', # grid 2
-    'loc_metric': 'cosine', # grid 2
+    'loc_metric': 'sqeuclidean', # grid 2
     'bandwidth': 'med_k_scalar', # grid 2
     'hier': True,
     'num_layers': 12
@@ -47,10 +47,8 @@ LOC_FEAT_CONFIG = {
 }
 
 LSD_SEARCH_GRID = dict(rep_ftype=AVAL_FEAT_TYPES, 
-                       rep_metric=AVAL_DIST_TYPES, 
                        loc_ftype=AVAL_FEAT_TYPES, 
-                       loc_metric=AVAL_DIST_TYPES, 
-                       bandwidth=AVAL_BW_TYPES,
+                       rec_width=[4, 16],
                       )
 
 class Track:
@@ -177,7 +175,7 @@ class Track:
         self,
         feature: str = 'mfcc',
         distance: str = 'cosine',
-        width = 4, # ~2.5 sec width param for librosa.segment.rec_mat <= 1
+        width = 4, # width param for librosa.segment.rec_mat <= 1
         bw: str = 'med_k_scalar', # one of {'med_k_scalar', 'mean_k', 'gmean_k', 'mean_k_avg', 'gmean_k_avg', 'mean_k_avg_and_pair'}
         full: bool = False,
         add_noise: bool = False, # padding representation with a little noise to avoid divide by 0 somewhere...
@@ -187,7 +185,7 @@ class Track:
     ) -> np.array:
         full = bool(full)
         # npy path
-        ssm_info_str = f'{feature}_{distance}{f"_fw{width}" if full else ""}'
+        ssm_info_str = f'n{feature}_{distance}{f"_fw{width}"}{f"_f" if full else "_s"}'
         feat_info_str = f's{n_steps}xd{delay}{"_n" if add_noise else ""}'
         ssm_path = os.path.join(
             self.salami_dir, 
@@ -245,6 +243,8 @@ class Track:
             n_steps: int = 1, # Param for time delay embedding of representation
             delay: int = 1, # Param for time delay embedding of representation
             aff_kernel_sigma_percentile = 85, 
+            recompute = False,
+            width: int = 1, # TODO Nice to have if things still doesn't work.
         ) -> np.array:
         feat_mat = self.representation(
             feat_type=feature, 
@@ -253,14 +253,35 @@ class Track:
             delay=delay,
         )
 
-        frames = feat_mat.shape[1]
-        path_dist = []
-        for i in range(frames-1):
-            pair_dist = spatial.distance.pdist(feat_mat[:, i:i + 2].T, metric=distance)
-            path_dist.append(pair_dist[0])
-        path_dist = np.array(path_dist)
-        sigma = np.percentile(path_dist, aff_kernel_sigma_percentile)
-        return np.exp(-path_dist / sigma)
+
+        path_sim_info_str = f'pathsim_{feature}_{distance}'
+        feat_info_str = f'ns{n_steps}xd{delay}xap{aff_kernel_sigma_percentile}{"_n" if add_noise else ""}'
+        pathsim_path = os.path.join(
+            self.salami_dir, 
+            f'ssms/{self.tid}_{path_sim_info_str}_{feat_info_str}.npy'
+        )
+
+        if not os.path.exists(pathsim_path):
+            recompute = True
+
+        if recompute:
+            frames = feat_mat.shape[1]
+            path_dist = []
+            for i in range(frames-1):
+                pair_dist = spatial.distance.pdist(feat_mat[:, i:i + 2].T, metric=distance)
+                path_dist.append(pair_dist[0])
+            path_dist = np.array(path_dist)
+            sigma = np.percentile(path_dist, aff_kernel_sigma_percentile)
+            pathsim = np.exp(-path_dist / sigma)
+
+            # store pathsim
+            with open(pathsim_path, 'wb') as f:
+                np.save(f, pathsim)
+        
+        # read npy file
+        with open(pathsim_path, 'rb') as f:
+            pathsim = np.load(pathsim_path, allow_pickle=True)
+        return pathsim
         
 
     def tau(
@@ -270,35 +291,41 @@ class Track:
         recompute: bool = False,
         quantize: str = 'percentile', # None, 'kemans' or 'percentile'
         quant_bins: int = 8, # used for loc tau quant schemes
-        aff_kernel_sigma_percentile=85 # used for self.path_sim
+        aff_kernel_sigma_percentile=85, # used for self.path_sim
     ) -> xr.DataArray:
         # test if record_path exist, if no, set recompute to true.
         suffix = f'_{quantize}{quant_bins}' if quantize is not None else ''
-        record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_a{anno_id}{suffix}.nc')
+        record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_na{anno_id}{suffix}.nc')
         if not os.path.exists(record_path):
             recompute = True
-            grid_coords = dict(f_type=AVAL_FEAT_TYPES, d_type=AVAL_DIST_TYPES, tau_type=['rep', 'loc'])
+            grid_coords = dict(f_type=AVAL_FEAT_TYPES, 
+                               d_type=AVAL_DIST_TYPES, 
+                               tau_type=['rep', 'loc'], 
+                               ssm_width=[4, 10, 16]
+                               )
             tau = init_empty_xr(grid_coords)
             tau.to_netcdf(record_path)
         else:
             tau = xr.open_dataarray(record_path)
 
-
         # build lsd_configs from tau_sel_dict
         config_midx = tau.sel(**tau_sel_dict).coords.to_index()
 
         if recompute or tau.sel(**tau_sel_dict).isnull().any():
-            for f_type, d_type, tau_type in config_midx:
+            for f_type, d_type, tau_type, ssm_width in config_midx:
                 if tau_type == 'rep':
                     ssm = self.ssm(
-                        feature=f_type, distance=d_type, **REP_FEAT_CONFIG[f_type]
+                        feature=f_type, 
+                        distance=d_type, 
+                        width=ssm_width, 
+                        **REP_FEAT_CONFIG[f_type]
                     )
                     tau.loc[dict(f_type=f_type, d_type=d_type, tau_type=tau_type)] = tau_ssm(
                         ssm, 
                         self.ref(mode='expand', anno_id=anno_id),
                         self.ts(),
-                        quantize = None,
-                        # quant_bins = quant_bins
+                        quantize = True,
+                        quant_bins = quant_bins
                     )
 
                 else: #path_sim
@@ -319,32 +346,6 @@ class Track:
         # return tau
         return tau.sel(**tau_sel_dict)
 
-
-    # The below 3 functions are ..... superflous?
-    def tau_rep(self, anno_col_fn=lambda stack: stack.max(dim='anno_id')):
-        return get_taus([self.tid], anno_col_fn).sel(tau_type='rep')
-    
-    def tau_loc(self, anno_col_fn=lambda stack: stack.max(dim='anno_id')):
-        return get_taus([self.tid], anno_col_fn).drop_sel(tau_type='rep')
-    
-    def tau_choice(self, anno_col_fn=lambda stack: stack.max(dim='anno_id')):
-        tau_locs =  self.tau_loc(anno_col_fn)
-        max_tau_loc = tau_locs.where(tau_locs == tau_locs.values.max(), drop=True).squeeze()
-        try:
-            rep_ftype = self.tau_rep(anno_col_fn).idxmax(dim='f_type').item()
-        except: 
-            rep_ftype = self.tau_rep(anno_col_fn).idxmax(dim='f_type').values[0]
-        try:
-            loc_ftype = max_tau_loc.f_type.item()
-        except:
-            loc_ftype = max_tau_loc.f_type.values[0]
-        try:
-            loc_metric = max_tau_loc.tau_type.item()
-        except:
-            loc_metric = max_tau_loc.tau_type.values[0]
-        return dict(rep_ftype=rep_ftype,
-                    loc_ftype=loc_ftype, 
-                    loc_metric=loc_metric)
 
     ############ RETURES JAMS.ANNOTATIONS BELOW
     ## TODO add option for fast and loose? 3 times less res, and add flag for record_path
@@ -465,7 +466,7 @@ class Track:
         #initialize file if doesn't exist or load the xarray nc file
 
         # TODO this line... make this a fast and loose flag
-        nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}{path_sim_sigma_percent}.nc')
+        nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}p{path_sim_sigma_percent}.nc')
         if not os.path.exists(nc_path):
             init_grid = LSD_SEARCH_GRID.copy()
             init_grid.update(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm'])

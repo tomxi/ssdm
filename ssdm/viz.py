@@ -10,7 +10,7 @@ from holoviews import opts
 import panel as pn
 
 import ssdm
-import musicsections as ms
+# import musicsections as ms
 
 
 hv.extension("bokeh", logo=False)
@@ -73,7 +73,8 @@ def lsd_meet_mat(track, config=ssdm.DEFAULT_LSD_CONFIG, layer_to_show=6):
 
 def multi_seg(multi_seg):
     hier = ssdm.multiseg_to_hier(multi_seg)
-    return ms.plot_segmentation(hier)
+    raise NotImplementedError
+    # return ms.plot_segmentation(hier)
 
 
 def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None):   

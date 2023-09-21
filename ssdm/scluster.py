@@ -171,11 +171,11 @@ def do_segmentation(C, M, config, in_bound_idxs=None):
             est_idx, est_label = cluster(embedding, Cnorm, k)
             est_idx, est_label = remove_empty_segments(est_idx, est_label)
             est_idxs.append(est_idx)
-            est_labels.append(np.asarray(est_label, dtype=np.int))
+            est_labels.append(np.asarray(est_label, dtype=int))
 
     else:
         est_idxs, est_labels = cluster(embedding, Cnorm, config["scluster_k"], in_bound_idxs)
-        est_labels = np.asarray(est_labels, dtype=np.int)
+        est_labels = np.asarray(est_labels, dtype=int)
 
     return est_idxs, est_labels
 
@@ -193,11 +193,11 @@ def do_segmentation_ssm(rep_ssm, loc_path_sim, config, in_bound_idxs=None):
             est_idx, est_label = cluster(embedding, Cnorm, k)
             est_idx, est_label = remove_empty_segments(est_idx, est_label)
             est_idxs.append(est_idx)
-            est_labels.append(np.asarray(est_label, dtype=np.int))
+            est_labels.append(np.asarray(est_label, dtype=int))
 
     else:
         est_idxs, est_labels = cluster(embedding, Cnorm, config["scluster_k"], in_bound_idxs)
-        est_labels = np.asarray(est_labels, dtype=np.int)
+        est_labels = np.asarray(est_labels, dtype=int)
 
     return est_idxs, est_labels
 

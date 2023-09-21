@@ -17,7 +17,7 @@ import librosa
 from librosa import ParameterError
 
 import ssdm
-import musicsections as ms
+# import musicsections as ms
 
 def get_ids(
     split: str = 'working',
@@ -35,9 +35,6 @@ def get_ids(
         id_json[split] = []
         with open(id_path, 'w') as f:
             json.dump(id_json, f)
-
-    
-        
     ids = id_json[split]
         
     if out_type == 'set':
@@ -88,6 +85,9 @@ def update_split_json(split_name='', split_idx=[]):
 def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
     dev_set, test_set = train_test_split(arr, test_size = test_ratio, random_state = random_state)
     train_set, val_set = train_test_split(dev_set, test_size = val_ratio / (1 - test_ratio), random_state = random_state)
+    train_set.sort()
+    val_set.sort()
+    test_set.sort()
     return train_set, val_set, test_set
 
 
@@ -248,30 +248,30 @@ def mireval_to_multiseg(itvls: np.ndarray, labels: list) -> jams.Annotation:
     return hier_to_multiseg(mireval_to_hier(itvls, labels))
 
 
-def clean_anno(
-    anno, 
-    min_duration=8
-) -> jams.Annotation:
-    """wrapper around adobe's clean_segments function"""
-    hier = multiseg_to_hier(anno)
-    levels = ms.core.reindex(hier)
+# def clean_anno(
+#     anno, 
+#     min_duration=8
+# ) -> jams.Annotation:
+#     """wrapper around adobe's clean_segments function"""
+#     hier = multiseg_to_hier(anno)
+#     levels = ms.core.reindex(hier)
     
-    # If min_duration is set, apply multi-level SECTION FUSION 
-    # to remove short sections
-    fixed_levels = None
-    if min_duration is None:
-        fixed_levels = levels
-    else:
-        segs_list = []
-        for i in range(1, len(levels) + 1):
-            segs_list.append(ms.core.clean_segments(levels, 
-                                                    min_duration=min_duration, 
-                                                    fix_level=i, 
-                                                    verbose=False))
+#     # If min_duration is set, apply multi-level SECTION FUSION 
+#     # to remove short sections
+#     fixed_levels = None
+#     if min_duration is None:
+#         fixed_levels = levels
+#     else:
+#         segs_list = []
+#         for i in range(1, len(levels) + 1):
+#             segs_list.append(ms.core.clean_segments(levels, 
+#                                                     min_duration=min_duration, 
+#                                                     fix_level=i, 
+#                                                     verbose=False))
         
-        fixed_levels = ms.core.segments_to_levels(segs_list)
+#         fixed_levels = ms.core.segments_to_levels(segs_list)
     
-    return hier_to_multiseg(fixed_levels)
+#     return hier_to_multiseg(fixed_levels)
 
 
 def openseg2multi(
@@ -357,24 +357,43 @@ def get_taus(
     return xr.concat(tau_per_track, pd.Index(tids, name='tid')).rename()
 
 
-def undone_lsd_tids(
+def get_tau_hats(
     tids=[], 
-    lsd_sel_dict=dict(rep_metric='cosine',bandwidth='med_k_scalar',rec_full=0,), 
-    l_frame_size=0.1, 
-    section_fusion_min_dur=None
-):
-    undone_ids = []
-    for tid in tqdm(tids):
-        track = ssdm.Track(tid)
-        fusion_flag = f'_f{section_fusion_min_dur}' if section_fusion_min_dur else ''
-        nc_path = os.path.join(track.salami_dir, f'ells/{track.tid}_{l_frame_size}{fusion_flag}.nc')
-        try:
-            lsd_score_da = xr.open_dataarray(nc_path)
-        except FileNotFoundError:
-            undone_ids.append(tid)
-            continue
+    # **tau_kwargs,
+) -> xr.DataArray:
+    raise NotImplementedError
+    # tau_per_track = []
+    # for tid in tqdm(tids):
+    #     track = ssdm.Track(tid)
+    #     tau_per_anno = []
+    #     for anno_id in range(track.num_annos()):
+    #         tau_per_anno.append(track.tau(anno_id=anno_id, **tau_kwargs))
+        
+    #     anno_stack = xr.concat(tau_per_anno, pd.Index(range(len(tau_per_anno)), name='anno_id'))
+    #     track_flat = anno_col_fn(anno_stack)
+    #     tau_per_track.append(track_flat)
+    
+    # return xr.concat(tau_per_track, pd.Index(tids, name='tid')).rename()
 
-        if lsd_score_da.sel(lsd_sel_dict).isnull().any():
-            undone_ids.append(tid)
 
-    return undone_ids
+# def undone_lsd_tids(
+#     tids=[], 
+#     lsd_sel_dict=dict(rep_metric='cosine',bandwidth='med_k_scalar',rec_full=0,), 
+#     l_frame_size=0.1, 
+#     section_fusion_min_dur=None
+# ):
+#     undone_ids = []
+#     for tid in tqdm(tids):
+#         track = ssdm.Track(tid)
+#         fusion_flag = f'_f{section_fusion_min_dur}' if section_fusion_min_dur else ''
+#         nc_path = os.path.join(track.salami_dir, f'ells/{track.tid}_{l_frame_size}{fusion_flag}.nc')
+#         try:
+#             lsd_score_da = xr.open_dataarray(nc_path)
+#         except FileNotFoundError:
+#             undone_ids.append(tid)
+#             continue
+
+#         if lsd_score_da.sel(lsd_sel_dict).isnull().any():
+#             undone_ids.append(tid)
+
+#     return undone_ids

@@ -48,7 +48,7 @@ LOC_FEAT_CONFIG = {
 
 LSD_SEARCH_GRID = dict(rep_ftype=AVAL_FEAT_TYPES, 
                        loc_ftype=AVAL_FEAT_TYPES, 
-                       rec_width=[4, 16],
+                       rec_width=[4],
                       )
 
 class Track:

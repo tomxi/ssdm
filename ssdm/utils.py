@@ -199,6 +199,7 @@ def compute_l(
     )
 
 
+# Formatting functions
 def multiseg_to_hier(anno)-> list:
     n_lvl_list = [obs.value['level'] for obs in anno]
     n_lvl = max(n_lvl_list) + 1
@@ -248,32 +249,6 @@ def mireval_to_multiseg(itvls: np.ndarray, labels: list) -> jams.Annotation:
     return hier_to_multiseg(mireval_to_hier(itvls, labels))
 
 
-# def clean_anno(
-#     anno, 
-#     min_duration=8
-# ) -> jams.Annotation:
-#     """wrapper around adobe's clean_segments function"""
-#     hier = multiseg_to_hier(anno)
-#     levels = ms.core.reindex(hier)
-    
-#     # If min_duration is set, apply multi-level SECTION FUSION 
-#     # to remove short sections
-#     fixed_levels = None
-#     if min_duration is None:
-#         fixed_levels = levels
-#     else:
-#         segs_list = []
-#         for i in range(1, len(levels) + 1):
-#             segs_list.append(ms.core.clean_segments(levels, 
-#                                                     min_duration=min_duration, 
-#                                                     fix_level=i, 
-#                                                     verbose=False))
-        
-#         fixed_levels = ms.core.segments_to_levels(segs_list)
-    
-#     return hier_to_multiseg(fixed_levels)
-
-
 def openseg2multi(
     annos: list
 ) -> jams.Annotation:
@@ -289,6 +264,7 @@ def openseg2multi(
     return multi_anno
 
 
+## Score collecting functions
 def init_empty_xr(grid_coords, name=None):
     shape = [len(grid_coords[option]) for option in grid_coords]
     empty_data = np.empty(shape)
@@ -357,43 +333,20 @@ def get_taus(
     return xr.concat(tau_per_track, pd.Index(tids, name='tid')).rename()
 
 
-def get_tau_hats(
-    tids=[], 
-    # **tau_kwargs,
-) -> xr.DataArray:
-    raise NotImplementedError
-    # tau_per_track = []
-    # for tid in tqdm(tids):
-    #     track = ssdm.Track(tid)
-    #     tau_per_anno = []
-    #     for anno_id in range(track.num_annos()):
-    #         tau_per_anno.append(track.tau(anno_id=anno_id, **tau_kwargs))
-        
-    #     anno_stack = xr.concat(tau_per_anno, pd.Index(range(len(tau_per_anno)), name='anno_id'))
-    #     track_flat = anno_col_fn(anno_stack)
-    #     tau_per_track.append(track_flat)
-    
-    # return xr.concat(tau_per_track, pd.Index(tids, name='tid')).rename()
-
-
-# def undone_lsd_tids(
-#     tids=[], 
-#     lsd_sel_dict=dict(rep_metric='cosine',bandwidth='med_k_scalar',rec_full=0,), 
-#     l_frame_size=0.1, 
-#     section_fusion_min_dur=None
-# ):
-#     undone_ids = []
-#     for tid in tqdm(tids):
-#         track = ssdm.Track(tid)
-#         fusion_flag = f'_f{section_fusion_min_dur}' if section_fusion_min_dur else ''
-#         nc_path = os.path.join(track.salami_dir, f'ells/{track.tid}_{l_frame_size}{fusion_flag}.nc')
-#         try:
-#             lsd_score_da = xr.open_dataarray(nc_path)
-#         except FileNotFoundError:
-#             undone_ids.append(tid)
-#             continue
-
-#         if lsd_score_da.sel(lsd_sel_dict).isnull().any():
-#             undone_ids.append(tid)
-
-#     return undone_ids
+def pick_by_taus(
+    scores_grid: xr.DataArray, # tids * num_feat * num_feat
+    rep_taus: xr.DataArray, # tids * num_feat
+    loc_taus: xr.DataArray, # tids * num_feat
+) -> pd.DataFrame: # tids * ['rep', 'loc', 'score']
+    """pick the best rep and loc features according to taus from a scores_grid"""
+    # print(scores_grid.coords)
+    # print(rep_taus.coords)
+    # print(loc_taus.coords)
+    out = pd.DataFrame(index=scores_grid.tid, columns=['rep_pick', 'loc_pick', 'score', 'oracle'])
+    rep_pick = rep_taus.idxmax(dim='f_type')
+    loc_pick = loc_taus.idxmax(dim='f_type')
+    out.rep_pick = rep_pick
+    out.loc_pick = loc_pick
+    out.score = scores_grid.sel(rep_ftype=rep_pick, loc_ftype=loc_pick)
+    out.oracle = scores_grid.max(dim=['rep_ftype', 'loc_ftype'])
+    return out

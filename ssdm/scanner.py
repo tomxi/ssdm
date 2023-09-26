@@ -16,9 +16,7 @@ class SlmDS(Dataset):
                  mode='rep', # {'rep', 'loc'}
                  infer=False,
                 ):
-        full_taus = xr.open_dataarray('/home/qx244/scanning-ssm/ssdm/notebooks/taus.nc')
-        # taus = full_taus.drop_sel(f_type='tempogram')
-        taus = full_taus
+        taus = xr.open_dataarray('/home/qx244/scanning-ssm/ssdm/notebooks/new_taus.nc')
 
         self.mode = mode
         self.split = split

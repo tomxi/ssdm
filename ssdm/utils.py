@@ -16,6 +16,9 @@ import mir_eval
 import librosa
 from librosa import ParameterError
 
+import matplotlib
+import matplotlib.pyplot as plt
+
 import ssdm
 # import musicsections as ms
 
@@ -164,7 +167,7 @@ def tau_path(
     segmentation: jams.JAMS,
     ts: np.array,
     quantize: str = 'percentil',  # None, 'kmeans', and 'percentil'
-    quant_bins: int = 6, # number of quantization bins, ignored whtn quantize is Flase
+    quant_bins: int = 20, # number of quantization bins, ignored whtn quantize is Flase
 ) -> float:
     meet_mat = anno_to_meet(segmentation, ts)
     meet_diag = np.diag(meet_mat, k=1)
@@ -172,6 +175,8 @@ def tau_path(
         bins = [np.percentile(path_sim, bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
         # print('tau_loc_bins:', bins)
         path_sim = np.digitize(path_sim, bins=bins, right=False)
+        ### NOTE
+        plt.plot(path_sim)
     elif quantize == 'kmeans':
         kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
         path_sim = kmeans_clusterer.fit_predict(path_sim[:, None])

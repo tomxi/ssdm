@@ -30,11 +30,18 @@ def anno_meet_mats(track, mode='expand'):
     return axs
 
 
-def lsd_meet_mat(track, config=ssdm.DEFAULT_LSD_CONFIG, layer_to_show=6):
-    lsd_seg = track.segmentation_lsd(config)
+def lsd_meet_mat(track, config=ssdm.DEFAULT_LSD_CONFIG, layer_to_show=7):
+    lsd_seg = track.lsd(config)
     lsd_meet_mat = ssdm.anno_to_meet(lsd_seg, track.ts(), num_layers=layer_to_show)
     fig, ax = plt.subplots(figsize=(5, 4))
     quadmesh = librosa.display.specshow(lsd_meet_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
+    fig.colorbar(quadmesh, ax=ax)      
+    return fig, ax
+
+def rec_mat(track, **ssm_config):
+    rec_mat = track.ssm(**ssm_config)
+    fig, ax = plt.subplots(figsize=(5, 4))
+    quadmesh = librosa.display.specshow(rec_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
     fig.colorbar(quadmesh, ax=ax)      
     return fig, ax
 

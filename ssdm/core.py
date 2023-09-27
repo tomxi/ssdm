@@ -11,8 +11,8 @@ import ssdm
 from ssdm.utils import *
 import ssdm.scluster as sc
 
-import matplotlib
-import matplotlib.pyplot as plt
+# import matplotlib
+# import matplotlib.pyplot as plt
 
 AVAL_FEAT_TYPES = ['crema', 'tempogram', 'mfcc', 'yamnet', 'openl3']
 AVAL_DIST_TYPES = ['cosine', 'sqeuclidean']
@@ -34,7 +34,7 @@ DEFAULT_LSD_CONFIG = {
 REP_FEAT_CONFIG = {
     'chroma': {'add_noise': True, 'n_steps': 6, 'delay': 2},
     'crema': {'add_noise': True, 'n_steps': 6, 'delay': 2},
-    'tempogram': {'add_noise': True, 'n_steps': 1, 'delay': 1},
+    'tempogram': {'add_noise': True, 'n_steps': 6, 'delay': 3},
     'mfcc': {'add_noise': True, 'n_steps': 6, 'delay': 2},
     'yamnet': {'add_noise': True, 'n_steps': 3, 'delay': 1},
     'openl3': {'add_noise': True, 'n_steps': 3, 'delay': 1},
@@ -43,10 +43,10 @@ REP_FEAT_CONFIG = {
 LOC_FEAT_CONFIG = {
     'chroma': {'add_noise': True, 'n_steps': 3, 'delay': 1},
     'crema': {'add_noise': True, 'n_steps': 3, 'delay': 1},
-    'tempogram': {'add_noise': True, 'n_steps': 1, 'delay': 1},
+    'tempogram': {'add_noise': True, 'n_steps': 3, 'delay': 1},
     'mfcc': {'add_noise': True, 'n_steps': 3, 'delay': 1},
-    'yamnet': {'add_noise': True, 'n_steps': 1, 'delay': 1},
-    'openl3': {'add_noise': True, 'n_steps': 1, 'delay': 1},
+    'yamnet': {'add_noise': True, 'n_steps': 2, 'delay': 1},
+    'openl3': {'add_noise': True, 'n_steps': 2, 'delay': 1},
 }
 
 LSD_SEARCH_GRID = dict(rep_ftype=AVAL_FEAT_TYPES, 
@@ -292,7 +292,7 @@ class Track:
         anno_id: int = 0,
         recompute: bool = False,
         quantize: str = 'percentile', # None, 'kemans' or 'percentile'
-        quant_bins: int = 7, # used for loc tau quant schemes
+        quant_bins: int = 8, # used for loc tau quant schemes
         quant_bins_loc: int = 20,
         aff_kernel_sigma_percentile=85, # used for self.path_sim
     ) -> xr.DataArray:
@@ -316,6 +316,7 @@ class Track:
             # build lsd_configs from tau_sel_dict
             config_midx = tau.sel(**tau_sel_dict).coords.to_index()
 
+            # print(config_midx)
             for f_type, d_type, tau_type in tqdm(config_midx):
                 if tau_type == 'rep':
                     ssm = self.ssm(
@@ -347,10 +348,9 @@ class Track:
                         quantize = 'percentile',
                         quant_bins = quant_bins_loc,
                     )
-                    if f_type == 'yamnet':
-                        plt.plot(path_sim)
-                        # print(tau.loc[dict(f_type=f_type, d_type=d_type, tau_type=tau_type)])
-            
+                    # if f_type == 'yamnet':
+                    #     plt.plot(path_sim)
+                    #     print(tau.loc[dict(f_type=f_type, d_type=d_type, tau_type=tau_type)])
                 tau.to_netcdf(record_path)
         # return tau
         return tau.sel(**tau_sel_dict)
@@ -506,7 +506,7 @@ class Track:
                 configs.append(exp_config)
 
         # run through the configs list and populate / readout scores
-        for lsd_conf in configs:
+        for lsd_conf in tqdm(configs):
             # first build the index dict
             coord_idx = lsd_conf.copy()
             coord_idx.update(anno_id=anno_id, l_type=['lp', 'lr', 'lm'])
@@ -519,7 +519,7 @@ class Track:
                 # Only compute if value doesn't exist:
                 ###
                 # print('recomputing l score')
-                proposal = self.lsd(lsd_conf, print_config=False, path_sim_sigma_percentile=path_sim_sigma_percent, recompute=False)
+                proposal = self.lsd(lsd_conf, print_config=False, path_sim_sigma_percentile=path_sim_sigma_percent, recompute=recompute)
                 # cleaned_proposal = clean_anno(proposal, section_fusion_min_dur)
                 annotation = self.ref(anno_id=anno_id)
                 # search l_score from old places first?

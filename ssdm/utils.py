@@ -16,8 +16,8 @@ import mir_eval
 import librosa
 from librosa import ParameterError
 
-import matplotlib
-import matplotlib.pyplot as plt
+# import matplotlib
+# import matplotlib.pyplot as plt
 
 import ssdm
 # import musicsections as ms
@@ -145,7 +145,7 @@ def tau_ssm(
     segmentation: jams.JAMS,
     ts: np.array,
     quantize: str = 'percentile', # can be 'percentile' or 'kmeans' or None
-    quant_bins: int = 7, # number of quantization bins, ignored whtn quantize is Flase
+    quant_bins: int = 8, # number of quantization bins, ignored whtn quantize is Flase
 ) -> float:
     meet_mat_flat = anno_to_meet(segmentation, ts).flatten()
     if quantize == 'percentile':
@@ -176,7 +176,7 @@ def tau_path(
         # print('tau_loc_bins:', bins)
         path_sim = np.digitize(path_sim, bins=bins, right=False)
         ### NOTE
-        plt.plot(path_sim)
+        # plt.plot(path_sim)
     elif quantize == 'kmeans':
         kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
         path_sim = kmeans_clusterer.fit_predict(path_sim[:, None])
@@ -321,7 +321,7 @@ def get_adobe_scores(
 
 def get_taus(
     tids=[], 
-    anno_col_fn=lambda stack: stack.max(dim='anno_id'),
+    anno_col_fn=lambda stack: stack.mean(dim='anno_id'),
     **tau_kwargs,
 ) -> xr.DataArray:
     tau_per_track = []

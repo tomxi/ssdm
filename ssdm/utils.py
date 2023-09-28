@@ -1,20 +1,17 @@
 import pkg_resources
-from functools import reduce
-import json, os, glob
+import json
 import xarray as xr
 
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn import preprocessing
-from scipy import stats, sparse
-from sklearn import cluster
+from sklearn import preprocessing, cluster
+from scipy import stats
 from tqdm import tqdm
 
 import jams
 import mir_eval
-import librosa
-from librosa import ParameterError
+
 
 # import matplotlib
 # import matplotlib.pyplot as plt
@@ -140,6 +137,12 @@ def anno_to_meet(
     return np.max(meet_mat_per_level, axis=0)
 
 
+def meet_mat_no_diag(track, rec_mode='expand', diag_mode='refine', anno_id=0):
+    diag_block = ssdm.anno_to_meet(track.ref(mode=diag_mode, anno_id=anno_id), ts=track.ts())
+    full_rec = ssdm.anno_to_meet(track.ref(mode=rec_mode, anno_id=anno_id), ts=track.ts())
+    return (diag_block == 0) * full_rec
+
+
 def tau_ssm(
     ssm: np.array,
     segmentation: jams.JAMS,
@@ -167,7 +170,7 @@ def tau_path(
     segmentation: jams.JAMS,
     ts: np.array,
     quantize: str = 'percentil',  # None, 'kmeans', and 'percentil'
-    quant_bins: int = 20, # number of quantization bins, ignored whtn quantize is Flase
+    quant_bins: int = 8, # number of quantization bins, ignored whtn quantize is Flase
 ) -> float:
     meet_mat = anno_to_meet(segmentation, ts)
     meet_diag = np.diag(meet_mat, k=1)

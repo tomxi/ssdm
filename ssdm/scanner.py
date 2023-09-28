@@ -62,7 +62,7 @@ class SlmDS(Dataset):
 
         tid, feat = self.ordered_keys[idx]
         track = ssdm.Track(tid)
-        config = ssdm.DEFAULT_LSD_CONFIG
+        config = ssdm.DEFAULT_LSD_CONFIG.copy()
 
         if self.mode == 'rep':
             rep_ssm = track.ssm(feature=feat, 

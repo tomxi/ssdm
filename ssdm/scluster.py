@@ -92,7 +92,6 @@ def embed_features(A_rep, A_loc,
     return evecs
 
 
-
 def cluster(evecs, Cnorm, k, in_bound_idxs=None):
     X = evecs[:, :k] / (Cnorm[:, k - 1:k] + 1e-5)
     KM = sklearn.cluster.KMeans(n_clusters=k, n_init=50, max_iter=500)

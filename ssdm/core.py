@@ -18,7 +18,7 @@ AVAL_FEAT_TYPES = ['crema', 'tempogram', 'mfcc', 'yamnet', 'openl3']
 AVAL_DIST_TYPES = ['cosine', 'sqeuclidean']
 AVAL_BW_TYPES = ['med_k_scalar', 'gmean_k_avg']
 DEFAULT_LSD_CONFIG = {
-    'rec_width': 16,
+    'rec_width': 4,
     'rec_smooth': 20, 
     'evec_smooth': 20,
     'rec_full': 0,
@@ -34,7 +34,7 @@ DEFAULT_LSD_CONFIG = {
 REP_FEAT_CONFIG = {
     'chroma': {'add_noise': True, 'n_steps': 6, 'delay': 2},
     'crema': {'add_noise': True, 'n_steps': 6, 'delay': 2},
-    'tempogram': {'add_noise': True, 'n_steps': 6, 'delay': 3},
+    'tempogram': {'add_noise': True, 'n_steps': 3, 'delay': 1},
     'mfcc': {'add_noise': True, 'n_steps': 6, 'delay': 2},
     'yamnet': {'add_noise': True, 'n_steps': 3, 'delay': 1},
     'openl3': {'add_noise': True, 'n_steps': 3, 'delay': 1},
@@ -43,7 +43,7 @@ REP_FEAT_CONFIG = {
 LOC_FEAT_CONFIG = {
     'chroma': {'add_noise': True, 'n_steps': 3, 'delay': 1},
     'crema': {'add_noise': True, 'n_steps': 3, 'delay': 1},
-    'tempogram': {'add_noise': True, 'n_steps': 3, 'delay': 1},
+    'tempogram': {'add_noise': True, 'n_steps': 2, 'delay': 1},
     'mfcc': {'add_noise': True, 'n_steps': 3, 'delay': 1},
     'yamnet': {'add_noise': True, 'n_steps': 2, 'delay': 1},
     'openl3': {'add_noise': True, 'n_steps': 2, 'delay': 1},
@@ -177,7 +177,7 @@ class Track:
         self,
         feature: str = 'mfcc',
         distance: str = 'cosine',
-        width = 16, # width param for librosa.segment.rec_mat <= 1
+        width = 4, # width param for librosa.segment.rec_mat <= 1
         bw: str = 'med_k_scalar', # one of {'med_k_scalar', 'mean_k', 'gmean_k', 'mean_k_avg', 'gmean_k_avg', 'mean_k_avg_and_pair'}
         full: bool = False,
         add_noise: bool = False, # padding representation with a little noise to avoid divide by 0 somewhere...
@@ -199,6 +199,12 @@ class Track:
         if not os.path.exists(ssm_path):
             recompute = True
 
+        try:
+            with open(ssm_path, 'rb') as f:
+                ssm = np.load(ssm_path, allow_pickle=True)
+        except:
+            recompute=True
+
         if recompute:
             # compute ssm
             feat_mat = self.representation(
@@ -207,6 +213,12 @@ class Track:
                 n_steps=n_steps,
                 delay=delay,
             )
+
+            # fix width with short tracks
+            feat_max_width = (feat_mat.shape[-1] - 1) // 2
+            if width >=feat_max_width:
+                width=feat_max_width - 1
+
             try:
                 ssm = librosa.segment.recurrence_matrix(
                     feat_mat, 
@@ -293,22 +305,20 @@ class Track:
         recompute: bool = False,
         quantize: str = 'percentile', # None, 'kemans' or 'percentile'
         quant_bins: int = 8, # used for loc tau quant schemes
-        quant_bins_loc: int = 20,
+        quant_bins_loc: int = 8,
         aff_kernel_sigma_percentile=85, # used for self.path_sim
+        rec_width: int = 16,
     ) -> xr.DataArray:
         # test if record_path exist, if no, set recompute to true.
         suffix = f'_{quantize}{quant_bins}_{quant_bins_loc}' if quantize is not None else ''
-        record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_na{anno_id}{suffix}.nc')
+        record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_rw{rec_width}a{anno_id}{suffix}.nc')
         if not os.path.exists(record_path):
             recompute = True
         else:
             tau = xr.open_dataarray(record_path)
 
-        
-
         if recompute or tau.sel(**tau_sel_dict).isnull().any():
             grid_coords = dict(f_type=AVAL_FEAT_TYPES, 
-                               d_type=AVAL_DIST_TYPES, 
                                tau_type=['rep', 'loc'], 
                                )
             tau = init_empty_xr(grid_coords)
@@ -317,16 +327,16 @@ class Track:
             config_midx = tau.sel(**tau_sel_dict).coords.to_index()
 
             # print(config_midx)
-            for f_type, d_type, tau_type in tqdm(config_midx):
+            for f_type, tau_type in config_midx:
                 if tau_type == 'rep':
                     ssm = self.ssm(
                         feature=f_type, 
-                        distance=d_type, 
-                        width=16,
+                        distance='cosine', 
+                        width=rec_width,
                         recompute=recompute,
                         **REP_FEAT_CONFIG[f_type]
                     )
-                    tau.loc[dict(f_type=f_type, d_type=d_type, tau_type=tau_type)] = tau_ssm(
+                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = tau_ssm(
                         ssm, 
                         self.ref(mode='expand', anno_id=anno_id),
                         self.ts(),
@@ -336,21 +346,19 @@ class Track:
 
                 else: #path_sim
                     path_sim = self.path_sim(feature=f_type, 
-                                             distance=d_type,
+                                             distance='sqeuclidean',
                                              aff_kernel_sigma_percentile=aff_kernel_sigma_percentile,
                                              recompute=recompute,
                                              **LOC_FEAT_CONFIG[f_type])
                     
-                    tau.loc[dict(f_type=f_type, d_type=d_type, tau_type=tau_type)] = tau_path(
+                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = tau_path(
                         path_sim, 
-                        self.ref(mode='expand', anno_id=anno_id),
+                        self.ref(mode='expand', anno_id=anno_id,),
                         self.ts(),
                         quantize = 'percentile',
                         quant_bins = quant_bins_loc,
                     )
-                    # if f_type == 'yamnet':
-                    #     plt.plot(path_sim)
-                    #     print(tau.loc[dict(f_type=f_type, d_type=d_type, tau_type=tau_type)])
+                    
                 tau.to_netcdf(record_path)
         # return tau
         return tau.sel(**tau_sel_dict)
@@ -360,19 +368,21 @@ class Track:
     ## TODO add option for fast and loose? 3 times less res, and add flag for record_path
     def lsd(
             self,
-            config: dict = None,
+            config_update: dict = dict(),
             recompute: bool  = False,
             print_config: bool = False,
             path_sim_sigma_percentile: float = 85,
     ) -> jams.Annotation:
         # load lsd jams and file/log handeling...
-        if config is None:
-            config = DEFAULT_LSD_CONFIG
+
+        config = DEFAULT_LSD_CONFIG.copy()
+        config.update(config_update)
+
         if print_config:
             print(config)
 
         record_path = os.path.join('/vast/qx244/lsd/', 
-                                   f'{self.tid}_{config["rep_ftype"]}_{config["loc_metric"]}.jams'
+                                   f'{self.tid}_{config["rep_ftype"]}_{config["loc_metric"]}_{config["rec_width"]}.jams'
                                   )
         
         if not os.path.exists(record_path):
@@ -479,7 +489,7 @@ class Track:
         #initialize file if doesn't exist or load the xarray nc file
 
         # TODO this line... make this a fast and loose flag
-        nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}p{path_sim_sigma_percent}.nc')
+        nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}p{path_sim_sigma_percent}rw4.nc')
         if not os.path.exists(nc_path):
             init_grid = LSD_SEARCH_GRID.copy()
             init_grid.update(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm'])
@@ -506,7 +516,7 @@ class Track:
                 configs.append(exp_config)
 
         # run through the configs list and populate / readout scores
-        for lsd_conf in tqdm(configs):
+        for lsd_conf in configs:
             # first build the index dict
             coord_idx = lsd_conf.copy()
             coord_idx.update(anno_id=anno_id, l_type=['lp', 'lr', 'lm'])

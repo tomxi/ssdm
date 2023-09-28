@@ -9,6 +9,8 @@ import holoviews as hv
 from holoviews import opts
 import panel as pn
 
+from mir_eval import display
+
 import ssdm
 # import musicsections as ms
 
@@ -30,8 +32,10 @@ def anno_meet_mats(track, mode='expand'):
     return axs
 
 
-def lsd_meet_mat(track, config=ssdm.DEFAULT_LSD_CONFIG, layer_to_show=7):
-    lsd_seg = track.lsd(config)
+def lsd_meet_mat(track, config=dict(), layer_to_show=None):
+    lsd_config = ssdm.DEFAULT_LSD_CONFIG.copy()
+    lsd_config.update(config)
+    lsd_seg = track.lsd(lsd_config)
     lsd_meet_mat = ssdm.anno_to_meet(lsd_seg, track.ts(), num_layers=layer_to_show)
     fig, ax = plt.subplots(figsize=(5, 4))
     quadmesh = librosa.display.specshow(lsd_meet_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
@@ -46,10 +50,36 @@ def rec_mat(track, **ssm_config):
     return fig, ax
 
 
+## TODO Test This!
 def multi_seg(multi_seg):
+    ## From ADOBE musicsection
+    def plot_levels(inters, labels, figsize):
+        """Plots the given hierarchy."""
+        N = len(inters)
+        fig, axs = plt.subplots(N, figsize=figsize)
+        for level in range(N):
+            display.segments(np.asarray(inters[level]), labels[level], ax=axs[level])
+            axs[level].set_yticks([0.5])
+            axs[level].set_yticklabels([N - level])
+            axs[level].set_xticks([])
+        axs[0].xaxis.tick_top()
+        fig.subplots_adjust(top=0.8)  # Otherwise savefig cuts the top
+        
+        return fig, axs
+
+    def plot_segmentation(seg, figsize=(13, 3)):
+        inters = []
+        labels = []
+        for level in seg[::-1]:
+            inters.append(level[0])
+            labels.append(level[1])
+
+        fig, axs = plot_levels(inters, labels, figsize)
+        fig.text(0.08, 0.47, 'Segmentation Levels', va='center', rotation='vertical')
+        return fig, axs
+
     hier = ssdm.multiseg_to_hier(multi_seg)
-    raise NotImplementedError
-    # return ms.plot_segmentation(hier)
+    return plot_segmentation(hier)
 
 
 def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None):   

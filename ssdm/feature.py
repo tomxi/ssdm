@@ -1,8 +1,5 @@
 import os
 
-# import tensorflow_hub as hub
-# import openl3
-
 import numpy as np
 import librosa
 
@@ -48,19 +45,21 @@ def yamnet(track, recompute=False):
     feature_path = os.path.join(
         track.salami_dir, f'features/{track.tid}_yamnet.npz')
 
-    # if recompute or not os.path.exists(feature_path):
-    #     print(f'computing feature: yamnet for track {track.tid}...')
-    #     model = hub.load('https://tfhub.dev/google/yamnet/1')
-    #     yamnet_audio, yamnet_sr = track.audio(sr=16000)
-    #     _, yamnet_emb, _ = model(yamnet_audio)
-    #     resampled_yamnet_emb = librosa.resample(
-    #         yamnet_emb.numpy().T,
-    #         orig_sr=1/0.48, target_sr=22050/4096
-    #     )
-    #     yamnet_ts = librosa.frames_to_time(
-    #         np.arange(resampled_yamnet_emb.shape[-1]), 
-    #         sr=22050, hop_length=4096)
-    #     np.savez(feature_path, feature=resampled_yamnet_emb, ts=yamnet_ts)
+    if recompute or not os.path.exists(feature_path):
+        import tensorflow_hub as hub
+        
+        print(f'computing feature: yamnet for track {track.tid}...')
+        model = hub.load('https://tfhub.dev/google/yamnet/1')
+        yamnet_audio, yamnet_sr = track.audio(sr=16000)
+        _, yamnet_emb, _ = model(yamnet_audio)
+        resampled_yamnet_emb = librosa.resample(
+            yamnet_emb.numpy().T,
+            orig_sr=1/0.48, target_sr=22050/4096
+        )
+        yamnet_ts = librosa.frames_to_time(
+            np.arange(resampled_yamnet_emb.shape[-1]), 
+            sr=22050, hop_length=4096)
+        np.savez(feature_path, feature=resampled_yamnet_emb, ts=yamnet_ts)
 
     return np.load(feature_path)
 
@@ -91,22 +90,24 @@ def openl3(track, recompute=False):
     feature_path = os.path.join(
         track.salami_dir, f'features/{track.tid}_openl3.npz')
 
-    # if recompute or not os.path.exists(feature_path):
-    #     track.audio()
-    #     print(f'computing feature: openl3 for track {track.tid}...')
-    #     emb, ts = openl3.audio_embedding(
-    #         track.y, track.sr, 
-    #         embedding_size=512, content_type='music'
-    #     )
-    #     resampled_emb = librosa.resample(
-    #         emb.T, orig_sr=1 / (ts[1] - ts[0]),
-    #         target_sr= track.sr/4096
-    #     )
-    #     ts = librosa.frames_to_time(
-    #         np.arange(resampled_emb.shape[-1]), 
-    #         hop_length=4096, sr=track.sr
-    #     )
-    #     np.savez(feature_path, feature=resampled_emb, ts=ts)
+    if recompute or not os.path.exists(feature_path):
+        import openl3
+
+        track.audio()
+        print(f'computing feature: openl3 for track {track.tid}...')
+        emb, ts = openl3.audio_embedding(
+            track.y, track.sr, 
+            embedding_size=512, content_type='music'
+        )
+        resampled_emb = librosa.resample(
+            emb.T, orig_sr=1 / (ts[1] - ts[0]),
+            target_sr= track.sr/4096
+        )
+        ts = librosa.frames_to_time(
+            np.arange(resampled_emb.shape[-1]), 
+            hop_length=4096, sr=track.sr
+        )
+        np.savez(feature_path, feature=resampled_emb, ts=ts)
 
     return np.load(feature_path)
 

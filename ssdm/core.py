@@ -215,10 +215,9 @@ class Track:
             )
 
             # fix width with short tracks
-            feat_max_width = (feat_mat.shape[-1] - 1) // 2
-            if width >=feat_max_width:
-                width=feat_max_width - 1
-
+            feat_max_width = ((feat_mat.shape[-1] - 1) // 2) - 5
+            if width >= feat_max_width:
+                width=feat_max_width
             try:
                 ssm = librosa.segment.recurrence_matrix(
                     feat_mat, 
@@ -297,7 +296,7 @@ class Track:
             pathsim = np.load(pathsim_path, allow_pickle=True)
         return pathsim
         
-
+    # TODO add anno mode
     def tau(
         self,
         tau_sel_dict: dict = dict(),

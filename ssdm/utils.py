@@ -137,12 +137,14 @@ def anno_to_meet(
     return np.max(meet_mat_per_level, axis=0)
 
 
+# Test This, incoorporate in Panel?
 def meet_mat_no_diag(track, rec_mode='expand', diag_mode='refine', anno_id=0):
     diag_block = ssdm.anno_to_meet(track.ref(mode=diag_mode, anno_id=anno_id), ts=track.ts())
     full_rec = ssdm.anno_to_meet(track.ref(mode=rec_mode, anno_id=anno_id), ts=track.ts())
     return (diag_block == 0) * full_rec
 
 
+# TO BE DEPRE
 def tau_ssm(
     ssm: np.array,
     segmentation: jams.JAMS,
@@ -165,6 +167,7 @@ def tau_ssm(
     return stats.kendalltau(ssm_flat, meet_mat_flat)[0]
 
 
+# To Be DEPRE
 def tau_path(
     path_sim: np.array,
     segmentation: jams.JAMS,
@@ -186,6 +189,7 @@ def tau_path(
     return stats.kendalltau(path_sim, meet_diag)[0]
 
 
+# Try to absorb elsewhere?
 def compute_l(
     proposal: jams.Annotation, 
     annotation: jams.Annotation,
@@ -207,7 +211,7 @@ def compute_l(
     )
 
 
-# Formatting functions
+### Formatting functions ###
 def multiseg_to_hier(anno)-> list:
     n_lvl_list = [obs.value['level'] for obs in anno]
     n_lvl = max(n_lvl_list) + 1
@@ -229,6 +233,7 @@ def hier_to_multiseg(hier) -> jams.Annotation:
                         duration=ival[1]-ival[0],
                         value={'label': str(label), 'level': layer})
     return anno
+
 
 def hier_to_mireval(hier) -> tuple:
     intervals = []
@@ -270,7 +275,7 @@ def openseg2multi(
                              )
     
     return multi_anno
-
+### END OF FORMATTING FUNCTIONS###
 
 ## Score collecting functions
 def init_empty_xr(grid_coords, name=None):
@@ -324,7 +329,7 @@ def get_adobe_scores(
 
 def get_taus(
     tids=[], 
-    anno_col_fn=lambda stack: stack.mean(dim='anno_id'),
+    anno_col_fn=lambda stack: stack.max(dim='anno_id'),
     **tau_kwargs,
 ) -> xr.DataArray:
     tau_per_track = []
@@ -358,3 +363,20 @@ def pick_by_taus(
     out.score = scores_grid.sel(rep_ftype=rep_pick, loc_ftype=loc_pick)
     out.oracle = scores_grid.max(dim=['rep_ftype', 'loc_ftype'])
     return out
+
+
+# TODO: test this, then replace utils.tau_ssm, tau_path w
+def quantize(data, quantize_method='percentile', quant_bins=8):
+    # method can me 'percentile' 'kmeans'. Everything else will be no quantize
+    data_shape = data.shape
+    if quantize_method == 'percentile':
+        bins = [np.percentile(data[data > 0], bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
+        # print(bins)
+        quant_data_flat = np.digitize(data.flatten(), bins=bins, right=False)
+    elif quantize_method == 'kmeans':
+        kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
+        quant_data_flat = kmeans_clusterer.fit_predict(data.flatten())
+    else:
+        quant_data_flat = data.flatten()
+
+    return quant_data_flat.reshape(data_shape)

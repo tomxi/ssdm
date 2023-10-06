@@ -301,8 +301,9 @@ class Track:
         self,
         tau_sel_dict: dict = dict(),
         anno_id: int = 0,
+        anno_mode: str = 'expand',
         recompute: bool = False,
-        quantize: str = 'percentile', # None, 'kemans' or 'percentile'
+        quantize: str = 'percentile', # None, 'kmeans' or 'percentile'
         quant_bins: int = 8, # used for loc tau quant schemes
         quant_bins_loc: int = 8,
         aff_kernel_sigma_percentile=85, # used for self.path_sim
@@ -310,7 +311,8 @@ class Track:
     ) -> xr.DataArray:
         # test if record_path exist, if no, set recompute to true.
         suffix = f'_{quantize}{quant_bins}_{quant_bins_loc}' if quantize is not None else ''
-        record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_rw{rec_width}a{anno_id}{suffix}.nc')
+        am_str = f'{anno_mode}' if anno_mode != 'expand' else ''
+        record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_rw{rec_width}a{anno_id}{suffix}{am_str}.nc')
         if not os.path.exists(record_path):
             recompute = True
         else:
@@ -325,6 +327,8 @@ class Track:
             # build lsd_configs from tau_sel_dict
             config_midx = tau.sel(**tau_sel_dict).coords.to_index()
 
+            meet_mat = anno_to_meet(self.ref(mode=anno_mode, anno_id=anno_id), self.ts())
+
             # print(config_midx)
             for f_type, tau_type in config_midx:
                 if tau_type == 'rep':
@@ -335,13 +339,11 @@ class Track:
                         recompute=recompute,
                         **REP_FEAT_CONFIG[f_type]
                     )
-                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = tau_ssm(
-                        ssm, 
-                        self.ref(mode='expand', anno_id=anno_id),
-                        self.ts(),
-                        quantize = True,
-                        quant_bins = quant_bins
-                    )
+
+                    quant_sim = ssdm.quantize(ssm, quantize_method=quantize, quant_bins=quant_bins)
+                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
+                        quant_sim.flatten(), meet_mat.flatten()
+                    )[0]
 
                 else: #path_sim
                     path_sim = self.path_sim(feature=f_type, 
@@ -349,14 +351,13 @@ class Track:
                                              aff_kernel_sigma_percentile=aff_kernel_sigma_percentile,
                                              recompute=recompute,
                                              **LOC_FEAT_CONFIG[f_type])
+
+                    quant_sim_diag = ssdm.quantize(path_sim, quantize_method=quantize, quant_bins=quant_bins)
+                    meet_mat_diag = np.diag(meet_mat, k=1)
                     
-                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = tau_path(
-                        path_sim, 
-                        self.ref(mode='expand', anno_id=anno_id,),
-                        self.ts(),
-                        quantize = 'percentile',
-                        quant_bins = quant_bins_loc,
-                    )
+                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
+                        quant_sim_diag, meet_mat_diag
+                    )[0]
                     
                 tau.to_netcdf(record_path)
         # return tau

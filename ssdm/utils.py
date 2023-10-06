@@ -144,52 +144,51 @@ def meet_mat_no_diag(track, rec_mode='expand', diag_mode='refine', anno_id=0):
     return (diag_block == 0) * full_rec
 
 
-# TO BE DEPRE
-def tau_ssm(
-    ssm: np.array,
-    segmentation: jams.JAMS,
-    ts: np.array,
-    quantize: str = 'percentile', # can be 'percentile' or 'kmeans' or None
-    quant_bins: int = 8, # number of quantization bins, ignored whtn quantize is Flase
-) -> float:
-    meet_mat_flat = anno_to_meet(segmentation, ts).flatten()
-    if quantize == 'percentile':
-        bins = [np.percentile(ssm[ssm > 0], bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
-        # print(bins)
-        ssm_flat = np.digitize(ssm.flatten(), bins=bins, right=False)
-    elif quantize == 'kmeans':
-        kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
-        ssm_flat = kmeans_clusterer.fit_predict(ssm.flatten()[:, None])
-    else:
-        ssm_flat = ssm.flatten()
+# # TO BE DEPRE
+# def tau_ssm(
+#     ssm: np.array,
+#     segmentation: jams.JAMS,
+#     ts: np.array,
+#     quantize: str = 'percentile', # can be 'percentile' or 'kmeans' or None
+#     quant_bins: int = 8, # number of quantization bins, ignored whtn quantize is Flase
+# ) -> float:
+#     meet_mat_flat = anno_to_meet(segmentation, ts).flatten()
+#     if quantize == 'percentile':
+#         bins = [np.percentile(ssm[ssm > 0], bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
+#         # print(bins)
+#         ssm_flat = np.digitize(ssm.flatten(), bins=bins, right=False)
+#     elif quantize == 'kmeans':
+#         kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
+#         ssm_flat = kmeans_clusterer.fit_predict(ssm.flatten()[:, None])
+#     else:
+#         ssm_flat = ssm.flatten()
 
-    # return ssm_flat, meet_mat_flat
-    return stats.kendalltau(ssm_flat, meet_mat_flat)[0]
-
-
-# To Be DEPRE
-def tau_path(
-    path_sim: np.array,
-    segmentation: jams.JAMS,
-    ts: np.array,
-    quantize: str = 'percentil',  # None, 'kmeans', and 'percentil'
-    quant_bins: int = 8, # number of quantization bins, ignored whtn quantize is Flase
-) -> float:
-    meet_mat = anno_to_meet(segmentation, ts)
-    meet_diag = np.diag(meet_mat, k=1)
-    if quantize == 'percentile':
-        bins = [np.percentile(path_sim, bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
-        # print('tau_loc_bins:', bins)
-        path_sim = np.digitize(path_sim, bins=bins, right=False)
-        ### NOTE
-        # plt.plot(path_sim)
-    elif quantize == 'kmeans':
-        kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
-        path_sim = kmeans_clusterer.fit_predict(path_sim[:, None])
-    return stats.kendalltau(path_sim, meet_diag)[0]
+#     # return ssm_flat, meet_mat_flat
+#     return stats.kendalltau(ssm_flat, meet_mat_flat)[0]
 
 
-# Try to absorb elsewhere?
+# # To Be DEPRE
+# def tau_path(
+#     path_sim: np.array,
+#     segmentation: jams.JAMS,
+#     ts: np.array,
+#     quantize: str = 'percentil',  # None, 'kmeans', and 'percentil'
+#     quant_bins: int = 8, # number of quantization bins, ignored whtn quantize is Flase
+# ) -> float:
+#     meet_mat = anno_to_meet(segmentation, ts)
+#     meet_diag = np.diag(meet_mat, k=1)
+#     if quantize == 'percentile':
+#         bins = [np.percentile(path_sim, bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
+#         # print('tau_loc_bins:', bins)
+#         path_sim = np.digitize(path_sim, bins=bins, right=False)
+#         ### NOTE
+#         # plt.plot(path_sim)
+#     elif quantize == 'kmeans':
+#         kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
+#         path_sim = kmeans_clusterer.fit_predict(path_sim[:, None])
+#     return stats.kendalltau(path_sim, meet_diag)[0]
+
+
 def compute_l(
     proposal: jams.Annotation, 
     annotation: jams.Annotation,
@@ -370,13 +369,23 @@ def quantize(data, quantize_method='percentile', quant_bins=8):
     # method can me 'percentile' 'kmeans'. Everything else will be no quantize
     data_shape = data.shape
     if quantize_method == 'percentile':
-        bins = [np.percentile(data[data > 0], bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
+        bins = [np.percentile(data[data > 0], bin * (100.0/(quant_bins - 1))) for bin in range(quant_bins)]
         # print(bins)
         quant_data_flat = np.digitize(data.flatten(), bins=bins, right=False)
     elif quantize_method == 'kmeans':
         kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
-        quant_data_flat = kmeans_clusterer.fit_predict(data.flatten())
-    else:
+        quantized_non_zeros = kmeans_clusterer.fit_predict(data[data>0][:, None])
+        # make sure the kmeans group are sorted with asending centroid and relabel
+        new_ccenter_order = np.argsort(kmeans_clusterer.cluster_centers_.flatten())
+        nco = new_ccenter_order[new_ccenter_order]
+        quantized_non_zeros = np.array([nco[g] for g in quantized_non_zeros], dtype=int)
+
+        quant_data = np.zeros(data.shape)
+        quant_data[data>0] = quantized_non_zeros + 1
+        quant_data_flat = quant_data.flatten()
+    elif quantize_method is None:
         quant_data_flat = data.flatten()
+    else:
+        assert('bad quantize method')
 
     return quant_data_flat.reshape(data_shape)

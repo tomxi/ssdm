@@ -307,7 +307,7 @@ class Track:
         quant_bins: int = 8, # used for loc tau quant schemes
         quant_bins_loc: int = 8,
         aff_kernel_sigma_percentile=85, # used for self.path_sim
-        rec_width: int = 16,
+        rec_width: int = 27,
     ) -> xr.DataArray:
         # test if record_path exist, if no, set recompute to true.
         suffix = f'_{quantize}{quant_bins}_{quant_bins_loc}' if quantize is not None else ''

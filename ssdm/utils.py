@@ -144,51 +144,6 @@ def meet_mat_no_diag(track, rec_mode='expand', diag_mode='refine', anno_id=0):
     return (diag_block == 0) * full_rec
 
 
-# # TO BE DEPRE
-# def tau_ssm(
-#     ssm: np.array,
-#     segmentation: jams.JAMS,
-#     ts: np.array,
-#     quantize: str = 'percentile', # can be 'percentile' or 'kmeans' or None
-#     quant_bins: int = 8, # number of quantization bins, ignored whtn quantize is Flase
-# ) -> float:
-#     meet_mat_flat = anno_to_meet(segmentation, ts).flatten()
-#     if quantize == 'percentile':
-#         bins = [np.percentile(ssm[ssm > 0], bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
-#         # print(bins)
-#         ssm_flat = np.digitize(ssm.flatten(), bins=bins, right=False)
-#     elif quantize == 'kmeans':
-#         kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
-#         ssm_flat = kmeans_clusterer.fit_predict(ssm.flatten()[:, None])
-#     else:
-#         ssm_flat = ssm.flatten()
-
-#     # return ssm_flat, meet_mat_flat
-#     return stats.kendalltau(ssm_flat, meet_mat_flat)[0]
-
-
-# # To Be DEPRE
-# def tau_path(
-#     path_sim: np.array,
-#     segmentation: jams.JAMS,
-#     ts: np.array,
-#     quantize: str = 'percentil',  # None, 'kmeans', and 'percentil'
-#     quant_bins: int = 8, # number of quantization bins, ignored whtn quantize is Flase
-# ) -> float:
-#     meet_mat = anno_to_meet(segmentation, ts)
-#     meet_diag = np.diag(meet_mat, k=1)
-#     if quantize == 'percentile':
-#         bins = [np.percentile(path_sim, bin * (100.0/quant_bins)) for bin in range(quant_bins + 1)]
-#         # print('tau_loc_bins:', bins)
-#         path_sim = np.digitize(path_sim, bins=bins, right=False)
-#         ### NOTE
-#         # plt.plot(path_sim)
-#     elif quantize == 'kmeans':
-#         kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
-#         path_sim = kmeans_clusterer.fit_predict(path_sim[:, None])
-#     return stats.kendalltau(path_sim, meet_diag)[0]
-
-
 def compute_l(
     proposal: jams.Annotation, 
     annotation: jams.Annotation,
@@ -349,7 +304,7 @@ def pick_by_taus(
     scores_grid: xr.DataArray, # tids * num_feat * num_feat
     rep_taus: xr.DataArray, # tids * num_feat
     loc_taus: xr.DataArray, # tids * num_feat
-) -> pd.DataFrame: # tids * ['rep', 'loc', 'score']
+) -> pd.DataFrame: # tids * ['rep', 'loc', 'score', 'oracle']
     """pick the best rep and loc features according to taus from a scores_grid"""
     # print(scores_grid.coords)
     # print(rep_taus.coords)
@@ -364,7 +319,6 @@ def pick_by_taus(
     return out
 
 
-# TODO: test this, then replace utils.tau_ssm, tau_path w
 def quantize(data, quantize_method='percentile', quant_bins=8):
     # method can me 'percentile' 'kmeans'. Everything else will be no quantize
     data_shape = data.shape

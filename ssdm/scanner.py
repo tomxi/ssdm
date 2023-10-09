@@ -15,19 +15,20 @@ class SlmDS(Dataset):
                  split='train',
                  mode='rep', # {'rep', 'loc'}
                  infer=False,
+                 drop_features=['tempogram'],
+                 precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/notebooks/taus1006.nc',
                 ):
-        taus = xr.open_dataarray('/home/qx244/scanning-ssm/ssdm/notebooks/new_taus.nc')
-
+        if mode not in ('rep', 'loc'):
+            assert('bad dataset mode, can only be rep or loc')
         self.mode = mode
         self.split = split
-        if mode == 'rep':
-            self.tau_scores = taus.sel(d_type='cosine', tau_type='rep')
-            self.tau_thresh = [np.percentile(self.tau_scores, 25), np.percentile(self.tau_scores, 75)]
-        elif mode == 'loc':
-            self.tau_scores = taus.sel(d_type='sqeuclidean', tau_type='loc')
-            self.tau_thresh = [np.percentile(self.tau_scores, 25), np.percentile(self.tau_scores, 75)]
-        else:
-            assert('bad dataset mode, can only be rep or loc')
+        # load precomputed taus, and drop feature and select tau type
+        taus_full = xr.open_dataarray(precomputed_tau_fp)
+        self.tau_scores = taus_full.drop_sel(f_type=drop_features).sel(tau_type=mode)
+
+        # Get the threshold for upper and lower quartiles, 
+        # and use them as positive and negative traning examples respectively
+        self.tau_thresh = [np.percentile(self.tau_scores, 25), np.percentile(self.tau_scores, 75)]
         
         tau_series = self.tau_scores.to_series()
         split_ids = ssdm.get_ids(split, out_type='set')

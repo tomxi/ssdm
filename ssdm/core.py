@@ -4,7 +4,7 @@ import librosa
 import jams
 import pandas as pd
 import xarray as xr
-from scipy import spatial, sparse
+from scipy import spatial, sparse, stats
 from tqdm import tqdm
 
 import ssdm
@@ -364,6 +364,11 @@ class Track:
         return tau.sel(**tau_sel_dict)
 
 
+
+    def tau_hat_rep(self):
+        tau_hat_rep_df = pd.read_pickle('tau_hat_rep_1011.pkl')
+        tau_hat_reps = xr.DataArray(tau_hat_rep_df, dims=['tid', 'f_type']).sel(tid=self.tid)
+        return tau_hat_reps
     ############ RETURES JAMS.ANNOTATIONS BELOW
     ## TODO add option for fast and loose? 3 times less res, and add flag for record_path
     def lsd(

@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn import preprocessing, cluster
-from scipy import stats
+
 from tqdm import tqdm
 
 import jams

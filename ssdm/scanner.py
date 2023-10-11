@@ -5,7 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 # import librosa
 import ssdm
 
-# from tqdm import tqdm
+from tqdm import tqdm
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -142,7 +142,7 @@ def net_infer(infer_ds, net, device='cpu'):
     net.to(device)
     net.eval()
     with torch.no_grad():
-        for s in infer_loader:
+        for s in tqdm(infer_loader):
             tid, feat, _= s['info']
             data = s['data'].to(device)
             tau_hat = net(data)

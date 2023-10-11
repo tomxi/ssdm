@@ -1,24 +1,70 @@
 import numpy as np
+import pandas as pd
 
 import panel as pn
 import holoviews as hv
 from holoviews import opts
 hv.extension('bokeh')
 
+import xarray as xr
+
 import ssdm
+
+def scatter(perf_series1, perf_series2, l_gap=0, side='both'):
+    # side can be 'both', s1' 's2'
+    # put 2 series together into a dataframe
+    df = pd.concat([perf_series1, perf_series2, perf_series1.index.to_series()], axis=1)
+    df.columns = ['s1', 's2', 'tid']
+
+    # get the gap smaller than l_gap out of the picture
+    if side == 's2':
+        df_gap = df[df.s2 - df.s1 >= l_gap]
+    elif side == 's1':
+        df_gap = df[df.s1 - df.s2 >= l_gap]
+    elif side == 'both':
+        df_gap = df[np.abs(df.s1 - df.s2) >= l_gap]
+    else:
+        raise AssertionError(f"bad side: {side}, can only be 'both', s1' 's2'.")
+    
+    # build some texts
+    count_tx = hv.Text(0.2, 0.05, f'tracks in plot: {len(df_gap)}\n with gap={l_gap}')
+    s1_tx = hv.Text(0.8, 0.05, f's1 is better: {len(df_gap[df_gap.s1 - df_gap.s2 > 0])}')
+    s2_tx = hv.Text(0.2, 0.95, f's2 is better: {len(df_gap[df_gap.s1 - df_gap.s2 < 0])}')
+    texts = s1_tx * s2_tx * count_tx
+    # build the scatter plot
+    plot = hv.Scatter(
+        df_gap, kdims=['s1'], vdims=['s2', 'tid']).opts(
+        tools=['hover'], frame_width=500, frame_height=500, size=3.5
+    )
+    # marker line that devides improve/worsen
+    diag_line = hv.Curve(([0, 1], [0, 1])).opts(
+        color='red', line_dash='dashed', line_width=2
+    )
+    # Marker lines that shows the gap (diagonal strip)
+    gap_line_lower = hv.Curve(([l_gap, 1], [0, 1 - l_gap])).opts(
+        color='blue', line_dash='dashed', line_width=1
+    )
+    gap_line_upper = hv.Curve(([0, 1 - l_gap], [l_gap, 1])).opts(
+        color='blue', line_dash='dashed', line_width=1
+    )
+    diag_band = diag_line * gap_line_upper * gap_line_lower
+
+    # overlay them all    s
+    return (plot * diag_band * texts).opts(xlim=(0,1), ylim=(0,1)), df_gap.index.values
+
 
 def follow_along(track):
     # all the panel elements for selection etc.
     audio = pn.pane.Audio(track.audio_path, sample_rate=22050, name=track.tid, throttle=250, width=300)
     selectr = pn.widgets.Select(
-        name='lsd rep feature', options=ssdm.AVAL_FEAT_TYPES, width=90
+        name='lsd rep feature', options=ssdm.AVAL_FEAT_TYPES, width=90, value='openl3'
     )
     selectl = pn.widgets.Select(
-        name='lsd loc feature', options=ssdm.AVAL_FEAT_TYPES, width=90
+        name='lsd loc feature', options=ssdm.AVAL_FEAT_TYPES, width=90, value='mfcc'
     )
     sel_layers = pn.widgets.EditableIntSlider(
         name='LSD layers to show', 
-        start=1, end=10, step=1, value=10, 
+        start=1, end=10, step=1, value=7, 
         fixed_start=1, fixed_end=10,
         width=160
     )
@@ -42,6 +88,7 @@ def follow_along(track):
         fixed_start=1, fixed_end=10,
         width=170
     )
+    # pn_text = pn.widgets.StaticText(name='Processing', value='Done!')
     
     # hv options
     options = [
@@ -101,11 +148,15 @@ def follow_along(track):
         quant_ssm = ssdm.quantize(ssm, quantize_method=quant_method, quant_bins=quant_bins)
         return hv.Image((track.ts(), track.ts(), quant_ssm)).opts(*options)
     
+
     # @pn.depends(anno_id=selecta, anno_mode=sel_hier)
     # def anno_meet_diag(anno_id, anno_mode):
     #     meet_mat = ssdm.anno_to_meet(track.ref(anno_id=anno_id, mode=anno_mode), track.ts())
     #     meet_diag = np.diag(meet_mat, k=1)
     #     return hv.Scatter((track.ts()[1:], meet_diag)).opts(width=300, height=100, shared_axes=False).redim.range(y=(0, max(meet_diag)))
+
+   
+
     
     playhead = hv.DynamicMap(update_playhead)
     lsd_meet = hv.DynamicMap(update_lsd_meet)
@@ -116,7 +167,7 @@ def follow_along(track):
     # meetmat_diag = hv.DynamicMap(anno_meet_diag)
     
     layout = pn.Column(
-        audio, 
+        pn.Row(audio),
         pn.Row(selectr, selectl, sel_layers, selecta, sel_hier),
         pn.Row(lsd_meet * playhead, anno_meet * playhead),
         pn.Row(qm_sel, qb_slider, slider_tau_width, lfs_dropdown),
@@ -124,4 +175,3 @@ def follow_along(track):
         pn.Row(tau_hm)
     )
     return layout
-

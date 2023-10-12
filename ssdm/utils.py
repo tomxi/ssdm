@@ -137,7 +137,6 @@ def anno_to_meet(
     return np.max(meet_mat_per_level, axis=0)
 
 
-# Test This, incoorporate in Panel?
 def meet_mat_no_diag(track, rec_mode='expand', diag_mode='refine', anno_id=0):
     diag_block = ssdm.anno_to_meet(track.ref(mode=diag_mode, anno_id=anno_id), ts=track.ts())
     full_rec = ssdm.anno_to_meet(track.ref(mode=rec_mode, anno_id=anno_id), ts=track.ts())

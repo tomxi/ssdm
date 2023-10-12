@@ -19,7 +19,7 @@ class SlmDS(Dataset):
                  precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/notebooks/taus1006.nc',
                 ):
         if mode not in ('rep', 'loc'):
-            assert('bad dataset mode, can only be rep or loc')
+            raise AssertionError('bad dataset mode, can only be rep or loc')
         self.mode = mode
         self.split = split
         # load precomputed taus, and drop feature and select tau type
@@ -94,6 +94,7 @@ class SlmDS(Dataset):
 
 
 # Training loops:
+# returns average epoch loss.
 def train_epoch(ds_loader, net, criterion, optimizer, batch_size=8, lr_scheduler=None, device='cpu'):
     running_loss = 0.
     optimizer.zero_grad()
@@ -114,7 +115,6 @@ def train_epoch(ds_loader, net, criterion, optimizer, batch_size=8, lr_scheduler
             if lr_scheduler is not None:
                 lr_scheduler.step()
     return running_loss / len(ds_loader)
-
 
 # eval tools:
 def net_eval(ds, net, criterion, device='cpu'):
@@ -148,7 +148,6 @@ def net_infer(infer_ds, net, device='cpu'):
             tau_hat = net(data)
             result_df.loc[tid][feat] = tau_hat.item()
     return result_df.astype('float')
-
 
 #####  MODELS ### MODELS #####       
 class SmallRepOnly(nn.Module):

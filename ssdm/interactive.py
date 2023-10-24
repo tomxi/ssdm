@@ -50,7 +50,7 @@ def scatter(perf_series1, perf_series2, l_gap=0, side='both'):
     diag_band = diag_line * gap_line_upper * gap_line_lower
 
     # overlay them all    s
-    return (plot * diag_band * texts).opts(xlim=(0,1), ylim=(0,1)), df_gap.index.values
+    return (plot * diag_band * texts).opts(xlim=(0,1), ylim=(0,1))
 
 
 def follow_along(track):
@@ -112,7 +112,7 @@ def follow_along(track):
     
     @pn.depends(anno_id=selecta, anno_mode=sel_hier, tau_width=slider_tau_width, quantize=qm_sel, quant_bins=qb_slider)
     def tau_heatmap(anno_id, anno_mode, tau_width, quantize, quant_bins):
-        taus = track.tau(anno_id=anno_id, rec_width=tau_width, anno_mode=anno_mode, quantize=quantize, quant_bins=quant_bins)
+        taus = track.tau(anno_id=anno_id, rec_width=tau_width, anno_mode=anno_mode, quantize=quantize, quant_bins=quant_bins, recompute=True)
         tau_grid = hv.HeatMap(taus).opts(frame_width=300, frame_height=100, cmap='coolwarm', toolbar='disable')
         score_label = hv.Labels(tau_grid)
         return tau_grid * score_label

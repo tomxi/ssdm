@@ -303,17 +303,18 @@ def pick_by_taus(
     scores_grid: xr.DataArray, # tids * num_feat * num_feat
     rep_taus: xr.DataArray, # tids * num_feat
     loc_taus: xr.DataArray, # tids * num_feat
-) -> pd.DataFrame: # tids * ['rep', 'loc', 'score', 'oracle']
+) -> pd.DataFrame: # tids * ['rep', 'loc', 'score', 'orc_rep', 'orc_loc', 'oracle']
     """pick the best rep and loc features according to taus from a scores_grid"""
-    # print(scores_grid.coords)
-    # print(rep_taus.coords)
-    # print(loc_taus.coords)
-    out = pd.DataFrame(index=scores_grid.tid, columns=['rep_pick', 'loc_pick', 'score', 'oracle'])
+    out = pd.DataFrame(index=scores_grid.tid, 
+                       columns=['rep_pick', 'loc_pick', 'score', 'orc_rep_pick', 'orc_loc_pick', 'oracle']
+                       )
     rep_pick = rep_taus.idxmax(dim='f_type')
-    loc_pick = loc_taus.idxmax(dim='f_type')
+    loc_pick = loc_taus.idxmax(dim='f_type').fillna('mfcc')
     out.rep_pick = rep_pick
     out.loc_pick = loc_pick
     out.score = scores_grid.sel(rep_ftype=rep_pick, loc_ftype=loc_pick)
+    out.orc_rep_pick = scores_grid.max(dim='loc_ftype').idxmax(dim='rep_ftype')
+    out.orc_loc_pick = scores_grid.max(dim='rep_ftype').idxmax(dim='loc_ftype')
     out.oracle = scores_grid.max(dim=['rep_ftype', 'loc_ftype'])
     return out
 

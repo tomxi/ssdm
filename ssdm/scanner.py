@@ -114,7 +114,7 @@ def train_epoch(ds_loader, net, criterion, optimizer, batch_size=8, lr_scheduler
             optimizer.zero_grad()
             if lr_scheduler is not None:
                 lr_scheduler.step()
-    return running_loss / len(ds_loader)
+    return (running_loss / len(ds_loader)).item()
 
 # eval tools:
 def net_eval(ds, net, criterion, device='cpu'):

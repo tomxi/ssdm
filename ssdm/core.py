@@ -34,19 +34,19 @@ DEFAULT_LSD_CONFIG = {
 REP_FEAT_CONFIG = {
     'chroma': {'add_noise': True, 'n_steps': 6, 'delay': 2},
     'crema': {'add_noise': True, 'n_steps': 6, 'delay': 2},
-    'tempogram': {'add_noise': True, 'n_steps': 3, 'delay': 1},
+    'tempogram': {'add_noise': True, 'n_steps': 6, 'delay': 2},
     'mfcc': {'add_noise': True, 'n_steps': 6, 'delay': 2},
-    'yamnet': {'add_noise': True, 'n_steps': 3, 'delay': 1},
-    'openl3': {'add_noise': True, 'n_steps': 3, 'delay': 1},
+    'yamnet': {'add_noise': True, 'n_steps': 6, 'delay': 2},
+    'openl3': {'add_noise': True, 'n_steps': 6, 'delay': 2},
 }
 
 LOC_FEAT_CONFIG = {
     'chroma': {'add_noise': True, 'n_steps': 3, 'delay': 1},
     'crema': {'add_noise': True, 'n_steps': 3, 'delay': 1},
-    'tempogram': {'add_noise': True, 'n_steps': 2, 'delay': 1},
+    'tempogram': {'add_noise': True, 'n_steps': 3, 'delay': 1},
     'mfcc': {'add_noise': True, 'n_steps': 3, 'delay': 1},
-    'yamnet': {'add_noise': True, 'n_steps': 2, 'delay': 1},
-    'openl3': {'add_noise': True, 'n_steps': 2, 'delay': 1},
+    'yamnet': {'add_noise': True, 'n_steps': 3, 'delay': 1},
+    'openl3': {'add_noise': True, 'n_steps': 3, 'delay': 1},
 }
 
 LSD_SEARCH_GRID = dict(rep_ftype=AVAL_FEAT_TYPES, 
@@ -304,15 +304,17 @@ class Track:
         anno_mode: str = 'expand',
         recompute: bool = False,
         quantize: str = 'percentile', # None, 'kmeans' or 'percentile'
-        quant_bins: int = 8, # used for loc tau quant schemes
-        quant_bins_loc: int = 8,
+        quant_bins: int = 6, # used for loc tau quant schemes
+        quant_bins_loc: int = 6,
         aff_kernel_sigma_percentile=85, # used for self.path_sim
         rec_width: int = 27,
+        eigen_block: bool = True,
     ) -> xr.DataArray:
         # test if record_path exist, if no, set recompute to true.
         suffix = f'_{quantize}{quant_bins}_{quant_bins_loc}' if quantize is not None else ''
         am_str = f'{anno_mode}' if anno_mode != 'expand' else ''
-        record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_rw{rec_width}a{anno_id}{suffix}{am_str}.nc')
+        eigen_block_txt = f'blocky' if eigen_block else ''
+        record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_rw{rec_width}a{anno_id}{suffix}{am_str}{eigen_block_txt}.nc')
         if not os.path.exists(record_path):
             recompute = True
         else:
@@ -328,7 +330,7 @@ class Track:
             config_midx = tau.sel(**tau_sel_dict).coords.to_index()
 
             meet_mat = anno_to_meet(self.ref(mode=anno_mode, anno_id=anno_id), self.ts())
-
+            meet_mat_diag = np.diag(meet_mat, k=1)
             # print(config_midx)
             for f_type, tau_type in config_midx:
                 if tau_type == 'rep':
@@ -340,10 +342,20 @@ class Track:
                         **REP_FEAT_CONFIG[f_type]
                     )
 
-                    quant_sim = ssdm.quantize(ssm, quantize_method=quantize, quant_bins=quant_bins)
-                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
-                        quant_sim.flatten(), meet_mat.flatten()
-                    )[0]
+                    if eigen_block:
+                        combined_graph = sc.combine_ssms(ssm, meet_mat_diag)
+                        _, evecs = sc.embed_ssms(combined_graph, evec_smooth=13)
+                        first_evecs = evecs[:, :10]
+                        quant_block = ssdm.quantize(np.matmul(first_evecs, first_evecs.T), quant_bins=quant_bins)
+                        tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
+                            quant_block.flatten(), meet_mat.flatten()
+                        )[0]
+
+                    else:
+                        quant_sim = ssdm.quantize(ssm, quantize_method=quantize, quant_bins=quant_bins)
+                        tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
+                            quant_sim.flatten(), meet_mat.flatten()
+                        )[0]
 
                 else: #path_sim
                     path_sim = self.path_sim(feature=f_type, 
@@ -352,12 +364,23 @@ class Track:
                                              recompute=recompute,
                                              **LOC_FEAT_CONFIG[f_type])
 
-                    quant_sim_diag = ssdm.quantize(path_sim, quantize_method=quantize, quant_bins=quant_bins)
-                    meet_mat_diag = np.diag(meet_mat, k=1)
-                    
-                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
-                        quant_sim_diag, meet_mat_diag
-                    )[0]
+                    if eigen_block:
+                        path_sim = self.path_sim(feature=f_type, **ssdm.LOC_FEAT_CONFIG[f_type])
+                        bed = np.zeros(meet_mat.shape) + 1e-8
+                        np.fill_diagonal(bed, 0)
+                        combined_graph = sc.combine_ssms(bed, path_sim)
+                        _, evecs = sc.embed_ssms(combined_graph, evec_smooth=13)
+
+                        first_evecs = evecs[:, :10]
+                        quant_block = ssdm.quantize(np.matmul(first_evecs, first_evecs.T), quant_bins=quant_bins_loc)
+                        
+                        non_zeros = meet_mat.nonzero()
+                        tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(quant_block[non_zeros].flatten(), meet_mat[non_zeros].flatten())[0]
+                    else:
+                        quant_sim_diag = ssdm.quantize(path_sim, quantize_method=quantize, quant_bins=quant_bins_loc)
+                        tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
+                            quant_sim_diag, meet_mat_diag
+                        )[0]
                     
                 tau.to_netcdf(record_path)
         # return tau

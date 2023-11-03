@@ -11,12 +11,18 @@ import pandas as pd
 import xarray as xr
 
 class SlmDS(Dataset):
+    """ split='train',
+        mode='rep', # {'rep', 'loc'}
+        infer=False,
+        drop_features=[],
+        precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/all_taus_1102.nc'
+    """
     def __init__(self, 
                  split='train',
                  mode='rep', # {'rep', 'loc'}
                  infer=False,
-                 drop_features=['tempogram'],
-                 precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/notebooks/taus1006.nc',
+                 drop_features=[],
+                 precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/all_taus_1102.nc',
                 ):
         if mode not in ('rep', 'loc'):
             raise AssertionError('bad dataset mode, can only be rep or loc')

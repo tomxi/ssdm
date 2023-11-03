@@ -244,7 +244,7 @@ def init_empty_xr(grid_coords, name=None):
 
 def get_lsd_scores(
     tids=[], 
-    anno_col_fn=lambda stack: stack.mean(dim='anno_id'), 
+    anno_col_fn=lambda stack: stack.max(dim='anno_id'), 
     **lsd_score_kwargs
 ) -> xr.DataArray:
     score_per_track = []
@@ -263,7 +263,7 @@ def get_lsd_scores(
 
 def get_adobe_scores(
     tids=[],
-    anno_col_fn=lambda stack: stack.mean(dim='anno_id'),
+    anno_col_fn=lambda stack: stack.max(dim='anno_id'),
     l_frame_size=0.1
 ) -> xr.DataArray:
     score_per_track = []

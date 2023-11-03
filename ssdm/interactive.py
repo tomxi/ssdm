@@ -10,7 +10,7 @@ import xarray as xr
 
 import ssdm
 
-def scatter(perf_series1, perf_series2, l_gap=0, side='both'):
+def scatter(perf_series1, perf_series2, xlabel='s1', ylabel='s2', title='L-recall scores', l_gap=0, side='both'):
     # side can be 'both', s1' 's2'
     # put 2 series together into a dataframe
     df = pd.concat([perf_series1, perf_series2, perf_series1.index.to_series()], axis=1)
@@ -28,13 +28,14 @@ def scatter(perf_series1, perf_series2, l_gap=0, side='both'):
     
     # build some texts
     count_tx = hv.Text(0.2, 0.05, f'tracks in plot: {len(df_gap)}\n with gap={l_gap}')
-    s1_tx = hv.Text(0.8, 0.05, f's1 is better: {len(df_gap[df_gap.s1 - df_gap.s2 > 0])}')
-    s2_tx = hv.Text(0.2, 0.95, f's2 is better: {len(df_gap[df_gap.s1 - df_gap.s2 < 0])}')
+    s1_tx = hv.Text(0.8, 0.05, f'{xlabel} is better: {len(df_gap[df_gap.s1 - df_gap.s2 > 0])}')
+    s2_tx = hv.Text(0.2, 0.95, f'{ylabel} is better: {len(df_gap[df_gap.s1 - df_gap.s2 < 0])}')
     texts = s1_tx * s2_tx * count_tx
     # build the scatter plot
     plot = hv.Scatter(
         df_gap, kdims=['s1'], vdims=['s2', 'tid']).opts(
-        tools=['hover'], frame_width=500, frame_height=500, size=3.5
+        tools=['hover'], frame_width=500, frame_height=500, size=3.5, 
+        xlabel=xlabel, ylabel=ylabel, title=title,
     )
     # marker line that devides improve/worsen
     diag_line = hv.Curve(([0, 1], [0, 1])).opts(
@@ -75,7 +76,7 @@ def follow_along(track):
         name='Hierarchy Expansion', options=['expand', 'normal', 'refine', 'coarse'], width=120
     )
     slider_tau_width = pn.widgets.DiscreteSlider(
-        name='tau-rep width', options=[16, 22, 27, 32, 54], value=27, width=170
+        name='tau-rep width', options=[16, 22, 27, 30, 32, 54], value=30, width=170
     )
     lfs_dropdown = pn.widgets.Select(
         name='l frame size', options=[0.1, 1], width=100)
@@ -112,10 +113,15 @@ def follow_along(track):
     
     @pn.depends(anno_id=selecta, anno_mode=sel_hier, tau_width=slider_tau_width, quantize=qm_sel, quant_bins=qb_slider)
     def tau_heatmap(anno_id, anno_mode, tau_width, quantize, quant_bins):
-        taus = track.tau(anno_id=anno_id, rec_width=tau_width, anno_mode=anno_mode, quantize=quantize, quant_bins=quant_bins, recompute=True)
+        taus = track.tau(anno_id=anno_id, rec_width=tau_width, anno_mode=anno_mode, quantize=quantize, quant_bins=quant_bins, recompute=False)
         tau_grid = hv.HeatMap(taus).opts(frame_width=300, frame_height=100, cmap='coolwarm', toolbar='disable')
         score_label = hv.Labels(tau_grid)
         return tau_grid * score_label
+
+    # def tau_hat_rep():
+    #     tau_rep_hats = track.tau_hat_rep()
+    #     tau_grid = hv.HeatMap(tau_rep_hats).opts(frame_width=300, frame_height=100, cmap='coolwarm', toolbar='disable')
+    #     score_label = hv.Labels(tau_grid)
 
     @pn.depends(rep_feat=selectr, loc_feat=selectl, layers2show=sel_layers)
     def update_lsd_meet(rep_feat, loc_feat,layers2show):

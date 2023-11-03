@@ -5,6 +5,7 @@ import jams
 import pandas as pd
 import xarray as xr
 from scipy import spatial, sparse, stats
+from sklearn.metrics import roc_auc_score
 from tqdm import tqdm
 
 import ssdm
@@ -18,14 +19,14 @@ AVAL_FEAT_TYPES = ['crema', 'tempogram', 'mfcc', 'yamnet', 'openl3']
 AVAL_DIST_TYPES = ['cosine', 'sqeuclidean']
 AVAL_BW_TYPES = ['med_k_scalar', 'gmean_k_avg']
 DEFAULT_LSD_CONFIG = {
-    'rec_width': 4,
+    'rec_width': 5,
     'rec_smooth': 20, 
     'evec_smooth': 20,
     'rec_full': 0,
     'rep_ftype': 'crema', # grid 5
     'loc_ftype': 'mfcc', # grid 5
     'rep_metric': 'cosine',
-    'loc_metric': 'sqeuclidean', # grid 2
+    'loc_metric': 'sqeuclidean',
     'bandwidth': 'med_k_scalar',
     'hier': True,
     'num_layers': 10
@@ -177,7 +178,7 @@ class Track:
         self,
         feature: str = 'mfcc',
         distance: str = 'cosine',
-        width = 4, # width param for librosa.segment.rec_mat <= 1
+        width = 5, # width param for librosa.segment.rec_mat <= 1
         bw: str = 'med_k_scalar', # one of {'med_k_scalar', 'mean_k', 'gmean_k', 'mean_k_avg', 'gmean_k_avg', 'mean_k_avg_and_pair'}
         full: bool = False,
         add_noise: bool = False, # padding representation with a little noise to avoid divide by 0 somewhere...
@@ -255,7 +256,7 @@ class Track:
             add_noise: bool = False, # padding representation with a little noise to avoid divide by 0 somewhere...
             n_steps: int = 1, # Param for time delay embedding of representation
             delay: int = 1, # Param for time delay embedding of representation
-            aff_kernel_sigma_percentile = 85, 
+            aff_kernel_sigma_percentile = 95, 
             recompute = False,
             width: int = 1, # TODO Nice to have if things still doesn't work.
         ) -> np.array:
@@ -296,7 +297,7 @@ class Track:
             pathsim = np.load(pathsim_path, allow_pickle=True)
         return pathsim
         
-    # TODO add anno mode
+
     def tau(
         self,
         tau_sel_dict: dict = dict(),
@@ -304,14 +305,12 @@ class Track:
         anno_mode: str = 'expand',
         recompute: bool = False,
         quantize: str = 'percentile', # None, 'kmeans' or 'percentile'
-        quant_bins: int = 6, # used for loc tau quant schemes
-        quant_bins_loc: int = 6,
-        aff_kernel_sigma_percentile=85, # used for self.path_sim
-        rec_width: int = 27,
-        eigen_block: bool = True,
+        quant_bins: int = 7, # used for loc tau quant schemes
+        rec_width: int = 30,
+        eigen_block: bool = True
     ) -> xr.DataArray:
         # test if record_path exist, if no, set recompute to true.
-        suffix = f'_{quantize}{quant_bins}_{quant_bins_loc}' if quantize is not None else ''
+        suffix = f'_{quantize}{quant_bins}' if quantize is not None else ''
         am_str = f'{anno_mode}' if anno_mode != 'expand' else ''
         eigen_block_txt = f'blocky' if eigen_block else ''
         record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_rw{rec_width}a{anno_id}{suffix}{am_str}{eigen_block_txt}.nc')
@@ -357,41 +356,27 @@ class Track:
                             quant_sim.flatten(), meet_mat.flatten()
                         )[0]
 
-                else: #path_sim
+                else: #path_sim AUC
                     path_sim = self.path_sim(feature=f_type, 
                                              distance='sqeuclidean',
-                                             aff_kernel_sigma_percentile=aff_kernel_sigma_percentile,
                                              recompute=recompute,
                                              **LOC_FEAT_CONFIG[f_type])
-
-                    if eigen_block:
-                        path_sim = self.path_sim(feature=f_type, **ssdm.LOC_FEAT_CONFIG[f_type])
-                        bed = np.zeros(meet_mat.shape) + 1e-8
-                        np.fill_diagonal(bed, 0)
-                        combined_graph = sc.combine_ssms(bed, path_sim)
-                        _, evecs = sc.embed_ssms(combined_graph, evec_smooth=13)
-
-                        first_evecs = evecs[:, :10]
-                        quant_block = ssdm.quantize(np.matmul(first_evecs, first_evecs.T), quant_bins=quant_bins_loc)
-                        
-                        non_zeros = meet_mat.nonzero()
-                        tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(quant_block[non_zeros].flatten(), meet_mat[non_zeros].flatten())[0]
-                    else:
-                        quant_sim_diag = ssdm.quantize(path_sim, quantize_method=quantize, quant_bins=quant_bins_loc)
-                        tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
-                            quant_sim_diag, meet_mat_diag
-                        )[0]
                     
+                    pathref_union = np.ones_like(path_sim)
+                    for anno_id in range(self.num_annos()):
+                        pathref_union *= self.path_ref(anno_id=anno_id)
+                        tau.loc[dict(f_type=f_type, tau_type=tau_type)] = roc_auc_score(pathref_union, path_sim)        
                 tau.to_netcdf(record_path)
         # return tau
         return tau.sel(**tau_sel_dict)
 
 
-
-    def tau_hat_rep(self):
-        tau_hat_rep_df = pd.read_pickle('tau_hat_rep_1011.pkl')
+    def tau_hat_rep(self, pkl_path='/home/qx244/scanning-ssm/ssdm/sbatch/RepOnly1012_40epoch.pkl'):
+        tau_hat_rep_df = pd.read_pickle(pkl_path)
         tau_hat_reps = xr.DataArray(tau_hat_rep_df, dims=['tid', 'f_type']).sel(tid=self.tid)
         return tau_hat_reps
+    
+
     ############ RETURES JAMS.ANNOTATIONS BELOW
     ## TODO add option for fast and loose? 3 times less res, and add flag for record_path
     def lsd(
@@ -399,7 +384,7 @@ class Track:
             config_update: dict = dict(),
             recompute: bool  = False,
             print_config: bool = False,
-            path_sim_sigma_percentile: float = 85,
+            path_sim_sigma_percentile: float = 95,
     ) -> jams.Annotation:
         # load lsd jams and file/log handeling...
 
@@ -409,9 +394,14 @@ class Track:
         if print_config:
             print(config)
 
-        record_path = os.path.join('/vast/qx244/lsd/', 
-                                   f'{self.tid}_{config["rep_ftype"]}_{config["loc_metric"]}_{config["rec_width"]}.jams'
-                                  )
+        if path_sim_sigma_percentile == 85:
+            record_path = os.path.join('/vast/qx244/lsd/', 
+                                    f'{self.tid}_{config["rep_ftype"]}_{config["loc_metric"]}_{config["rec_width"]}.jams'
+                                    )
+        else:
+            record_path = os.path.join('/vast/qx244/lsd/', 
+                                    f'{self.tid}_{config["rep_ftype"]}_{config["loc_metric"]}_{config["rec_width"]}_{path_sim_sigma_percentile}.jams'
+                                    )
         
         if not os.path.exists(record_path):
             # create and save jams file
@@ -491,6 +481,22 @@ class Track:
         return out_anno
 
     
+    def path_ref(
+            self,
+            mode: str = 'expand', # {'normal', 'expand', 'refine', 'coarse'},
+            anno_id: int = 0
+        ):
+        # Get reference annotation
+        ref_anno = self.ref(mode, anno_id)
+        # Get annotation meet matrix
+        anno_meet = ssdm.anno_to_meet(ref_anno, self.ts())
+        # Pull out diagonal
+        anno_diag = anno_meet.diagonal(1)
+        # Binarize
+        anno_diag_binary = anno_diag == np.max(anno_diag)
+        return anno_diag_binary
+
+
     def adobe(
         self,
     ) -> jams.Annotation:
@@ -512,12 +518,12 @@ class Track:
         anno_id: int = 0,
         recompute: bool = False,
         l_frame_size: float = 0.1,
-        path_sim_sigma_percent: float = 85,
+        path_sim_sigma_percent: float = 95,
     ) -> xr.DataArray:
         #initialize file if doesn't exist or load the xarray nc file
 
         # TODO this line... make this a fast and loose flag
-        nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}p{path_sim_sigma_percent}rw4.nc')
+        nc_path = os.path.join(self.salami_dir, f'ells/{self.tid}_{l_frame_size}p{path_sim_sigma_percent}rw5.nc')
         if not os.path.exists(nc_path):
             init_grid = LSD_SEARCH_GRID.copy()
             init_grid.update(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm'])

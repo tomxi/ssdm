@@ -5,6 +5,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from mir_eval import display
 import ssdm
+import ssdm.scluster as sc
 
 
 def anno_meet_mats(track, mode='expand'):
@@ -32,14 +33,33 @@ def lsd_meet_mat(track, config=dict(), layer_to_show=None):
     fig.colorbar(quadmesh, ax=ax)      
     return fig, ax
 
-def rec_mat(track, **ssm_config):
+def rec_mat(track, blocky=False, rec_diag=None, **ssm_config):
+    """
+    blocky: bool = False, # if true, use low rank appoximation,
+    rec_diag: np.ndarray = None, # used when blocky is True, to combine with SSM to form the Laplacian
+    feature: str = 'mfcc',
+    distance: str = 'cosine',
+    width = 5, # width param for librosa.segment.rec_mat <= 1
+    bw: str = 'med_k_scalar', # one of {'med_k_scalar', 'mean_k', 'gmean_k', 'mean_k_avg', 'gmean_k_avg', 'mean_k_avg_and_pair'}
+    full: bool = False, # whether the rec mat is sparse or full
+    add_noise: bool = False, # padding representation with a little noise to avoid divide by 0 somewhere...
+    n_steps: int = 1, # Param for time delay embedding of representation
+    delay: int = 1, # Param for time delay embedding of representation
+    recompute: bool = False,
+    """
     rec_mat = track.ssm(**ssm_config)
+    if blocky:
+        # REFACTOR THE FOLLOWING CODE TODO
+        combined_graph = sc.combine_ssms(rec_mat, rec_diag)
+        _, evecs = sc.embed_ssms(combined_graph, evec_smooth=13)
+        first_evecs = evecs[:, :10]
+        rec_mat = ssdm.quantize(np.matmul(first_evecs, first_evecs.T), quant_bins=7)
     fig, ax = plt.subplots(figsize=(5, 4))
     quadmesh = librosa.display.specshow(rec_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
     fig.colorbar(quadmesh, ax=ax)      
     return fig, ax
 
-def path_sim(track, quant_bins=8, **path_sim_config):
+def path_sim(track, quant_bins=None, **path_sim_config):
     path_sim = track.path_sim(**path_sim_config)
 
     if quant_bins is not None:
@@ -48,6 +68,18 @@ def path_sim(track, quant_bins=8, **path_sim_config):
         path_sim = np.digitize(path_sim, bins=bins, right=False)
     fig, ax = plt.subplots(figsize=(6, 2))
     ax.plot(track.ts()[1:], path_sim)
+    return fig, ax
+
+
+def path_ref(track, **path_ref_args):
+    """
+    mode: str = 'expand', # {'normal', 'expand', 'refine', 'coarse'},
+    anno_id: int = 0,
+    binarize: bool = True,
+    """
+    path_ref = track.path_ref(**path_ref_args)
+    fig, ax = plt.subplots(figsize=(6, 2))
+    ax.plot(track.ts()[1:], path_ref)
     return fig, ax
 
 # Visualize a multi level segmentation jams.Annotation
@@ -87,6 +119,9 @@ def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True):
         _, ax = plt.subplots(figsize=(5,5))
 
     da = da.squeeze()
+    if len(da.shape) == 1:
+        da = da.expand_dims(dim='_', axis=0)
+        da = da.assign_coords(_=[''])
     
     im = ax.imshow(da, cmap='coolwarm')
     

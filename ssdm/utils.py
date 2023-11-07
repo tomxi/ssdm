@@ -343,3 +343,4 @@ def quantize(data, quantize_method='percentile', quant_bins=8):
         assert('bad quantize method')
 
     return quant_data_flat.reshape(data_shape)
+

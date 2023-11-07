@@ -315,17 +315,17 @@ class Track:
         eigen_block_txt = f'blocky' if eigen_block else ''
         record_path = os.path.join(self.salami_dir, f'taus/{self.tid}_rw{rec_width}a{anno_id}{suffix}{am_str}{eigen_block_txt}.nc')
         if not os.path.exists(record_path):
-            recompute = True
-        else:
-            tau = xr.open_dataarray(record_path)
-
-        if recompute or tau.sel(**tau_sel_dict).isnull().any():
             grid_coords = dict(f_type=AVAL_FEAT_TYPES, 
                                tau_type=['rep', 'loc'], 
                                )
             tau = init_empty_xr(grid_coords)
+        else:
+            tau = xr.open_dataarray(record_path)
+
+        if recompute or tau.sel(**tau_sel_dict).isnull().any():
 
             # build lsd_configs from tau_sel_dict
+
             config_midx = tau.sel(**tau_sel_dict).coords.to_index()
 
             meet_mat = anno_to_meet(self.ref(mode=anno_mode, anno_id=anno_id), self.ts())
@@ -362,19 +362,16 @@ class Track:
                                              recompute=recompute,
                                              **LOC_FEAT_CONFIG[f_type])
                     
-                    pathref_union = np.ones_like(path_sim)
-                    for anno_id in range(self.num_annos()):
-                        pathref_union *= self.path_ref(anno_id=anno_id)
-                        tau.loc[dict(f_type=f_type, tau_type=tau_type)] = roc_auc_score(pathref_union, path_sim)        
+                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = roc_auc_score(self.path_ref(anno_id=anno_id), path_sim)        
                 tau.to_netcdf(record_path)
         # return tau
         return tau.sel(**tau_sel_dict)
 
 
-    def tau_hat_rep(self, pkl_path='/home/qx244/scanning-ssm/ssdm/sbatch/RepOnly1012_40epoch.pkl'):
-        tau_hat_rep_df = pd.read_pickle(pkl_path)
-        tau_hat_reps = xr.DataArray(tau_hat_rep_df, dims=['tid', 'f_type']).sel(tid=self.tid)
-        return tau_hat_reps
+    # def tau_hat_rep(self, pkl_path='/home/qx244/scanning-ssm/ssdm/sbatch/RepOnly1012_40epoch.pkl'):
+    #     tau_hat_rep_df = pd.read_pickle(pkl_path)
+    #     tau_hat_reps = xr.DataArray(tau_hat_rep_df, dims=['tid', 'f_type']).sel(tid=self.tid)
+    #     return tau_hat_reps
     
 
     ############ RETURES JAMS.ANNOTATIONS BELOW
@@ -484,7 +481,8 @@ class Track:
     def path_ref(
             self,
             mode: str = 'expand', # {'normal', 'expand', 'refine', 'coarse'},
-            anno_id: int = 0
+            anno_id: int = 0,
+            binarize: bool = True,
         ):
         # Get reference annotation
         ref_anno = self.ref(mode, anno_id)
@@ -492,9 +490,9 @@ class Track:
         anno_meet = ssdm.anno_to_meet(ref_anno, self.ts())
         # Pull out diagonal
         anno_diag = anno_meet.diagonal(1)
-        # Binarize
-        anno_diag_binary = anno_diag == np.max(anno_diag)
-        return anno_diag_binary
+        if binarize:
+            anno_diag = anno_diag == np.max(anno_diag)
+        return anno_diag
 
 
     def adobe(

@@ -15,14 +15,14 @@ class SlmDS(Dataset):
         mode='rep', # {'rep', 'loc'}
         infer=False,
         drop_features=[],
-        precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/all_taus_1102.nc'
+        precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/taus_1107.nc'
     """
     def __init__(self, 
                  split='train',
                  mode='rep', # {'rep', 'loc'}
                  infer=False,
                  drop_features=[],
-                 precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/all_taus_1102.nc',
+                 precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/taus_1107.nc',
                 ):
         if mode not in ('rep', 'loc'):
             raise AssertionError('bad dataset mode, can only be rep or loc')
@@ -212,4 +212,38 @@ class LocOnly(nn.Module):
         loc_prob = self.loc_predictor(loc_emb.flatten(1))
 
         return loc_prob
+    
 
+class TinyRep(nn.Module):
+    def __init__(self):
+        super(TinyRep, self).__init__()
+        self.convlayers = nn.Sequential(
+            nn.Conv2d(1, 8, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(8, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(8, 12, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(12, 16, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), nn.ReLU(inplace=True), 
+            nn.Conv2d(16, 24, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), nn.ReLU(inplace=True),
+        )
+        
+        self.maxpool = nn.AdaptiveMaxPool2d((7, 7))
+        
+        self.rep_predictor = nn.Sequential(
+            nn.Linear(24 * 7 * 7, 7 * 7),
+            nn.Linear(7 * 7, 1), 
+            nn.Sigmoid()
+        )  
+        
+    def forward(self, x):
+        x = self.convlayers(x)
+        x = self.maxpool(x)
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        r = self.rep_predictor(x)
+        return r
+
+
+AVAL_MODELS = {
+    'SmallRepOnly': SmallRepOnly,
+    'LocOnly': LocOnly,
+    'TinyRep': TinyRep,
+}

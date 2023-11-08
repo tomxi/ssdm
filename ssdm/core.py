@@ -253,10 +253,10 @@ class Track:
             self,
             feature: str = 'mfcc',
             distance: str = 'sqeuclidean',
-            add_noise: bool = False, # padding representation with a little noise to avoid divide by 0 somewhere...
+            add_noise: bool = False, # padding representaßtion with a little noise to avoid divide by 0 somewhere...
             n_steps: int = 1, # Param for time delay embedding of representation
             delay: int = 1, # Param for time delay embedding of representation
-            aff_kernel_sigma_percentile = 95, 
+            bandwidth_percentile = 95, 
             recompute = False,
             width: int = 1, # TODO Nice to have if things still doesn't work.
         ) -> np.array:
@@ -269,7 +269,7 @@ class Track:
 
 
         path_sim_info_str = f'pathsim_{feature}_{distance}'
-        feat_info_str = f'ns{n_steps}xd{delay}xap{aff_kernel_sigma_percentile}{"_n" if add_noise else ""}'
+        feat_info_str = f'ns{n_steps}xd{delay}xap{bandwidth_percentile}{"_n" if add_noise else ""}'
         pathsim_path = os.path.join(
             self.salami_dir, 
             f'ssms/{self.tid}_{path_sim_info_str}_{feat_info_str}.npy'
@@ -285,7 +285,7 @@ class Track:
                 pair_dist = spatial.distance.pdist(feat_mat[:, i:i + 2].T, metric=distance)
                 path_dist.append(pair_dist[0])
             path_dist = np.array(path_dist)
-            sigma = np.percentile(path_dist, aff_kernel_sigma_percentile)
+            sigma = np.percentile(path_dist, bandwidth_percentile)
             pathsim = np.exp(-path_dist / sigma)
 
             # store pathsim
@@ -634,7 +634,7 @@ def _run_lsd(
     # track.path_sim alwasy recomputes.
     path_sim = track.path_sim(feature=config['loc_ftype'],
                               distance=config['loc_metric'],
-                              aff_kernel_sigma_percentile=loc_sigma,
+                              bandwidth_percentile=loc_sigma,
                               **LOC_FEAT_CONFIG[config['loc_ftype']]
                              )
     

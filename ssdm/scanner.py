@@ -4,6 +4,7 @@ from torch.utils.data import Dataset, DataLoader
 
 # import librosa
 import ssdm
+from scipy import stats
 
 from tqdm import tqdm
 import numpy as np
@@ -34,15 +35,24 @@ class SlmDS(Dataset):
 
         # Get the threshold for upper and lower quartiles, 
         # and use them as positive and negative traning examples respectively
+        tau_percentile_flat = stats.percentileofscore(self.tau_scores.values.flatten(), self.tau_scores.values.flatten())
+        self.tau_percentile = self.tau_scores.copy(data=tau_percentile_flat.reshape(self.tau_scores.shape))
         self.tau_thresh = [np.percentile(self.tau_scores, 25), np.percentile(self.tau_scores, 75)]
         
         tau_series = self.tau_scores.to_series()
         split_ids = ssdm.get_ids(split, out_type='set')
 
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
+
         self.infer = infer
         if infer:
-            # just get all the combos
-            self.samples = {pair: 0.5 for pair in tau_series.index.to_flat_index().values if pair[0] in split_ids}
+            # just get all the combos, returns the percentile of the sample tau value [0~1]
+            self.samples = {pair: self.tau_percentile.sel(tid=pair[0], f_type=pair[1]).item() / 100 \
+                            for pair in tau_series.index.to_flat_index().values \
+                            if pair[0] in split_ids}
         else:
             # use threshold to prepare training data
             # calculate threshold from all taus
@@ -52,8 +62,10 @@ class SlmDS(Dataset):
             self.all_pos_samples = pos_tau_series.index.to_flat_index().values
 
             # use set to select only the ones in the split
-            neg_samples = {pair: 0 for pair in self.all_neg_samples if pair[0] in split_ids}
-            pos_samples = {pair: 1 for pair in self.all_pos_samples if pair[0] in split_ids}
+            neg_samples = {pair: self.tau_percentile.sel(tid=pair[0], f_type=pair[1]).item() / 100 \
+                            for pair in self.all_neg_samples if pair[0] in split_ids}
+            pos_samples = {pair: self.tau_percentile.sel(tid=pair[0], f_type=pair[1]).item() / 100 \
+                            for pair in self.all_pos_samples if pair[0] in split_ids}
 
             self.samples = pos_samples.copy()
             self.samples.update(neg_samples)
@@ -78,9 +90,10 @@ class SlmDS(Dataset):
                                 full=config['rec_full'],
                                 **ssdm.REP_FEAT_CONFIG[feat]
                                 )
-            rep_label = self.samples[(tid, feat)]
-            return {'data': torch.tensor(rep_ssm[None, None, :], dtype=torch.float32),
-                    'label': torch.tensor([rep_label], dtype=torch.float32)[None, :],
+            tau_percent = self.samples[(tid, feat)]
+            return {'data': torch.tensor(rep_ssm[None, None, :], dtype=torch.float32, device=self.device),
+                    'label': torch.tensor([tau_percent > 0.5], dtype=torch.float32, device=self.device)[None, :],
+                    'tau_percent': torch.tensor(tau_percent, dtype=torch.float32, device=self.device),
                     'info': (tid, feat, self.mode),
                     }
         
@@ -90,8 +103,9 @@ class SlmDS(Dataset):
                                       **ssdm.LOC_FEAT_CONFIG[feat])
 
             loc_label = self.samples[(tid, feat)]
-            return {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32),
+            return {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
                     'label': torch.tensor([loc_label], dtype=torch.float32)[None, :],
+                    'tau_percent': torch.tensor(tau_percent, dtype=torch.float32, device=self.device),
                     'info': (tid, feat, self.mode),
                     }
        
@@ -123,21 +137,23 @@ def train_epoch(ds_loader, net, criterion, optimizer, batch_size=8, lr_scheduler
     return (running_loss / len(ds_loader)).item()
 
 # eval tools:
-def net_eval(ds, net, criterion, device='cpu'):
+def net_eval(ds, net, criterion, device='cpu', verbose=False):
     # ds_loader just need to be a iterable of samples
     # make result DF
-    result_df = pd.DataFrame(columns=('tau_hat', 'pred', 'label', 'loss'))
+    result_df = pd.DataFrame(columns=('tau_hat', 'pred', 'tau_percent', 'label', 'loss'))
     ds_loader = DataLoader(ds, batch_size=None, shuffle=False)
 
     net.to(device)
     net.eval()
     with torch.no_grad():
+        if verbose:
+            ds_loader = tqdm(ds_loader)
         for s in ds_loader:
             data = s['data'].to(device)
             tau_hat = net(data)
             label = s['label'].to(device)
             loss = criterion(tau_hat, label)
-            result_df.loc['_'.join(s['info'])] = (tau_hat.item(), int(tau_hat >= 0.5), label.item(), loss.item())      
+            result_df.loc['_'.join(s['info'])] = (tau_hat.item(), int(tau_hat >= 0.5), s['tau_percent'].item(), label.item(), loss.item())      
     return result_df.astype('float')
 
 
@@ -240,10 +256,183 @@ class TinyRep(nn.Module):
         x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
         r = self.rep_predictor(x)
         return r
+    
+
+class GentlePool(nn.Module):
+    def __init__(self):
+        super(GentlePool, self).__init__()
+        self.convlayers1 = nn.Sequential(
+            nn.Conv2d(1, 8, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(8, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(8, 12, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(12, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True), 
+        )
+
+        self.maxpool1 = nn.AdaptiveMaxPool2d((200, 200))
+
+        self.convlayers2 = nn.Sequential(
+            nn.Conv2d(12, 16, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(8, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
+        )
+        
+        self.maxpool2 = nn.AdaptiveMaxPool2d((7, 7))
+        
+        self.rep_predictor = nn.Sequential(
+            nn.Linear(24 * 7 * 7, 7 * 7),
+            nn.ReLU(inplace=True),
+            nn.Linear(7 * 7, 1), 
+            nn.Sigmoid()
+        )  
+        
+    def forward(self, x):
+        x = self.convlayers1(x)
+        x = self.maxpool1(x)
+        x = self.convlayers2(x)
+        x = self.maxpool2(x)
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        r = self.rep_predictor(x)
+        return r
+
+
+class Gentle1Pool(nn.Module):
+    def __init__(self):
+        super(Gentle1Pool, self).__init__()
+        self.convlayers1 = nn.Sequential(
+            nn.Conv2d(1, 8, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(8, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(8, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(12, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True), 
+        )
+
+        self.maxpool = nn.AdaptiveMaxPool2d((216, 216))
+
+        self.convlayers2 = nn.Sequential(
+            nn.Conv2d(12, 16, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+        )
+        self.convlayers3 = nn.Sequential(
+            nn.Conv2d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(24, 36, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(36, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(36, 36, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(36, eps=0.01), nn.ReLU(inplace=True),
+        )
+        
+        self.rep_predictor = nn.Sequential(
+            nn.Linear(36 * 6 * 6, 36),
+            nn.ReLU(inplace=True),
+            nn.Linear(36, 1), 
+            nn.Sigmoid()
+        )  
+        
+    def forward(self, x):
+        x = self.convlayers1(x)
+        x = self.maxpool(x)
+        x = self.convlayers2(x)
+        x = self.convlayers3(x)
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        r = self.rep_predictor(x)
+        return r
+
+class TinyGPool(nn.Module):
+    def __init__(self):
+        super(TinyGPool, self).__init__()
+        self.convlayers1 = nn.Sequential(
+            nn.Conv2d(1, 8, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(8, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(8, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(12, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True), 
+        )
+
+        self.maxpool = nn.AdaptiveMaxPool2d((216, 216))
+
+        self.convlayers2 = nn.Sequential(
+            nn.Conv2d(12, 16, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+        )
+        self.convlayers3 = nn.Sequential(
+            nn.Conv2d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(24, 36, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(36, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+        )        
+        self.rep_predictor = nn.Sequential(
+            nn.Linear(36 * 6 * 6, 36),
+            nn.ReLU(inplace=True),
+            nn.Linear(36, 1), 
+            nn.Sigmoid()
+        )  
+        
+    def forward(self, x):
+        x = self.convlayers1(x)
+        x = self.maxpool(x)
+        x = self.convlayers2(x)
+        x = self.convlayers3(x)
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        r = self.rep_predictor(x)
+        return r
+
+
+class MiniGP(nn.Module):
+    def __init__(self):
+        super(MiniGP, self).__init__()
+        self.convlayers1 = nn.Sequential(
+            nn.Conv2d(1, 8, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(8, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(8, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(12, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True), 
+        )
+
+        self.maxpool = nn.AdaptiveMaxPool2d((216, 216))
+
+        self.convlayers2 = nn.Sequential(
+            nn.Conv2d(12, 16, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+        )
+        self.convlayers3 = nn.Sequential(
+            nn.Conv2d(24, 32, kernel_size=5, padding='valid', bias=False), nn.InstanceNorm2d(32, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(32, 32, kernel_size=5, padding='valid', bias=False), nn.InstanceNorm2d(32, eps=0.01), nn.ReLU(inplace=True),
+        )
+        self.rep_predictor = nn.Sequential(
+            nn.Linear(32 * 4, 16),
+            nn.ReLU(inplace=True),
+            nn.Linear(16, 1), 
+            nn.Sigmoid()
+        )  
+        
+    def forward(self, x):
+        x = self.convlayers1(x)
+        x = self.maxpool(x)
+        x = self.convlayers2(x)
+        x = self.convlayers3(x)
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        r = self.rep_predictor(x)
+        return r
+
 
 
 AVAL_MODELS = {
     'SmallRepOnly': SmallRepOnly,
     'LocOnly': LocOnly,
     'TinyRep': TinyRep,
+    'GentlePool': GentlePool,
+    'Gentle1Pool': Gentle1Pool,
+    'TinyGPool': TinyGPool,
+    'MiniGP': MiniGP,
 }
+
+## https://github.com/scipy/scipy/blob/v1.11.3/scipy/sparse/csgraph/_laplacian.py#L524

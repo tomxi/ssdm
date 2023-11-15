@@ -7,14 +7,6 @@ import json, argparse
 
 import ssdm.scanner as scn
 
-
-
-# Script Params
-# MODEL_ID = sys.argv[1] # see scanner for AVAL_MODELS
-# EPOCH = sys.argv[2]
-# DATE = sys.argv[3]
-# TAU_TYPE = sys.argv[4] # 'rep', 'loc'
-
 # BACKUP, not using this anymore
 DROP_FEATURES=[]
 
@@ -41,24 +33,15 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE):
     train_dataset = scn.SlmDS('train', mode=TAU_TYPE, drop_features=DROP_FEATURES)
     train_loader = DataLoader(train_dataset, batch_size=None, shuffle=True)
     val_dataset = scn.SlmDS('val', mode=TAU_TYPE, drop_features=DROP_FEATURES)
-    val_loader = DataLoader(val_dataset, batch_size=None, shuffle=False)
-    test_dataset = scn.SlmDS('test', mode=TAU_TYPE, drop_features=DROP_FEATURES)
-    test_loader = DataLoader(test_dataset, batch_size=None, shuffle=False)
 
+    # pretrain check-up
+    net_eval_val = scn.net_eval(val_dataset, net, criterion, device, verbose=True)
+    best_loss = net_eval_val.loss.mean()
 
     # simple logging
     val_losses = []
     val_accus = []
     train_losses = []
-    # pretrain check-up
-    net_eval_val = scn.net_eval(val_dataset, net, criterion, device)
-    init_vloss = net_eval_val.loss.mean()
-    val_accu = (net_eval_val.pred == net_eval_val.label).mean()
-    best_loss = init_vloss
-
-    val_losses.append(init_vloss)
-    val_accus.append(val_accu)
-    train_losses.append(init_vloss)
 
     for epoch in tqdm(range(int(EPOCH))):
         training_loss = scn.train_epoch(train_loader, net, criterion, optimizer, lr_scheduler=lr_scheduler, device=device)
@@ -71,18 +54,17 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE):
         val_accus.append(accu)
         train_losses.append(training_loss)
         
-        
         if loss < best_loss:
             # update best_loss and save model
             best_loss = loss
             best_state = net.state_dict()
-            torch.save(best_state, f'RepOnly{DATE}_epoch{epoch}')
+            torch.save(best_state, f'{MODEL_ID}{DATE}_epoch{epoch}')
         
         # save simple log as json
         trainning_info = {'train_loss': train_losses,
                         'val_loss': val_losses,
                         'val_accu': val_accus}
-        with open(f'RepOnly{DATE}_{EPOCH}epoch.json', 'w') as file:
+        with open(f'{MODEL_ID}{DATE}_{EPOCH}epoch.json', 'w') as file:
             json.dump(trainning_info, file)
 
 
@@ -97,4 +79,3 @@ if __name__ == '__main__':
     # print(kwargs)
     train(kwargs.model_id, kwargs.total_epoch, kwargs.date, kwargs.tau_type)
     print('done without failure!')
-

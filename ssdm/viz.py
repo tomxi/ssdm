@@ -6,6 +6,9 @@ import matplotlib.pyplot as plt
 from mir_eval import display
 import ssdm
 import ssdm.scluster as sc
+import holoviews as hv
+import json
+
 
 
 def anno_meet_mats(track, mode='expand'):
@@ -149,3 +152,54 @@ def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True):
     if colorbar:
         plt.colorbar(im, shrink=0.8)
     return ax
+
+
+def view_channels(cube, channel=0, **hv_img_args):
+    if type(cube) is not np.ndarray:
+        cube = cube.cpu().numpy()
+
+    img_kwargs = dict(
+        frame_width=300, aspect='equal', cmap='inferno', active_tools=['box_zoom'],
+        xaxis=None, yaxis=None,
+    )
+    img_kwargs.update(hv_img_args)
+
+    cube = cube.squeeze()
+    ticks = list(range(cube.shape[-1]))
+    if len(cube.shape) == 2:
+        print('only 1 layer, channel is ignored')
+        square = cube
+    else:
+        square = cube[channel].squeeze()
+    return hv.Image((ticks, ticks, square)).opts(**img_kwargs) 
+
+
+def cube(cube, **kwargs):
+    cube = cube.squeeze()
+    channel_imgs = []
+    if len(cube.shape) == 2:
+        channels = 1
+    else:
+        channels = cube.shape[0]
+    for channel in range(channels):
+        channel_imgs.append(view_channels(cube, channel=channel, title=f'channel: {channel}', **kwargs))
+
+    return hv.Layout(channel_imgs)
+
+
+def train_curve(json_path):
+    with open(json_path) as f:
+        train_curves = json.load(f)
+
+    train_loss = hv.Curve(train_curves['train_loss'], label='Train CE loss')
+    val_loss = hv.Curve(train_curves['val_loss'], label='Val CE loss')
+
+    best_epoch = np.asarray(train_curves['val_loss']).argmin()
+    best_val_loss = np.asarray(train_curves['val_loss']).min()
+    best_epoch_line = hv.VLine(x=best_epoch)
+    best_val_text = hv.Text(best_epoch, 0, f"Best epoch {best_epoch}: val loss: {best_val_loss:.3f}")
+
+
+    return train_loss * val_loss * best_epoch_line * best_val_text
+
+

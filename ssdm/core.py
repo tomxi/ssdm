@@ -492,7 +492,7 @@ class Track:
         anno_diag = anno_meet.diagonal(1)
         if binarize:
             anno_diag = anno_diag == np.max(anno_diag)
-        return anno_diag
+        return anno_diag.astype(int)
 
 
     def adobe(

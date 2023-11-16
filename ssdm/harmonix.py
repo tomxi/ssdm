@@ -1,29 +1,45 @@
 import numpy as np
 import librosa
 import jams
-import os
+import os, json
 from glob import glob
 import ssdm
+import xarray as xr
+from tqdm import tqdm
+import pandas as pd
 
-class HarmonixTrack(object):
+from scipy import spatial, stats
+from sklearn.metrics import roc_auc_score
+
+class Track(object):
     def __init__(self,
                  tid, 
                  feature_dir='/scratch/qx244/data/Harmonix_set_openl3_and_yamnet_features/features/',
+                 output_dir='/vast/qx244/harmonix/'
                 ):
         self.tid = tid
         self.feature_dir = feature_dir
+        self.output_dir = output_dir
+
         self.basename = os.path.basename(glob(os.path.join(self.feature_dir, f'{self.tid}*mfcc.npz'))[0])
         self.title = self.basename.split('_')[1]
         
+        self._jam = None # populate when .jam() is called.
         self._track_ts = None # populate when .ts() is called.
         
-    def representation(self, feature='mfcc', use_track_ts=True):
-        feature_path = glob(os.path.join(self.feature_dir, f'{self.tid}*{feature}.npz'))[0]
+    def representation(self, feat_type='mfcc', use_track_ts=True, **delay_emb_kwargs):
+        """delay_emb_kwargs: add_noise, n_steps, delay"""
+        delay_emb_config = dict(add_noise=False, n_steps=1, delay=1)
+        delay_emb_config.update(delay_emb_kwargs)
+
+        feature_path = glob(os.path.join(self.feature_dir, f'{self.tid}*{feat_type}.npz'))[0]
         npz = np.load(feature_path)
         if not use_track_ts:
-            return npz['feature']
+            fmat = npz['feature']
         else:
-            return npz['feature'][:, :len(self.ts())]
+            fmat = npz['feature'][:, :len(self.ts())]
+
+        return delay_embed(fmat, **delay_emb_config)
     
     def ts(self) -> np.array:
         if self._track_ts is None:
@@ -31,9 +47,18 @@ class HarmonixTrack(object):
             self._track_ts = librosa.frames_to_time(list(range(np.min(num_frames))), hop_length=4096, sr=22050)
         return self._track_ts
     
+
+    def jam(
+        self, 
+    ) -> jams.JAMS:
+        if self._jam is None:
+            jams_path = f'/home/qx244/harmonixset/dataset/jams/{self.tid}_{self.title}.jams'
+            self._jam = jams.load(jams_path, validate=False)
+        return self._jam
+    
+
     def ref(self, mode='expand'):
-        j = jams.load(f'/home/qx244/harmonixset/dataset/jams/{self.tid}_{self.title}.jams')
-        seg_anns = j.search(namespace='segment_open')
+        seg_anns = self.jam().search(namespace='segment_open')
 
         def fill_out_anno(anno, ts):
             anno_start_time = anno.data[0].time
@@ -71,26 +96,283 @@ class HarmonixTrack(object):
             anno_diag = anno_diag == np.max(anno_diag)
         return anno_diag.astype(int)
     
-    def ssm(self, feat='mfcc', add_noise=True, n_steps=6, delay=2, ssm_width=30, metric='cosine'): 
+
+    def ssm(self, feature='mfcc', distance='cosine', full=False, add_noise=True, n_steps=6, delay=2, width=30, recompute=False): 
         # save
+        # npy path
+        ssm_info_str = f'n{feature}_{distance}{f"_fw{width}"}_s'
+        feat_info_str = f's{n_steps}xd{delay}{"_n" if add_noise else ""}'
+        ssm_path = os.path.join(
+            self.output_dir, 
+            f'ssms/{self.tid}_{ssm_info_str}_{feat_info_str}.npy'
+        )
+
+        # try loading, if can't then set recompute to True
+        try:
+            with open(ssm_path, 'rb') as f:
+                ssm = np.load(ssm_path, allow_pickle=True)
+        except:
+            recompute=True
         
         # compute
-        out = librosa.segment.recurrence_matrix(
-            delay_embed(self.representation(feat), add_noise, n_steps, delay),
-            width=ssm_width,
-            metric=metric,
-            mode='affinity',
+        if recompute:
+            # prepare feature matrix
+            feat_mat = delay_embed(self.representation(feature), add_noise, n_steps, delay)
+            
+            # fix width with short tracks
+            feat_max_width = ((feat_mat.shape[-1] - 1) // 2) - 5
+            if width >= feat_max_width:
+                width=feat_max_width
+            
+            # sometimes sym=True will give an error related to empty rows or something...
+            try:   
+                ssm = librosa.segment.recurrence_matrix(
+                    feat_mat, width=width, metric=distance, mode='affinity', sym=True, full=full,
+                )
+            except:
+                print('setting rec mat sym to False for the following SSM: \n \t' + ssm_path)
+                ssm = librosa.segment.recurrence_matrix(
+                    feat_mat, width=width, metric=distance, mode='affinity', sym=False, full=full,
+                )
+
+            # store ssm
+            with open(ssm_path, 'wb') as f:
+                np.save(f, ssm)
+
+        return ssm
+
+    
+    def path_sim(self, feature='mfcc', distance='sqeuclidean', add_noise=True, n_steps=6, delay=2, sigma_percentile=95, recompute=False): 
+        feat_mat = delay_embed(self.representation(feature), add_noise, n_steps, delay)
+
+        path_sim_info_str = f'pathsim_{feature}_{distance}'
+        feat_info_str = f'ns{n_steps}xd{delay}xap{sigma_percentile}{"_n" if add_noise else ""}'
+        pathsim_path = os.path.join(
+            self.output_dir, 
+            f'ssms/{self.tid}_{path_sim_info_str}_{feat_info_str}.npy'
         )
-        return out
+
+        try:
+            with open(pathsim_path, 'rb') as f:
+                pathsim = np.load(pathsim_path, allow_pickle=True)
+
+        except:
+            recompute = True
+
+        if recompute:
+            frames = feat_mat.shape[1]
+            path_dist = []
+            for i in range(frames-1):
+                pair_dist = spatial.distance.pdist(feat_mat[:, i:i + 2].T, metric=distance)
+                path_dist.append(pair_dist[0])
+            path_dist = np.array(path_dist)
+            sigma = np.percentile(path_dist, sigma_percentile)
+            pathsim = np.exp(-path_dist / sigma)
+
+            # store pathsim
+            with open(pathsim_path, 'wb') as f:
+                np.save(f, pathsim)
+        
+        # read npy file
+        with open(pathsim_path, 'rb') as f:
+            pathsim = np.load(pathsim_path, allow_pickle=True)
+        return pathsim
+
     
-    def path_sim(self): #SAVE
-        pass
+    def lsd(
+            self,
+            config_update: dict = dict(),
+            recompute: bool  = False,
+            print_config: bool = False,
+            path_sim_sigma_percentile: float = 95,
+    ) -> jams.Annotation:
+        # load lsd jams and file/log handeling...
+
+        config = ssdm.DEFAULT_LSD_CONFIG.copy()
+        config.update(config_update)
+
+        if print_config:
+            print(config)
+
+        record_path = os.path.join(self.output_dir, 
+                                f'lsd/{self.tid}_{config["rep_ftype"]}_{config["loc_metric"]}_{config["rec_width"]}_{path_sim_sigma_percentile}.jams'
+                                )
+        
+        if not os.path.exists(record_path):
+            # create and save jams file
+            print('creating new jams file')
+            empty_jam = jams.JAMS(file_metadata=self.jam().file_metadata)
+            empty_jam.save(record_path)
+
+        # print('loading lsd_jam')
+        try:
+            lsd_jam = jams.load(record_path)
+        except json.decoder.JSONDecodeError:
+            lsd_jam = jams.JAMS(file_metadata=self.jam().file_metadata)
+            lsd_jam.save(record_path)
+        # print('done')
+        
+        # search if config already stored in lsd_jam
+        config_sb = jams.Sandbox()
+        config_sb.update(**config)
+        # print('trying to find...')
+        lsd_annos = lsd_jam.search(sandbox=config_sb)
+
+        # check if multi_anno with config exist, if no, recompute = True
+        if len(lsd_annos) == 0:
+            # print('multi_anno not found')
+            recompute = True
+        else:
+            # print(f'found {len(lsd_annos)} multi_annos!')
+            lsd_anno = lsd_annos[0]
     
-    def lsd(self): #SAVE
-        pass
+        if recompute:
+            print('computing! -- lsd')
+            # genearte new multi_segment annotation and store/overwrite it in the original jams file.
+            lsd_anno = ssdm.run_lsd(self, config=config, recompute_ssm=recompute, loc_sigma=path_sim_sigma_percentile)
+            print('Done! -- lsd')
+            # update jams file
+            # print('updating jams! -- lsd')
+            lsd_anno.sandbox=config_sb
+            for old_anno in lsd_annos:
+                lsd_jam.annotations.remove(old_anno)
+            lsd_jam.annotations.append(lsd_anno)
+            lsd_jam.save(record_path)
+            # print('Done! -- lsd')
+        
+        return lsd_anno
     
-    def tau(self): #SAVE
-        pass
+
+    def lsd_score(
+        self,
+        lsd_sel_dict: dict = dict(),
+        recompute: bool = False,
+        l_frame_size: float = 0.1,
+        path_sim_sigma_percent: float = 95,
+    ) -> xr.DataArray:
+        #initialize file if doesn't exist or load the xarray nc file
+
+        # TODO this line... make this a fast and loose flag
+        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{l_frame_size}p{path_sim_sigma_percent}rw5.nc')
+        if not os.path.exists(nc_path):
+            init_grid = ssdm.LSD_SEARCH_GRID.copy()
+            init_grid.update(l_type=['lp', 'lr', 'lm'])
+            lsd_score_da = ssdm.init_empty_xr(init_grid, name=self.tid)
+            lsd_score_da.to_netcdf(nc_path)
+
+        lsd_score_da = xr.open_dataarray(nc_path)
+        
+        # build lsd_configs from lsd_sel_dict
+        configs = []
+        config_midx = lsd_score_da.sel(**lsd_sel_dict).coords.to_index()
+        for option_values in config_midx:
+            exp_config = ssdm.DEFAULT_LSD_CONFIG.copy()
+            for opt in lsd_sel_dict:
+                if opt in ssdm.DEFAULT_LSD_CONFIG:
+                    exp_config[opt] = lsd_sel_dict[opt]
+            try:
+                for opt, value in zip(config_midx.names, option_values):
+                    if opt in ssdm.DEFAULT_LSD_CONFIG:
+                        exp_config[opt] = value
+            except TypeError:
+                pass
+            if exp_config not in configs:
+                configs.append(exp_config)
+
+        # run through the configs list and populate / readout scores
+        for lsd_conf in configs:
+            # first build the index dict
+            coord_idx = lsd_conf.copy()
+            coord_idx.update(l_type=['lp', 'lr', 'lm'])
+            for k in coord_idx.copy():
+                if k not in lsd_score_da.coords:
+                    del coord_idx[k]
+            
+            exp_slice = lsd_score_da.sel(coord_idx)
+            if recompute or exp_slice.isnull().any():
+                # Only compute if value doesn't exist:
+                ###
+                # print('recomputing l score')
+                proposal = self.lsd(lsd_conf, print_config=False, path_sim_sigma_percentile=path_sim_sigma_percent, recompute=recompute)
+                annotation = self.ref()
+                # search l_score from old places first?
+                l_score = ssdm.compute_l(proposal, annotation, l_frame_size=l_frame_size)
+                lsd_score_da.loc[coord_idx] = list(l_score)
+
+
+        lsd_score_da.to_netcdf(nc_path)
+        # return lsd_score_da
+        return lsd_score_da.sel(**lsd_sel_dict)
+
+
+    def tau(
+        self,
+        tau_sel_dict: dict = dict(),
+        anno_mode: str = 'expand',
+        recompute: bool = False,
+        quantize: str = 'percentile', # None, 'kmeans' or 'percentile'
+        quant_bins: int = 7, # used for loc tau quant schemes
+        rec_width: int = 30,
+        eigen_block: bool = True
+    ) -> xr.DataArray:
+        # test if record_path exist, if no, set recompute to true.
+        suffix = f'_{quantize}{quant_bins}' if quantize is not None else ''
+        am_str = f'{anno_mode}' if anno_mode != 'expand' else ''
+        eigen_block_txt = f'blocky' if eigen_block else ''
+        record_path = os.path.join(self.output_dir, f'taus/{self.tid}_rw{rec_width}{suffix}{am_str}{eigen_block_txt}.nc')
+        if not os.path.exists(record_path):
+            grid_coords = dict(f_type=ssdm.AVAL_FEAT_TYPES, 
+                               tau_type=['rep', 'loc'], 
+                               )
+            tau = ssdm.init_empty_xr(grid_coords)
+        else:
+            tau = xr.open_dataarray(record_path)
+
+        if recompute or tau.sel(**tau_sel_dict).isnull().any():
+
+            # build lsd_configs from tau_sel_dict
+
+            config_midx = tau.sel(**tau_sel_dict).coords.to_index()
+
+            meet_mat = ssdm.anno_to_meet(self.ref(mode=anno_mode), self.ts())
+            meet_mat_diag = np.diag(meet_mat, k=1)
+            # print(config_midx)
+            for f_type, tau_type in config_midx:
+                if tau_type == 'rep':
+                    ssm = self.ssm(
+                        feature=f_type, 
+                        distance='cosine', 
+                        width=rec_width,
+                        recompute=recompute,
+                        **ssdm.REP_FEAT_CONFIG[f_type]
+                    )
+
+                    if eigen_block:
+                        combined_graph = ssdm.scluster.combine_ssms(ssm, meet_mat_diag)
+                        _, evecs = ssdm.scluster.embed_ssms(combined_graph, evec_smooth=13)
+                        first_evecs = evecs[:, :10]
+                        quant_block = ssdm.quantize(np.matmul(first_evecs, first_evecs.T), quant_bins=quant_bins)
+                        tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
+                            quant_block.flatten(), meet_mat.flatten()
+                        )[0]
+
+                    else:
+                        quant_sim = ssdm.quantize(ssm, quantize_method=quantize, quant_bins=quant_bins)
+                        tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
+                            quant_sim.flatten(), meet_mat.flatten()
+                        )[0]
+
+                else: #path_sim AUC
+                    path_sim = self.path_sim(feature=f_type, 
+                                             distance='sqeuclidean',
+                                             recompute=recompute,
+                                             **ssdm.LOC_FEAT_CONFIG[f_type])
+                    
+                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = roc_auc_score(self.path_ref(), path_sim)        
+                tau.to_netcdf(record_path)
+        # return tau
+        return tau.sel(**tau_sel_dict)
+
     
 def delay_embed(
     feat_mat,
@@ -110,3 +392,19 @@ def delay_embed(
         delay=delay
     )
 
+
+def get_taus():
+    pass
+
+
+def get_lsd_scores(
+    tids=[], 
+    **lsd_score_kwargs
+) -> xr.DataArray:
+    score_per_track = []
+    for tid in tqdm(tids):
+        track = Track(tid)
+        track_score = track.lsd_score(**lsd_score_kwargs)
+        score_per_track.append(track_score)
+    
+    return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()

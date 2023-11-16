@@ -341,6 +341,7 @@ class Gentle1Pool(nn.Module):
         r = self.rep_predictor(x)
         return r
 
+
 class TinyGPool(nn.Module):
     def __init__(self):
         super(TinyGPool, self).__init__()
@@ -422,7 +423,6 @@ class MiniGP(nn.Module):
         x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
         r = self.rep_predictor(x)
         return r
-
 
 
 AVAL_MODELS = {

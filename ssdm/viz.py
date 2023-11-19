@@ -197,7 +197,9 @@ def train_curve(json_path):
     best_epoch = np.asarray(train_curves['val_loss']).argmin()
     best_val_loss = np.asarray(train_curves['val_loss']).min()
     best_epoch_line = hv.VLine(x=best_epoch)
-    best_val_text = hv.Text(best_epoch, 0, f"Best epoch {best_epoch}: val loss: {best_val_loss:.3f}")
+    best_val_text = hv.Text(
+        1, 0, f"Best epoch {best_epoch}: val loss: {best_val_loss:.3f}"
+    ).opts(text_align='left', text_baseline='bottom')
 
 
     return train_loss * val_loss * best_epoch_line * best_val_text

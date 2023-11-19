@@ -14,8 +14,8 @@ from sklearn.metrics import roc_auc_score
 class Track(object):
     def __init__(self,
                  tid, 
-                 feature_dir='/scratch/qx244/data/Harmonix_set_openl3_and_yamnet_features/features/',
-                 output_dir='/vast/qx244/harmonix/'
+                 feature_dir='/scratch/qx244/data/audio_features_crema_mfcc_openl3_tempogram_yamnet/crema_mfcc_openl3_tempogram_yamnet_features/',
+                 output_dir='/vast/qx244/harmonix2/'
                 ):
         self.tid = tid
         self.feature_dir = feature_dir
@@ -34,10 +34,14 @@ class Track(object):
 
         feature_path = glob(os.path.join(self.feature_dir, f'{self.tid}*{feat_type}.npz'))[0]
         npz = np.load(feature_path)
-        if not use_track_ts:
+
+        try:
             fmat = npz['feature']
-        else:
-            fmat = npz['feature'][:, :len(self.ts())]
+        except KeyError:
+            fmat = npz['pitch']
+
+        if use_track_ts:
+            fmat = fmat[:, :len(self.ts())]
 
         return delay_embed(fmat, **delay_emb_config)
     
@@ -393,8 +397,17 @@ def delay_embed(
     )
 
 
-def get_taus():
-    pass
+def get_taus(
+    tids=[], 
+    **tau_kwargs,
+) -> xr.DataArray:
+    tau_per_track = []
+    for tid in tqdm(tids):
+        track = Track(tid)
+        track_tau = track.tau(**tau_kwargs)
+        tau_per_track.append(track_tau)
+    
+    return xr.concat(tau_per_track, pd.Index(tids, name='tid')).rename()
 
 
 def get_lsd_scores(

@@ -1,9 +1,11 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+import itertools
 
 # import librosa
 import ssdm
+from ssdm import harmonix as hmx
 from scipy import stats
 
 from tqdm import tqdm
@@ -107,6 +109,59 @@ class SlmDS(Dataset):
                     'label': torch.tensor([loc_label], dtype=torch.float32)[None, :],
                     'tau_percent': torch.tensor(tau_percent, dtype=torch.float32, device=self.device),
                     'info': (tid, feat, self.mode),
+                    }
+       
+        else:
+            assert KeyError
+
+
+class HmxDS(Dataset):
+    """ 
+    mode='rep', # {'rep', 'loc'}
+    """
+    def __init__(self, mode='rep'):
+        if mode not in ('rep', 'loc'):
+            raise AssertionError('bad dataset mode, can only be rep or loc')
+        self.mode = mode
+        self.tids = ssdm.get_ids('harmonix', out_type='list')
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
+        self.samples = list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES))
+        self.samples.sort()
+
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        tid, feat = self.samples[idx]
+        track = hmx.Track(tid)
+
+        config = ssdm.DEFAULT_LSD_CONFIG.copy()
+
+        if self.mode == 'rep':
+            rep_ssm = track.ssm(feature=feat, 
+                                distance=config['rep_metric'],
+                                width=config['rec_width'],
+                                full=config['rec_full'],
+                                **ssdm.REP_FEAT_CONFIG[feat]
+                                )
+
+            return {'data': torch.tensor(rep_ssm[None, None, :], dtype=torch.float32, device=self.device),
+                    'info': (tid, feat, self.mode),
+                    }
+        
+        elif self.mode == 'loc':
+            path_sim = track.path_sim(feature=feat, 
+                                      distance=config['loc_metric'],
+                                      **ssdm.LOC_FEAT_CONFIG[feat])
+
+            return {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
+                    'info': ('harmonix', tid, feat, self.mode),
                     }
        
         else:
@@ -228,118 +283,6 @@ class LocOnly(nn.Module):
         loc_prob = self.loc_predictor(loc_emb.flatten(1))
 
         return loc_prob
-    
-
-class TinyRep(nn.Module):
-    def __init__(self):
-        super(TinyRep, self).__init__()
-        self.convlayers = nn.Sequential(
-            nn.Conv2d(1, 8, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(8, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(8, 12, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(12, 16, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), nn.ReLU(inplace=True), 
-            nn.Conv2d(16, 24, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), nn.ReLU(inplace=True),
-        )
-        
-        self.maxpool = nn.AdaptiveMaxPool2d((7, 7))
-        
-        self.rep_predictor = nn.Sequential(
-            nn.Linear(24 * 7 * 7, 7 * 7),
-            nn.Linear(7 * 7, 1), 
-            nn.Sigmoid()
-        )  
-        
-    def forward(self, x):
-        x = self.convlayers(x)
-        x = self.maxpool(x)
-        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
-        r = self.rep_predictor(x)
-        return r
-    
-
-class GentlePool(nn.Module):
-    def __init__(self):
-        super(GentlePool, self).__init__()
-        self.convlayers1 = nn.Sequential(
-            nn.Conv2d(1, 8, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(8, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(8, 12, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(12, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True), 
-        )
-
-        self.maxpool1 = nn.AdaptiveMaxPool2d((200, 200))
-
-        self.convlayers2 = nn.Sequential(
-            nn.Conv2d(12, 16, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(8, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
-        )
-        
-        self.maxpool2 = nn.AdaptiveMaxPool2d((7, 7))
-        
-        self.rep_predictor = nn.Sequential(
-            nn.Linear(24 * 7 * 7, 7 * 7),
-            nn.ReLU(inplace=True),
-            nn.Linear(7 * 7, 1), 
-            nn.Sigmoid()
-        )  
-        
-    def forward(self, x):
-        x = self.convlayers1(x)
-        x = self.maxpool1(x)
-        x = self.convlayers2(x)
-        x = self.maxpool2(x)
-        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
-        r = self.rep_predictor(x)
-        return r
-
-
-class Gentle1Pool(nn.Module):
-    def __init__(self):
-        super(Gentle1Pool, self).__init__()
-        self.convlayers1 = nn.Sequential(
-            nn.Conv2d(1, 8, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(8, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(8, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(12, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True), 
-        )
-
-        self.maxpool = nn.AdaptiveMaxPool2d((216, 216))
-
-        self.convlayers2 = nn.Sequential(
-            nn.Conv2d(12, 16, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-        )
-        self.convlayers3 = nn.Sequential(
-            nn.Conv2d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(24, 36, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(36, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(36, 36, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(36, eps=0.01), nn.ReLU(inplace=True),
-        )
-        
-        self.rep_predictor = nn.Sequential(
-            nn.Linear(36 * 6 * 6, 36),
-            nn.ReLU(inplace=True),
-            nn.Linear(36, 1), 
-            nn.Sigmoid()
-        )  
-        
-    def forward(self, x):
-        x = self.convlayers1(x)
-        x = self.maxpool(x)
-        x = self.convlayers2(x)
-        x = self.convlayers3(x)
-        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
-        r = self.rep_predictor(x)
-        return r
 
 
 class TinyGPool(nn.Module):
@@ -384,55 +327,64 @@ class TinyGPool(nn.Module):
         return r
 
 
-class MiniGP(nn.Module):
+class RepDropout(TinyGPool):
     def __init__(self):
-        super(MiniGP, self).__init__()
-        self.convlayers1 = nn.Sequential(
-            nn.Conv2d(1, 8, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(8, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(8, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(12, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True), 
-        )
-
-        self.maxpool = nn.AdaptiveMaxPool2d((216, 216))
-
-        self.convlayers2 = nn.Sequential(
-            nn.Conv2d(12, 16, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-        )
-        self.convlayers3 = nn.Sequential(
-            nn.Conv2d(24, 32, kernel_size=5, padding='valid', bias=False), nn.InstanceNorm2d(32, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(32, 32, kernel_size=5, padding='valid', bias=False), nn.InstanceNorm2d(32, eps=0.01), nn.ReLU(inplace=True),
-        )
-        self.rep_predictor = nn.Sequential(
-            nn.Linear(32 * 4, 16),
-            nn.ReLU(inplace=True),
-            nn.Linear(16, 1), 
-            nn.Sigmoid()
-        )  
+        super(RepDropout, self).__init__()
+        self.dropout = nn.Dropout(0.25)
         
     def forward(self, x):
         x = self.convlayers1(x)
+        x = self.dropout(x)
         x = self.maxpool(x)
         x = self.convlayers2(x)
+        x = self.dropout(x)
         x = self.convlayers3(x)
+        x = self.dropout(x)
         x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
         r = self.rep_predictor(x)
         return r
 
 
+class RepLessDropout(RepDropout):
+    def __init__(self):
+        super(RepLessDropout, self).__init__()
+
+    def forward(self, x):
+        x = self.convlayers1(x)
+        x = self.dropout(x)
+        x = self.maxpool(x)
+        x = self.convlayers2(x)
+        x = self.dropout(x)
+        x = self.convlayers3(x)
+        # x = self.dropout(x)
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        r = self.rep_predictor(x)
+        return r
+
+
+class RepLessDropout2(RepLessDropout):
+    def __init__(self):
+        super(RepLessDropout2, self).__init__()
+        self.dropout = nn.Dropout(0.15)
+
+
+class RepDropout2(RepDropout):
+    def __init__(self):
+        super(RepDropout2, self).__init__()
+        self.dropout = nn.Dropout(0.15)
+
+
 AVAL_MODELS = {
     'SmallRepOnly': SmallRepOnly,
     'LocOnly': LocOnly,
-    'TinyRep': TinyRep,
-    'GentlePool': GentlePool,
-    'Gentle1Pool': Gentle1Pool,
+    # 'TinyRep': TinyRep,
+    # 'GentlePool': GentlePool,
+    # 'Gentle1Pool': Gentle1Pool,
     'TinyGPool': TinyGPool,
-    'MiniGP': MiniGP,
+    # 'RepDropout': RepDropout,
+    'RepDropout2': RepDropout2,
+    # 'RepLessDropout': RepLessDropout,
+    'RepLessDropout2': RepLessDropout2,
 }
 
 ## https://github.com/scipy/scipy/blob/v1.11.3/scipy/sparse/csgraph/_laplacian.py#L524

@@ -19,9 +19,16 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE):
     net = scn.AVAL_MODELS[MODEL_ID]().to(device)
     net.to(device)
 
+    # L2 Regularization on specified layers:
+    layer_with_weight_decay = net.rep_predictor
+
     # training tools
     criterion = torch.nn.BCELoss()
-    optimizer = optim.AdamW(net.parameters())
+    optimizer = optim.AdamW([
+        {'params': [param for name, param in net.named_parameters() if 'rep_predictor' not in name]},
+        {'params': layer_with_weight_decay.parameters(), 'weight_decay': 1e-5}  # Only weight decay for the specified layer
+    ])
+
     lr_scheduler = optim.lr_scheduler.CyclicLR(optimizer,
                                             base_lr=1e-9,
                                             max_lr=1e-4,
@@ -64,7 +71,7 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE):
         trainning_info = {'train_loss': train_losses,
                         'val_loss': val_losses,
                         'val_accu': val_accus}
-        with open(f'{MODEL_ID}{DATE}_{EPOCH}epoch.json', 'w') as file:
+        with open(f'{DATE}{MODEL_ID}_l2-5_{EPOCH}epoch.json', 'w') as file:
             json.dump(trainning_info, file)
 
 

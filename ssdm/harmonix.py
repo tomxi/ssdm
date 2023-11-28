@@ -255,16 +255,15 @@ class Track(object):
         path_sim_sigma_percent: float = 95,
     ) -> xr.DataArray:
         #initialize file if doesn't exist or load the xarray nc file
-
-        # TODO this line... make this a fast and loose flag
         nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{l_frame_size}p{path_sim_sigma_percent}rw5.nc')
         if not os.path.exists(nc_path):
             init_grid = ssdm.LSD_SEARCH_GRID.copy()
             init_grid.update(l_type=['lp', 'lr', 'lm'])
             lsd_score_da = ssdm.init_empty_xr(init_grid, name=self.tid)
-            lsd_score_da.to_netcdf(nc_path)
-
-        lsd_score_da = xr.open_dataarray(nc_path)
+            # lsd_score_da.to_netcdf(nc_path)
+        else:
+            with xr.open_dataarray(nc_path) as lsd_score_da:
+                lsd_score_da.load()
         
         # build lsd_configs from lsd_sel_dict
         configs = []
@@ -301,10 +300,10 @@ class Track(object):
                 annotation = self.ref()
                 # search l_score from old places first?
                 l_score = ssdm.compute_l(proposal, annotation, l_frame_size=l_frame_size)
+                with xr.open_dataarray(nc_path) as lsd_score_da:
+                    lsd_score_da.load()
                 lsd_score_da.loc[coord_idx] = list(l_score)
-
-
-        lsd_score_da.to_netcdf(nc_path)
+                lsd_score_da.to_netcdf(nc_path)
         # return lsd_score_da
         return lsd_score_da.sel(**lsd_sel_dict)
 
@@ -330,7 +329,8 @@ class Track(object):
                                )
             tau = ssdm.init_empty_xr(grid_coords)
         else:
-            tau = xr.open_dataarray(record_path)
+            with xr.open_dataarray(record_path) as tau:
+                tau.load()
 
         if recompute or tau.sel(**tau_sel_dict).isnull().any():
 

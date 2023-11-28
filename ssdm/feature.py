@@ -4,6 +4,8 @@ import numpy as np
 import librosa
 
 
+## NTH: UPDATE WITH New published feature extraction scripts.
+
 def mfcc(track, recompute=False):
     feature_path = os.path.join(
         track.salami_dir, f'features/{track.tid}_mfcc.npz')

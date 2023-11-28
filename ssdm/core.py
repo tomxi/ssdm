@@ -320,7 +320,8 @@ class Track:
                                )
             tau = init_empty_xr(grid_coords)
         else:
-            tau = xr.open_dataarray(record_path)
+            with xr.open_dataarray(record_path) as tau:
+                tau.load()
 
         if recompute or tau.sel(**tau_sel_dict).isnull().any():
 
@@ -528,7 +529,8 @@ class Track:
             lsd_score_da = init_empty_xr(init_grid, name=self.tid)
             lsd_score_da.to_netcdf(nc_path)
 
-        lsd_score_da = xr.open_dataarray(nc_path)
+        with xr.open_dataarray(nc_path) as lsd_score_da:
+            lsd_score_da.load()
         
         # build lsd_configs from lsd_sel_dict
         configs = []
@@ -611,7 +613,7 @@ def run_lsd(
     track, 
     config: dict, 
     recompute_ssm: bool = False,
-    loc_sigma: float = 85
+    loc_sigma: float = 95
 ) -> jams.Annotation:
     def mask_diag(sq_mat, width=13):
         # carve out width from the full ssm

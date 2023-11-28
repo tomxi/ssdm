@@ -18,7 +18,7 @@ class SlmDS(Dataset):
         mode='rep', # {'rep', 'loc'}
         infer=False,
         drop_features=[],
-        precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/taus_1107.nc'
+        precomputed_tau_fp = '/home/xqx244/scanning-ssm/ssdm/taus_1107.nc'
     """
     def __init__(self, 
                  split='train',
@@ -374,6 +374,147 @@ class RepDropout2(RepDropout):
         self.dropout = nn.Dropout(0.15)
 
 
+class RepLessDropout2(RepLessDropout):
+    def __init__(self):
+        super(RepLessDropout2, self).__init__()
+        self.dropout = nn.Dropout(0.15)
+
+class RepLessDropout1(RepLessDropout):
+    def __init__(self):
+        super(RepLessDropout1, self).__init__()
+        self.dropout = nn.Dropout(0.1)
+
+
+class RepModel(nn.Module):
+    def __init__(self):
+        super(RepModel, self).__init__()
+
+        self.activation = nn.ReLU
+        
+        self.convlayers1 = nn.Sequential(
+            nn.Conv2d(1, 8, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(8, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(8, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(12, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), self.activation(), 
+        )
+
+        self.maxpool = nn.AdaptiveMaxPool2d((216, 216))
+
+        self.convlayers2 = nn.Sequential(
+            nn.Conv2d(12, 16, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+        )
+
+        self.convlayers3 = nn.Sequential(
+            nn.Conv2d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(24, 36, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(36, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+        )
+
+        self.rep_predictor = nn.Sequential(
+            nn.Linear(36 * 6 * 6, 36),
+            self.activation(),
+            nn.Linear(36, 1), 
+            nn.Sigmoid()
+        )
+
+        self.dropout = nn.Dropout(0.1)
+        
+    def forward(self, x):
+        x = self.convlayers1(x)
+        x = self.dropout(x)
+        x = self.maxpool(x)
+
+        x = self.convlayers2(x)
+        x = self.dropout(x)
+        x = self.convlayers3(x)
+
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        r = self.rep_predictor(x)
+        return r
+
+
+## SWISH LAYER:
+class TempSwish(nn.Module):
+    def __init__(self):
+        super(TempSwish, self).__init__()
+        self.beta = nn.Parameter(torch.as_tensor(0, dtype=torch.float))
+
+    def forward(self,x):
+        x = x * nn.functional.sigmoid(self.beta * x)
+        return x
+
+
+class RepModelSwish(RepModel):
+    def __init__(self):
+        super(RepModelSwish, self).__init__()
+        self.activation = TempSwish
+
+
+class RepSwishDo2(RepModel):
+    def __init__(self):
+        super(RepSwishDo2, self).__init__()
+        self.activation = TempSwish
+        self.dropout = nn.Dropout(0.2)
+
+
+class RepModel2(nn.Module):
+    def __init__(self):
+        super(RepModel2, self).__init__()
+
+        self.activation = TempSwish
+        
+        self.convlayers1 = nn.Sequential(
+            nn.Conv2d(1, 16, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(24, 48, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(48, eps=0.01), self.activation(), 
+        )
+
+        self.maxpool = nn.AdaptiveMaxPool2d((216, 216))
+
+        self.convlayers2 = nn.Sequential(
+            nn.Conv2d(48, 64, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(64, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(64, 64, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(64, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+        )
+
+        self.convlayers3 = nn.Sequential(
+            nn.Conv2d(64, 96, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(96, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(96, 128, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(128, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+        )
+
+        self.rep_predictor = nn.Sequential(
+            nn.Linear(128 * 6 * 6, 128),
+            self.activation(),
+            nn.Dropout(0.3),
+            nn.Linear(128, 1), 
+            nn.Sigmoid()
+        )
+        
+    def forward(self, x):
+        x = self.convlayers1(x)
+        x = nn.Dropout(0.2)(x)
+        x = self.maxpool(x)
+
+        x = self.convlayers2(x)
+        x = nn.Dropout(0.2)(x)
+
+        x = self.convlayers3(x)
+        x = nn.Dropout(0.2)(x)
+
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        r = self.rep_predictor(x)
+        return r
+
 AVAL_MODELS = {
     'SmallRepOnly': SmallRepOnly,
     'LocOnly': LocOnly,
@@ -382,9 +523,12 @@ AVAL_MODELS = {
     # 'Gentle1Pool': Gentle1Pool,
     'TinyGPool': TinyGPool,
     # 'RepDropout': RepDropout,
-    'RepDropout2': RepDropout2,
-    # 'RepLessDropout': RepLessDropout,
-    'RepLessDropout2': RepLessDropout2,
+    'RepDropout2': RepDropout2, 
+    'RepModel': RepModel,
+    'RepModel2': RepModel2,
+    'RepModelSwish': RepModelSwish,
+    'RepLessDropout2': RepLessDropout2, # **
+    'RepSwishDo2': RepSwishDo2,
 }
 
 ## https://github.com/scipy/scipy/blob/v1.11.3/scipy/sparse/csgraph/_laplacian.py#L524

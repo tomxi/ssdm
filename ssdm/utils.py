@@ -12,6 +12,7 @@ from tqdm import tqdm
 import jams
 import mir_eval
 
+from ssdm import salami as slm
 
 # import matplotlib
 # import matplotlib.pyplot as plt
@@ -53,7 +54,7 @@ def lucky_track(tids=get_ids(split='working'), announce=True):
     tid = tids[rand_idx]
     if announce:
         print(f'track {tid} is the lucky track!')
-    return ssdm.Track(tid)
+    return slm.Track(tid)
 
 
 # add new splits to split_ids.json
@@ -249,7 +250,7 @@ def get_lsd_scores(
 ) -> xr.DataArray:
     score_per_track = []
     for tid in tqdm(tids):
-        track = ssdm.Track(tid)
+        track = slm.Track(tid)
         score_per_anno = []
         for anno_id in range(track.num_annos()):
             score_per_anno.append(track.lsd_score(anno_id=anno_id, **lsd_score_kwargs))
@@ -268,7 +269,7 @@ def get_adobe_scores(
 ) -> xr.DataArray:
     score_per_track = []
     for tid in tqdm(tids):
-        track = ssdm.Track(tid)
+        track = slm.Track(tid)
         score_per_anno = []
         for anno_id in range(track.num_annos()):
             score_per_anno.append(track.adobe_l(anno_id=anno_id, l_frame_size=l_frame_size))
@@ -287,7 +288,7 @@ def get_taus(
 ) -> xr.DataArray:
     tau_per_track = []
     for tid in tqdm(tids):
-        track = ssdm.Track(tid)
+        track = slm.Track(tid)
         tau_per_anno = []
         for anno_id in range(track.num_annos()):
             tau_per_anno.append(track.tau(anno_id=anno_id, **tau_kwargs))
@@ -309,9 +310,9 @@ def pick_by_taus(
                        columns=['rep_pick', 'loc_pick', 'score', 'orc_rep_pick', 'orc_loc_pick', 'oracle']
                        )
     
-    out.orc_rep_pick = scores_grid.max(dim='loc_ftype').idxmax(dim='rep_ftype')
-    out.orc_loc_pick = scores_grid.max(dim='rep_ftype').idxmax(dim='loc_ftype')
-    out.oracle = scores_grid.max(dim=['rep_ftype', 'loc_ftype'])
+    out.orc_rep_pick = scores_grid.max(dim='loc_ftype').idxmax(dim='rep_ftype').squeeze()
+    out.orc_loc_pick = scores_grid.max(dim='rep_ftype').idxmax(dim='loc_ftype').squeeze()
+    out.oracle = scores_grid.max(dim=['rep_ftype', 'loc_ftype']).squeeze()
     
     rep_pick = rep_taus.idxmax(dim='f_type')
     

@@ -1,132 +1,117 @@
-import os
-
 import numpy as np
 import librosa
 
+_AUDIO_SR = 22050
+_HOP_LEN = 4096
 
-## NTH: UPDATE WITH New published feature extraction scripts.
+def yamnet(audio_path, output_path):
+    import tensorflow_hub as hub
+    yamnet_model = hub.load('https://tfhub.dev/google/yamnet/1')
 
-def mfcc(track, recompute=False):
-    feature_path = os.path.join(
-        track.salami_dir, f'features/{track.tid}_mfcc.npz')
-    if recompute or not os.path.exists(feature_path):
-        print(f'computing feature: mfcc for track {track.tid}...')
-        track.audio()        
-        mfcc = librosa.feature.mfcc(
-            y=track.y, sr=track.sr, n_mfcc=40, 
-            hop_length=4096, n_fft=8192, lifter=0.6)
-        normalized_mfcc = (mfcc - np.mean(mfcc, axis=1)[:, None]) / np.std(mfcc, axis=1, ddof=1)[:,None]
-        mfcc_ts = librosa.frames_to_time(
-            np.arange(normalized_mfcc.shape[-1]), 
-            hop_length=4096, sr=track.sr, n_fft=8192)
-        np.savez(feature_path, feature=normalized_mfcc, ts=mfcc_ts)
+    yamnet_audio, _ = librosa.load(audio_path, sr=16000)
 
-    return np.load(feature_path)
-
-
-def crema(track, recompute=False):
-    crema_feature_path = os.path.join(
-        track.salami_dir, f'crema/{track.tid}.npz')
-    feature_path = os.path.join(
-        track.salami_dir, f'features/{track.tid}_crema.npz')
-    if recompute or not os.path.exists(feature_path):
-        print(f'resampling computed feature: crema _chord_pitch for track {track.tid}...')
-        crema = np.load(crema_feature_path)
-        resampled_crema = librosa.resample(
-            crema['chord_pitch'].T, orig_sr=track.sr/2048, 
-            target_sr=track.sr/4096)
-        crema_ts = librosa.frames_to_time(
-            np.arange(resampled_crema.shape[-1]), 
-            hop_length=4096, sr=track.sr)
-        np.savez(feature_path, feature=resampled_crema, ts=crema_ts)
-
-    return np.load(feature_path)
+    
+    _, yamnet_emb, _ = yamnet_model(yamnet_audio)
+    resampled_yamnet_emb = librosa.resample(
+        yamnet_emb.numpy().T,
+        orig_sr=1/0.48, target_sr=_AUDIO_SR / _HOP_LEN
+    )
+    yamnet_ts = librosa.frames_to_time(
+        np.arange(resampled_yamnet_emb.shape[-1]), 
+        sr=_AUDIO_SR, hop_length=_HOP_LEN)
+    np.savez(output_path, feature=resampled_yamnet_emb, ts=yamnet_ts)
 
 
-def yamnet(track, recompute=False):
-    feature_path = os.path.join(
-        track.salami_dir, f'features/{track.tid}_yamnet.npz')
-
-    if recompute or not os.path.exists(feature_path):
-        import tensorflow_hub as hub
-        
-        print(f'computing feature: yamnet for track {track.tid}...')
-        model = hub.load('https://tfhub.dev/google/yamnet/1')
-        yamnet_audio, yamnet_sr = track.audio(sr=16000)
-        _, yamnet_emb, _ = model(yamnet_audio)
-        resampled_yamnet_emb = librosa.resample(
-            yamnet_emb.numpy().T,
-            orig_sr=1/0.48, target_sr=22050/4096
-        )
-        yamnet_ts = librosa.frames_to_time(
-            np.arange(resampled_yamnet_emb.shape[-1]), 
-            sr=22050, hop_length=4096)
-        np.savez(feature_path, feature=resampled_yamnet_emb, ts=yamnet_ts)
-
-    return np.load(feature_path)
+def openl3(audio_path, output_path):
+    import openl3
+    y, sr = librosa.load(audio_path, sr=_AUDIO_SR)
+    emb, ts = openl3.get_audio_embedding(
+        y, sr, 
+        embedding_size=512, content_type='music'
+    )
+    resampled_emb = librosa.resample(
+        emb.T, orig_sr=1 / (ts[1] - ts[0]),
+        target_sr= sr/_HOP_LEN
+    )
+    ts = librosa.frames_to_time(
+        np.arange(resampled_emb.shape[-1]), 
+        hop_length=_HOP_LEN, sr=sr
+    )
+    np.savez(output_path, feature=resampled_emb, ts=ts)
 
 
-def tempogram(track, recompute=False):
-    feature_path = os.path.join(
-        track.salami_dir, f'features/{track.tid}_tempogram.npz')
-
-    if recompute or not os.path.exists(feature_path):
-        track.audio()
-        print(f'computing feature: tempogram for track {track.tid}...')
-        novelty = track._novelty(hop_length=512, sr=track.sr)
-        tempogram = librosa.feature.tempogram(
-            onset_envelope=novelty, sr=track.sr, 
-            hop_length=512, win_length=384)
-        resampled_tempogram = librosa.resample(
-            tempogram, orig_sr=track.sr/512, 
-            target_sr=track.sr/4096)
-        ts = librosa.frames_to_time(
-            np.arange(resampled_tempogram.shape[-1]), 
-            hop_length=4096, sr=track.sr)
-        np.savez(feature_path, feature=resampled_tempogram, ts=ts)
-
-    return np.load(feature_path)
+def mfcc(audio_path, output_path):
+    y, sr = librosa.load(audio_path, sr=_AUDIO_SR)
+    mfcc = librosa.feature.mfcc(
+        y=y, sr=sr, n_mfcc=40, 
+        hop_length=_HOP_LEN, 
+        n_fft=_HOP_LEN*2, 
+        lifter=0.6
+    )
+    normalized_mfcc = (mfcc - np.mean(mfcc, axis=1)[:, None]) / np.std(mfcc, axis=1, ddof=1)[:,None]
+    mfcc_ts = librosa.frames_to_time(
+        np.arange(normalized_mfcc.shape[-1]), 
+        hop_length=_HOP_LEN, sr=sr, n_fft=_HOP_LEN*2)
+    np.savez(output_path, feature=normalized_mfcc, ts=mfcc_ts)
 
 
-def openl3(track, recompute=False):
-    feature_path = os.path.join(
-        track.salami_dir, f'features/{track.tid}_openl3.npz')
-
-    if recompute or not os.path.exists(feature_path):
-        import openl3
-
-        track.audio()
-        print(f'computing feature: openl3 for track {track.tid}...')
-        emb, ts = openl3.audio_embedding(
-            track.y, track.sr, 
-            embedding_size=512, content_type='music'
-        )
-        resampled_emb = librosa.resample(
-            emb.T, orig_sr=1 / (ts[1] - ts[0]),
-            target_sr= track.sr/4096
-        )
-        ts = librosa.frames_to_time(
-            np.arange(resampled_emb.shape[-1]), 
-            hop_length=4096, sr=track.sr
-        )
-        np.savez(feature_path, feature=resampled_emb, ts=ts)
-
-    return np.load(feature_path)
+def tempogram(audio_path, output_path):
+    y, sr = librosa.load(audio_path, sr=_AUDIO_SR)
+    novelty = librosa.onset.onset_strength(y=y, sr=sr, hop_length=512)
+    tempogram = librosa.feature.tempogram(
+        onset_envelope=novelty, sr=sr, 
+        hop_length=512, win_length=384)
+    resampled_tempogram = librosa.resample(
+        tempogram, orig_sr=sr/512, 
+        target_sr=sr/_HOP_LEN)
+    ts = librosa.frames_to_time(
+        np.arange(resampled_tempogram.shape[-1]), 
+        hop_length=_HOP_LEN, sr=sr)
+    np.savez(output_path, feature=resampled_tempogram, ts=ts)
 
 
-def chroma(track, recompute=False):
-    feature_path = os.path.join(
-        track.salami_dir, f'features/{track.tid}_chroma.npz')
+def crema(audio_path, output_path):
+    import crema
+    crema_model = crema.models.chord.ChordModel()
 
-    if recompute or not os.path.exists(feature_path):
-        track.audio()
-        print(f'computing feature: chroma for track {track.tid}...')
-        chroma = librosa.feature.chroma_cqt(
-            y=librosa.effects.harmonic(track.y, margin=8), 
-            sr=track.sr, 
-            hop_length=4096, 
-            bins_per_octave=36)
-        chroma_ts = librosa.frames_to_time(np.arange(chroma.shape[-1]), hop_length=4096, sr=track.sr)
-        np.savez(feature_path, feature=chroma, ts=chroma_ts)
+    crema_out = crema_model.outputs(audio_path)  
+    crema_op = crema_model.pump.ops[2]
+    
+    resampled_crema_pitch = librosa.resample(
+        crema_out['chord_pitch'].T, 
+        orig_sr=crema_op.sr / crema_op.hop_length, 
+        target_sr=22050/4096
+    )
+    
+    resampled_crema_root = librosa.resample(
+        crema_out['chord_root'].T, 
+        orig_sr=crema_op.sr / crema_op.hop_length, 
+        target_sr=22050/4096
+    )
+    
+    resampled_crema_bass = librosa.resample(
+        crema_out['chord_bass'].T, 
+        orig_sr = crema_op.sr / crema_op.hop_length, 
+        target_sr = 22050/4096
+    )
 
-    return np.load(feature_path)
+    crema_ts = librosa.frames_to_time(
+        np.arange(resampled_crema_pitch.shape[-1]), 
+        hop_length=4096, sr=22050)
+
+    np.savez(output_path, 
+             pitch=resampled_crema_pitch, 
+             root=resampled_crema_root,
+             bass=resampled_crema_bass,
+             feature=resampled_crema_pitch,
+             ts=crema_ts)
+
+
+FEAT_MAP = dict(
+    yamnet = yamnet,
+    crema = crema,
+    mfcc = mfcc,
+    tempogram = tempogram,
+    openl3 = openl3
+)
+

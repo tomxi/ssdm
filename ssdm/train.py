@@ -25,8 +25,10 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE):
     # training tools
     criterion = torch.nn.BCELoss()
     optimizer = optim.AdamW([
-        {'params': [param for name, param in net.named_parameters() if 'rep_predictor' not in name]},
-        {'params': layer_with_weight_decay.parameters(), 'weight_decay': 1e-5}  # Only weight decay for the specified layer
+        {'params': [param for name, param in net.named_parameters() if 'rep_predictor' not in name], 
+         'weight_decay': 1e-6},
+        {'params': layer_with_weight_decay.parameters(), 
+         'weight_decay': 1e-5}  # Only weight decay for the specified layer
     ])
 
     lr_scheduler = optim.lr_scheduler.CyclicLR(optimizer,

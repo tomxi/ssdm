@@ -105,9 +105,9 @@ class SlmDS(Dataset):
                                       distance=config['loc_metric'],
                                       **ssdm.LOC_FEAT_CONFIG[feat])
 
-            loc_label = self.samples[(tid, feat)]
+            tau_percent = self.samples[(tid, feat)]
             return {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
-                    'label': torch.tensor([loc_label], dtype=torch.float32)[None, :],
+                    'label': torch.tensor([tau_percent > 0.5], dtype=torch.float32)[None, :],
                     'tau_percent': torch.tensor(tau_percent, dtype=torch.float32, device=self.device),
                     'info': (tid, feat, self.mode),
                     }
@@ -269,22 +269,22 @@ class LocOnly(nn.Module):
     def __init__(self):
         super(LocOnly, self).__init__()
         self.loc_conv_l1 = nn.Sequential(
-            nn.Conv1d(1, 4, kernel_size=13, padding='same', bias=False), 
-            nn.InstanceNorm1d(4, eps=0.01), nn.ReLU(inplace=True),
+            nn.Conv1d(1, 6, kernel_size=13, padding='same', bias=False), 
+            nn.InstanceNorm1d(6, eps=0.01), nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=2, stride=2)
         )
         self.loc_conv_l2 = nn.Sequential(
-            nn.Conv1d(4, 8, kernel_size=7, padding='same', bias=False),
-            nn.InstanceNorm1d(8, eps=0.01), nn.ReLU(inplace=True),
+            nn.Conv1d(6, 16, kernel_size=7, padding='same', bias=False),
+            nn.InstanceNorm1d(16, eps=0.01), nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Conv1d(8, 8, kernel_size=5, padding='same', bias=False),
-            nn.InstanceNorm1d(8, eps=0.01), nn.ReLU(inplace=True),
+            nn.Conv1d(16, 32, kernel_size=5, padding='same', bias=False),
+            nn.InstanceNorm1d(32, eps=0.01), nn.ReLU(inplace=True),
         )
 
         self.loc_pool = nn.AdaptiveMaxPool1d(7)
 
         self.loc_predictor = nn.Sequential(
-            nn.Linear(8 * 7, 1, bias=True), nn.Sigmoid()
+            nn.Linear(32 * 7, 1, bias=True), nn.Sigmoid()
         )
         
     def forward(self, band):
@@ -295,6 +295,60 @@ class LocOnly(nn.Module):
 
         return loc_prob
 
+
+class LocModel(nn.Module):
+    def __init__(self):
+        super(LocModel, self).__init__()
+
+        self.activation = TempSwish
+        self.dropout = nn.Dropout(0.2)
+
+        self.activation = nn.ReLU
+
+        self.maxpool = nn.AdaptiveMaxPool1d(216)
+        
+        self.convlayers1 = nn.Sequential(
+            nn.Conv1d(1, 8, kernel_size=5, padding='same', bias=False), nn.InstanceNorm1d(8, eps=0.01), self.activation(),
+            nn.MaxPool1d(kernel_size=3, stride=3),
+            nn.Conv1d(8, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm1d(12, eps=0.01), self.activation(),
+            nn.MaxPool1d(kernel_size=3, stride=3),
+            nn.Conv1d(12, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm1d(12, eps=0.01), self.activation(), 
+        )
+
+        self.convlayers2 = nn.Sequential(
+            nn.Conv1d(12, 16, kernel_size=7, padding='same', bias=False), nn.InstanceNorm1d(16, eps=0.01), self.activation(),
+            nn.MaxPool1d(kernel_size=3, stride=3),
+            nn.Conv1d(16, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm1d(24, eps=0.01), self.activation(),
+            nn.MaxPool1d(kernel_size=3, stride=3),
+        )
+
+        self.convlayers3 = nn.Sequential(
+            nn.Conv1d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm1d(24, eps=0.01), self.activation(),
+            nn.MaxPool1d(kernel_size=2, stride=2),
+            nn.Conv1d(24, 36, kernel_size=5, padding='same', bias=False), nn.InstanceNorm1d(36, eps=0.01), self.activation(),
+            nn.MaxPool1d(kernel_size=2, stride=2),
+        )
+
+        self.rep_predictor = nn.Sequential(
+            nn.Linear(36 * 6, 36),
+            self.dropout, self.activation(),
+            nn.Linear(36, 1), 
+            nn.Sigmoid()
+        )
+        
+    def forward(self, x):
+        x = self.convlayers1(x)
+        x = self.dropout(x)
+        x = self.maxpool(x)
+
+        x = self.convlayers2(x)
+        x = self.dropout(x)
+        x = self.convlayers3(x)
+
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        r = self.rep_predictor(x)
+        return r
+    
 
 class TinyGPool(nn.Module):
     def __init__(self):
@@ -389,6 +443,7 @@ class RepLessDropout2(RepLessDropout):
     def __init__(self):
         super(RepLessDropout2, self).__init__()
         self.dropout = nn.Dropout(0.15)
+
 
 class RepLessDropout1(RepLessDropout):
     def __init__(self):
@@ -541,6 +596,7 @@ class RepModel2(nn.Module):
         r = self.rep_predictor(x)
         return r
 
+
 AVAL_MODELS = {
     'SmallRepOnly': SmallRepOnly,
     'LocOnly': LocOnly,
@@ -551,6 +607,7 @@ AVAL_MODELS = {
     # 'RepDropout': RepDropout,
     'RepDropout2': RepDropout2, 
     'RepModel': RepModel,
+    'LocModel': LocModel,
     'RepModel2': RepModel2,
     'RepModelSwish': RepModelSwish,
     'RepLessDropout2': RepLessDropout2, # **

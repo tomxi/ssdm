@@ -154,7 +154,7 @@ def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True):
     return ax
 
 
-def view_channels(cube, channel=0, **hv_img_args):
+def view_channels_(cube, channel=0, **hv_img_args):
     if type(cube) is not np.ndarray:
         cube = cube.cpu().numpy()
 
@@ -182,7 +182,7 @@ def cube(cube, **kwargs):
     else:
         channels = cube.shape[0]
     for channel in range(channels):
-        channel_imgs.append(view_channels(cube, channel=channel, title=f'channel: {channel}', **kwargs))
+        channel_imgs.append(view_channels_(cube, channel=channel, title=f'channel: {channel}', **kwargs))
 
     return hv.Layout(channel_imgs)
 

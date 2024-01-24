@@ -123,7 +123,7 @@ def get_taus(
     return xr.concat(tau_per_track, pd.Index(tids, name='tid')).rename()
 
 
-class JsdDS(Dataset):
+class DS(Dataset):
     """ 
     mode='rep', # {'rep', 'loc'}
     """

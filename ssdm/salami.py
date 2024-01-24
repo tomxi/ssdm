@@ -1,6 +1,9 @@
 import ssdm
 from ssdm import base
 
+import torch
+from torch.utils.data import Dataset
+
 import os, json
 import librosa, jams
 import numpy as np
@@ -109,4 +112,109 @@ class Track(base.Track):
         pd_series = pd.read_pickle(record_path).astype('float')
         pd_series.index.name = 'l_type'
         return pd_series.to_xarray()
-    
+
+
+class DS(Dataset):
+    """ split='train',
+        mode='rep', # {'rep', 'loc'}
+        infer=False,
+        drop_features=[],
+        precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/taus_1107.nc'
+    """
+    def __init__(self, 
+                 split='train',
+                 mode='rep', # {'rep', 'loc'}
+                 infer=False,
+                 drop_features=[],
+                 precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/taus_1107.nc',
+                ):
+        if mode not in ('rep', 'loc', 'both'):
+            raise AssertionError('bad dataset mode, can only be rep or loc')
+        self.mode = mode
+        self.split = split
+        # load precomputed taus, and drop feature and select tau type
+        taus_full = xr.open_dataarray(precomputed_tau_fp)
+
+        
+        self.tau_scores = taus_full.drop_sel(f_type=drop_features).sel(tau_type=mode)
+        if mode == 'both':
+            pass # TODO, get both scores
+
+        # Get the threshold for upper and lower quartiles, 
+        # and use them as positive and negative traning examples respectively
+        tau_percentile_flat = stats.percentileofscore(self.tau_scores.values.flatten(), self.tau_scores.values.flatten())
+        self.tau_percentile = self.tau_scores.copy(data=tau_percentile_flat.reshape(self.tau_scores.shape))
+        self.tau_thresh = [np.percentile(self.tau_scores, 25), np.percentile(self.tau_scores, 75)]
+        
+        tau_series = self.tau_scores.to_series()
+        split_ids = ssdm.get_ids(split, out_type='set')
+
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
+
+        self.infer = infer
+        if infer:
+            # just get all the combos, returns the percentile of the sample tau value [0~1]
+            self.samples = {pair: self.tau_percentile.sel(tid=pair[0], f_type=pair[1]).item() / 100 \
+                            for pair in tau_series.index.to_flat_index().values \
+                            if pair[0] in split_ids}
+        else:
+            # use threshold to prepare training data
+            # calculate threshold from all taus
+            neg_tau_series = tau_series[tau_series < self.tau_thresh[0]]
+            self.all_neg_samples = neg_tau_series.index.to_flat_index().values
+            pos_tau_series = tau_series[tau_series > self.tau_thresh[1]]
+            self.all_pos_samples = pos_tau_series.index.to_flat_index().values
+
+            # use set to select only the ones in the split
+            neg_samples = {pair: self.tau_percentile.sel(tid=pair[0], f_type=pair[1]).item() / 100 \
+                            for pair in self.all_neg_samples if pair[0] in split_ids}
+            pos_samples = {pair: self.tau_percentile.sel(tid=pair[0], f_type=pair[1]).item() / 100 \
+                            for pair in self.all_pos_samples if pair[0] in split_ids}
+
+            self.samples = pos_samples.copy()
+            self.samples.update(neg_samples)
+        self.ordered_keys = list(self.samples.keys())
+        self.tids = list(split_ids)
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        tid, feat = self.ordered_keys[idx]
+        track = slm.Track(tid)
+        config = ssdm.DEFAULT_LSD_CONFIG.copy()
+
+        if self.mode == 'rep':
+            rep_ssm = track.ssm(feature=feat, 
+                                distance=config['rep_metric'],
+                                width=config['rec_width'],
+                                full=config['rec_full'],
+                                **ssdm.REP_FEAT_CONFIG[feat]
+                                )
+            tau_percent = self.samples[(tid, feat)]
+            return {'data': torch.tensor(rep_ssm[None, None, :], dtype=torch.float32, device=self.device),
+                    'label': torch.tensor([tau_percent > 0.5], dtype=torch.float32, device=self.device)[None, :],
+                    'tau_percent': torch.tensor(tau_percent, dtype=torch.float32, device=self.device),
+                    'info': (tid, feat, self.mode),
+                    }
+        
+        elif self.mode == 'loc':
+            path_sim = track.path_sim(feature=feat, 
+                                      distance=config['loc_metric'],
+                                      **ssdm.LOC_FEAT_CONFIG[feat])
+
+            tau_percent = self.samples[(tid, feat)]
+            return {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
+                    'label': torch.tensor([tau_percent > 0.5], dtype=torch.float32)[None, :],
+                    'tau_percent': torch.tensor(tau_percent, dtype=torch.float32, device=self.device),
+                    'info': (tid, feat, self.mode),
+                    }
+       
+        else:
+            assert KeyError

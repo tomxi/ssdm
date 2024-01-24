@@ -13,13 +13,14 @@ from tqdm import tqdm
 import numpy as np
 import pandas as pd
 import xarray as xr
+import random
 
 class SlmDS(Dataset):
     """ split='train',
         mode='rep', # {'rep', 'loc'}
         infer=False,
         drop_features=[],
-        precomputed_tau_fp = '/home/xqx244/scanning-ssm/ssdm/taus_1107.nc'
+        precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/taus_1107.nc'
     """
     def __init__(self, 
                  split='train',
@@ -28,13 +29,17 @@ class SlmDS(Dataset):
                  drop_features=[],
                  precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/taus_1107.nc',
                 ):
-        if mode not in ('rep', 'loc'):
+        if mode not in ('rep', 'loc', 'both'):
             raise AssertionError('bad dataset mode, can only be rep or loc')
         self.mode = mode
         self.split = split
         # load precomputed taus, and drop feature and select tau type
         taus_full = xr.open_dataarray(precomputed_tau_fp)
+
+        
         self.tau_scores = taus_full.drop_sel(f_type=drop_features).sel(tau_type=mode)
+        if mode == 'both':
+            pass # TODO, get both scores
 
         # Get the threshold for upper and lower quartiles, 
         # and use them as positive and negative traning examples respectively
@@ -167,6 +172,24 @@ class HmxDS(Dataset):
        
         else:
             assert KeyError
+
+
+# TiME MASK DATA AUG
+def time_mask(spec, T=40, num_masks=1, replace_with_zero=True):
+    cloned = spec.clone()
+    len_spectro = cloned.shape[2]
+    
+    for i in range(0, num_masks):
+        t = random.randrange(0, T)
+        t_zero = random.randrange(0, len_spectro - t)
+
+        # avoids randrange error if values are equal and range is empty
+        if (t_zero == t_zero + t): return cloned
+
+        mask_end = random.randrange(t_zero, t_zero + t)
+        if (replace_with_zero): cloned[0][t_zero:mask_end,t_zero:mask_end] = 0
+        else: cloned[0][t_zero:mask_end,t_zero:mask_end] = cloned.mean()
+    return cloned
 
 
 # Training loops:

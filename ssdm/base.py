@@ -158,18 +158,16 @@ class Track(object):
             with open(ssm_path, 'rb') as f:
                 ssm = np.load(ssm_path, allow_pickle=True)
         except:
-            recompute=True
+            recompute = True
         
         # compute
         if recompute:
             # prepare feature matrix
             feat_mat = self.representation(feature, add_noise=add_noise, n_steps=n_steps, delay=delay)
-            
             # fix width with short tracks
             feat_max_width = ((feat_mat.shape[-1] - 1) // 2) - 5
             if width >= feat_max_width:
-                width=feat_max_width
-            
+                width=feat_max_width    
             # sometimes sym=True will give an error related to empty rows or something...
             try:   
                 ssm = recurrence_matrix(
@@ -180,7 +178,6 @@ class Track(object):
                 ssm = recurrence_matrix(
                     feat_mat, width=width, metric=distance, mode='affinity', sym=False, full=full,
                 )
-
             # store ssm
             with open(ssm_path, 'wb') as f:
                 np.save(f, ssm)
@@ -189,8 +186,6 @@ class Track(object):
     
     
     def path_sim(self, feature='mfcc', distance='sqeuclidean', add_noise=True, n_steps=6, delay=2, sigma_percentile=95, recompute=False): 
-        feat_mat = delay_embed(self.representation(feature), add_noise, n_steps, delay)
-
         path_sim_info_str = f'pathsim_{feature}_{distance}'
         feat_info_str = f'ns{n_steps}xd{delay}xap{sigma_percentile}{"_n" if add_noise else ""}'
         pathsim_path = os.path.join(
@@ -206,6 +201,7 @@ class Track(object):
             recompute = True
 
         if recompute:
+            feat_mat = delay_embed(self.representation(feature), add_noise, n_steps, delay)
             frames = feat_mat.shape[1]
             path_dist = []
             for i in range(frames-1):

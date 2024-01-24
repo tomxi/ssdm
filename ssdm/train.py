@@ -6,6 +6,7 @@ from tqdm import tqdm
 import json, argparse
 
 import ssdm.scanner as scn
+import ssdm.salami as slm
 
 # BACKUP, not using this anymore
 DROP_FEATURES=[]
@@ -39,9 +40,9 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE):
                                             step_size_up=1000)
 
     # setup dataloaders
-    train_dataset = scn.SlmDS('train', mode=TAU_TYPE, drop_features=DROP_FEATURES)
+    train_dataset = slm.DS('train', mode=TAU_TYPE, drop_features=DROP_FEATURES)
     train_loader = DataLoader(train_dataset, batch_size=None, shuffle=True)
-    val_dataset = scn.SlmDS('val', mode=TAU_TYPE, drop_features=DROP_FEATURES)
+    val_dataset = slm.DS('val', mode=TAU_TYPE, drop_features=DROP_FEATURES)
 
     # pretrain check-up
     net_eval_val = scn.net_eval(val_dataset, net, criterion, device, verbose=True)

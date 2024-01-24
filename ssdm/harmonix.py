@@ -1,8 +1,12 @@
 import numpy as np
-import os, json
+import os, json, itertools
 from glob import glob
 
 from . import base
+import ssdm
+
+import torch
+from torch.utils.data import Dataset
 
 import xarray as xr
 from tqdm import tqdm
@@ -51,3 +55,56 @@ def get_lsd_scores(
         score_per_track.append(track_score)
     
     return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
+
+
+class DS(Dataset):
+    """ 
+    mode='rep', # {'rep', 'loc'}
+    """
+    def __init__(self, mode='rep'):
+        if mode not in ('rep', 'loc'):
+            raise AssertionError('bad dataset mode, can only be rep or loc')
+        self.mode = mode
+        self.tids = ssdm.get_ids('harmonix', out_type='list')
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
+        self.samples = list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES))
+        self.samples.sort()
+
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        tid, feat = self.samples[idx]
+        track = Track(tid)
+
+        config = ssdm.DEFAULT_LSD_CONFIG.copy()
+
+        if self.mode == 'rep':
+            rep_ssm = track.ssm(feature=feat, 
+                                distance=config['rep_metric'],
+                                width=config['rec_width'],
+                                full=config['rec_full'],
+                                **ssdm.REP_FEAT_CONFIG[feat]
+                                )
+
+            return {'data': torch.tensor(rep_ssm[None, None, :], dtype=torch.float32, device=self.device),
+                    'info': (tid, feat, self.mode),
+                    }
+        
+        elif self.mode == 'loc':
+            path_sim = track.path_sim(feature=feat, 
+                                      distance=config['loc_metric'],
+                                      **ssdm.LOC_FEAT_CONFIG[feat])
+
+            return {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
+                    'info': ('harmonix', tid, feat, self.mode),
+                    }
+       
+        else:
+            assert KeyError

@@ -11,51 +11,56 @@ import pandas as pd
 from tqdm import tqdm
 from glob import glob
 
+import librosa
+
 class Track(base.Track):
     def __init__(
         self,
-        tid: str = '01-01', # 'disc-track'
-        dataset_dir: str = '/home/qx244/msaf-data/BeatlesTUT', 
-        output_dir: str = '/vast/qx244/beatles/',
-        feature_dir: str = '/vast/qx244/beatles/features/',
-        audio_dir: str = '/scratch/work/sonyc/marl/private_datasets/Beatles/Audio'
+        tid: str = '1', #(1-100)
+        dataset_dir: str = '/scratch/work/marl/datasets/mir_datasets/rwc_popular/', 
+        output_dir: str = '/vast/qx244/rwc_pop/',
+        feature_dir: str = '/vast/qx244/rwc_pop/features/',
+        audio_dir: str = '/scratch/work/marl/datasets/mir_datasets/rwc_popular/audio'
     ):
         super().__init__(tid, dataset_dir, output_dir, feature_dir)
-        disc, track = tid.split('-')
-        if disc == '10':
-            basename = f'10_-_The_Beatles_CD1/{track}*'
-        elif disc == '11':
-            basename = f'10_-_The_Beatles_CD2/{track}*'
-        else:
-            basename = f'{disc}*/{track}*'
-        self.audio_path = glob(os.path.join(audio_dir, basename))[0]
-        self.title = os.path.basename(self.audio_path)[:-4]
+
+        metadata_csv = pd.read_csv(os.path.join(dataset_dir, 'metadata-master/rwc-p.csv'))
+        self.metadata = metadata_csv[metadata_csv['Piece No.'] == f'No. {tid}']
+
+        self.title = self.metadata['Title'].item()
+        self.audio_path = os.path.join(audio_dir, f'{tid}.wav')
+
 
     def jam(self):
         if self._jam is None:
-            jam_path = os.path.join(self.dataset_dir, f'references/{self.title}.jams')
-            self._jam = jams.load(jam_path)
+            # create jams file from metadata 
+            j = jams.JAMS()
+            j.file_metadata.duration = librosa.get_duration(path=self.audio_path)
+            j.file_metadata.title = self.metadata['Title'].item()
+            j.file_metadata.artist = self.metadata['Artist (Vocal)'].item()
+
+
+            anno_path = os.path.join(self.dataset_dir, f'annotations/AIST.RWC-MDB-P-2001.CHORUS/RM-P{int(self.tid):03d}.CHORUS.TXT')
+            org_anno = pd.read_csv(anno_path, delimiter='\t', header=None, usecols=[0,1,2])
+            new_anno = jams.Annotation('segment_open')
+
+            for idx, row in org_anno.iterrows():
+                new_anno.append(time = row[0] / 100,
+                                duration = (row[1] - row[0]) / 100,
+                                value = row[2])
+                
+            j.annotations.append(new_anno)
+            self._jam = j
         return self._jam
 
 
 def get_ids(out_type: str = 'list'):
-    audio_dir = '/scratch/work/sonyc/marl/private_datasets/Beatles/Audio/'
-    albums = os.listdir(audio_dir)
+    tids = [str(tid) for tid in range(1, 101)]
 
-    tids = []
-    for disc in albums:
-        disc_id = disc.split('_')[0]
-        if disc[-1] == '2':
-            disc_id = '11'
-        disc_dir = os.path.join(audio_dir, disc)
-        tracks = glob(os.path.join(disc_dir, '*.wav'))
-        tids += [f'{disc_id}-{tid+1:02d}' for tid in range(len(tracks))]
-    tids.sort()
-
-    valid_set = set(tids) - set(['10-05', '10-08', '11-06', '11-12', '12-09', '12-16']) # these tracks are missing annotation
-    tids = list(valid_set)
-    tids.sort()
-    return tids
+    if out_type == 'set':
+        return set(tids)
+    else:
+        return tids
     
 
 def get_lsd_scores(

@@ -1,195 +1,46 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-import itertools
+from torch.utils.data import DataLoader
 
-# import librosa
 import ssdm
-from ssdm import harmonix as hmx
-from ssdm import salami as slm
-from scipy import stats
 
 from tqdm import tqdm
-import numpy as np
 import pandas as pd
 import xarray as xr
 import random
 
-class SlmDS(Dataset):
-    """ split='train',
-        mode='rep', # {'rep', 'loc'}
-        infer=False,
-        drop_features=[],
-        precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/taus_1107.nc'
-    """
-    def __init__(self, 
-                 split='train',
-                 mode='rep', # {'rep', 'loc'}
-                 infer=False,
-                 drop_features=[],
-                 precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/taus_1107.nc',
-                ):
-        if mode not in ('rep', 'loc', 'both'):
-            raise AssertionError('bad dataset mode, can only be rep or loc')
-        self.mode = mode
-        self.split = split
-        # load precomputed taus, and drop feature and select tau type
-        taus_full = xr.open_dataarray(precomputed_tau_fp)
+import numpy as np
 
-        
-        self.tau_scores = taus_full.drop_sel(f_type=drop_features).sel(tau_type=mode)
-        if mode == 'both':
-            pass # TODO, get both scores
+# TiME MASK DATA AUG on sample, adapted from SpecAugment 
+def time_mask(sample, T=40, num_masks=1, replace_with_zero=False, tau='rep'):
+    rec_mat = sample['data']
 
-        # Get the threshold for upper and lower quartiles, 
-        # and use them as positive and negative traning examples respectively
-        tau_percentile_flat = stats.percentileofscore(self.tau_scores.values.flatten(), self.tau_scores.values.flatten())
-        self.tau_percentile = self.tau_scores.copy(data=tau_percentile_flat.reshape(self.tau_scores.shape))
-        self.tau_thresh = [np.percentile(self.tau_scores, 25), np.percentile(self.tau_scores, 75)]
-        
-        tau_series = self.tau_scores.to_series()
-        split_ids = ssdm.get_ids(split, out_type='set')
-
-        if torch.cuda.is_available():
-            self.device = torch.device("cuda")
-        else:
-            self.device = torch.device("cpu")
-
-        self.infer = infer
-        if infer:
-            # just get all the combos, returns the percentile of the sample tau value [0~1]
-            self.samples = {pair: self.tau_percentile.sel(tid=pair[0], f_type=pair[1]).item() / 100 \
-                            for pair in tau_series.index.to_flat_index().values \
-                            if pair[0] in split_ids}
-        else:
-            # use threshold to prepare training data
-            # calculate threshold from all taus
-            neg_tau_series = tau_series[tau_series < self.tau_thresh[0]]
-            self.all_neg_samples = neg_tau_series.index.to_flat_index().values
-            pos_tau_series = tau_series[tau_series > self.tau_thresh[1]]
-            self.all_pos_samples = pos_tau_series.index.to_flat_index().values
-
-            # use set to select only the ones in the split
-            neg_samples = {pair: self.tau_percentile.sel(tid=pair[0], f_type=pair[1]).item() / 100 \
-                            for pair in self.all_neg_samples if pair[0] in split_ids}
-            pos_samples = {pair: self.tau_percentile.sel(tid=pair[0], f_type=pair[1]).item() / 100 \
-                            for pair in self.all_pos_samples if pair[0] in split_ids}
-
-            self.samples = pos_samples.copy()
-            self.samples.update(neg_samples)
-        self.ordered_keys = list(self.samples.keys())
-        self.tids = list(split_ids)
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-
-        tid, feat = self.ordered_keys[idx]
-        track = slm.Track(tid)
-        config = ssdm.DEFAULT_LSD_CONFIG.copy()
-
-        if self.mode == 'rep':
-            rep_ssm = track.ssm(feature=feat, 
-                                distance=config['rep_metric'],
-                                width=config['rec_width'],
-                                full=config['rec_full'],
-                                **ssdm.REP_FEAT_CONFIG[feat]
-                                )
-            tau_percent = self.samples[(tid, feat)]
-            return {'data': torch.tensor(rep_ssm[None, None, :], dtype=torch.float32, device=self.device),
-                    'label': torch.tensor([tau_percent > 0.5], dtype=torch.float32, device=self.device)[None, :],
-                    'tau_percent': torch.tensor(tau_percent, dtype=torch.float32, device=self.device),
-                    'info': (tid, feat, self.mode),
-                    }
-        
-        elif self.mode == 'loc':
-            path_sim = track.path_sim(feature=feat, 
-                                      distance=config['loc_metric'],
-                                      **ssdm.LOC_FEAT_CONFIG[feat])
-
-            tau_percent = self.samples[(tid, feat)]
-            return {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
-                    'label': torch.tensor([tau_percent > 0.5], dtype=torch.float32)[None, :],
-                    'tau_percent': torch.tensor(tau_percent, dtype=torch.float32, device=self.device),
-                    'info': (tid, feat, self.mode),
-                    }
-       
-        else:
-            assert KeyError
-
-
-class HmxDS(Dataset):
-    """ 
-    mode='rep', # {'rep', 'loc'}
-    """
-    def __init__(self, mode='rep'):
-        if mode not in ('rep', 'loc'):
-            raise AssertionError('bad dataset mode, can only be rep or loc')
-        self.mode = mode
-        self.tids = ssdm.get_ids('harmonix', out_type='list')
-        if torch.cuda.is_available():
-            self.device = torch.device("cuda")
-        else:
-            self.device = torch.device("cpu")
-        self.samples = list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES))
-        self.samples.sort()
-
-    def __len__(self):
-        return len(self.samples)
+    cloned = rec_mat.clone()
+    len_rec_mat = cloned.shape[2]
     
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-
-        tid, feat = self.samples[idx]
-        track = hmx.Track(tid)
-
-        config = ssdm.DEFAULT_LSD_CONFIG.copy()
-
-        if self.mode == 'rep':
-            rep_ssm = track.ssm(feature=feat, 
-                                distance=config['rep_metric'],
-                                width=config['rec_width'],
-                                full=config['rec_full'],
-                                **ssdm.REP_FEAT_CONFIG[feat]
-                                )
-
-            return {'data': torch.tensor(rep_ssm[None, None, :], dtype=torch.float32, device=self.device),
-                    'info': (tid, feat, self.mode),
-                    }
-        
-        elif self.mode == 'loc':
-            path_sim = track.path_sim(feature=feat, 
-                                      distance=config['loc_metric'],
-                                      **ssdm.LOC_FEAT_CONFIG[feat])
-
-            return {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
-                    'info': ('harmonix', tid, feat, self.mode),
-                    }
-       
-        else:
-            assert KeyError
-
-
-# TiME MASK DATA AUG
-def time_mask(spec, T=40, num_masks=1, replace_with_zero=True):
-    cloned = spec.clone()
-    len_spectro = cloned.shape[2]
-    
-    for i in range(0, num_masks):
-        t = random.randrange(0, T)
-        t_zero = random.randrange(0, len_spectro - t)
+    for _ in range(0, num_masks):
+        t = min(random.randrange(0, T), len_rec_mat - 1)
+        t_zero = random.randrange(0, len_rec_mat - t)
 
         # avoids randrange error if values are equal and range is empty
-        if (t_zero == t_zero + t): return cloned
+        if (t_zero == t_zero + t): break
 
         mask_end = random.randrange(t_zero, t_zero + t)
-        if (replace_with_zero): cloned[0][t_zero:mask_end,t_zero:mask_end] = 0
-        else: cloned[0][t_zero:mask_end,t_zero:mask_end] = cloned.mean()
-    return cloned
+
+        if tau == 'rep':
+            if (replace_with_zero): 
+                cloned[0, 0][t_zero:mask_end, :] = 0
+                cloned[0, 0][:, t_zero:mask_end] = 0
+            else: 
+                mat_mean = cloned.mean()
+                cloned[0, 0][t_zero:mask_end, :] = mat_mean
+                cloned[0, 0][:, t_zero:mask_end] = mat_mean
+        elif tau == 'loc':
+            if (replace_with_zero): cloned[0, 0][t_zero:mask_end] = 0
+            else: cloned[0, 0][t_zero:mask_end] = cloned.mean()
+
+    sample['data'] = cloned
+    return sample
 
 
 # Training loops:
@@ -245,7 +96,7 @@ def net_infer(infer_ds, net, device='cpu', out_type='pd'):
     net.eval()
     with torch.no_grad():
         for s in tqdm(infer_loader):
-            tid, feat, _= s['info']
+            tid, feat = s['info'][:2]
             data = s['data'].to(device)
             tau_hat = net(data)
             result_df.loc[tid][feat] = tau_hat.item()

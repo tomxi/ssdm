@@ -20,6 +20,7 @@ from ssdm import salami as slm
 import ssdm
 # import musicsections as ms
 
+#DEPREE These belong in each dataset's code
 def get_ids(
     split: str = 'working',
     out_type: str = 'list' # one of {'set', 'list'}
@@ -57,6 +58,7 @@ def lucky_track(tids=get_ids(split='working'), announce=True):
     return slm.Track(tid)
 
 
+# MOVE TO SALAMI
 # add new splits to split_ids.json
 def update_split_json(split_name='', split_idx=[]):
     # add new splits to split_id.json file at json_path
@@ -82,7 +84,8 @@ def update_split_json(split_name='', split_idx=[]):
     with open(json_path, 'r') as f:
         return json.load(f)
 
-    
+
+# MOVE TO SALAMI    
 def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
     dev_set, test_set = train_test_split(arr, test_size = test_ratio, random_state = random_state)
     train_set, val_set = train_test_split(dev_set, test_size = val_ratio / (1 - test_ratio), random_state = random_state)
@@ -229,6 +232,8 @@ def openseg2multi(
                              )
     
     return multi_anno
+
+
 ### END OF FORMATTING FUNCTIONS###
 
 ## Score collecting functions
@@ -242,7 +247,7 @@ def init_empty_xr(grid_coords, name=None):
                         name=name,
                         )
 
-
+# Move to SALAMI
 def get_lsd_scores(
     tids=[], 
     anno_col_fn=lambda stack: stack.max(dim='anno_id'), 
@@ -261,7 +266,7 @@ def get_lsd_scores(
     
     return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
 
-
+# Move to SALAMI
 def get_adobe_scores(
     tids=[],
     anno_col_fn=lambda stack: stack.max(dim='anno_id'),
@@ -280,7 +285,7 @@ def get_adobe_scores(
     
     return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
 
-
+# Move to SALAMI
 def get_taus(
     tids=[], 
     anno_col_fn=lambda stack: stack.max(dim='anno_id'),

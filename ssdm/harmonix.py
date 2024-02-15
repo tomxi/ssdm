@@ -1,5 +1,5 @@
 import numpy as np
-import os, json, itertools
+import os, json, itertools, pkg_resources
 from glob import glob
 
 from . import base
@@ -28,6 +28,24 @@ class Track(base.Track):
 
     def audio(self, **kwargs):
         print('Audio not Available')
+        return None
+
+
+def get_ids(
+    out_type: str = 'list' # one of {'set', 'list'}
+) -> list:
+    id_path = pkg_resources.resource_filename('ssdm', 'split_ids.json')
+    with open(id_path, 'r') as f:
+        id_json = json.load(f)
+    ids = id_json['harmonix']
+        
+    if out_type == 'set':
+        return set(ids)
+    elif out_type == 'list':
+        ids.sort()
+        return ids
+    else:
+        print('invalid out_type')
         return None
 
 
@@ -103,7 +121,7 @@ class DS(Dataset):
                                       **ssdm.LOC_FEAT_CONFIG[feat])
 
             return {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
-                    'info': ('harmonix', tid, feat, self.mode),
+                    'info': (tid, feat, self.mode),
                     }
        
         else:

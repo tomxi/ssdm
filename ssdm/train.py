@@ -32,15 +32,26 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE):
          'weight_decay': 1e-5}  # Only weight decay for the specified layer
     ])
 
-    lr_scheduler = optim.lr_scheduler.CyclicLR(optimizer,
-                                            base_lr=1e-9,
-                                            max_lr=1e-4,
-                                            cycle_momentum=False,
-                                            mode='triangular',
-                                            step_size_up=1000)
+    if TAU_TYPE == 'rep':
+        lr_scheduler = optim.lr_scheduler.CyclicLR(optimizer,
+                                                base_lr=1e-9,
+                                                max_lr=1e-4,
+                                                cycle_momentum=False,
+                                                mode='triangular',
+                                                step_size_up=1000)
+        
+    elif TAU_TYPE == 'loc':
+        lr_scheduler = optim.lr_scheduler.CyclicLR(optimizer,
+                                                base_lr=1e-9,
+                                                max_lr=1e-3,
+                                                cycle_momentum=False,
+                                                mode='triangular',
+                                                step_size_up=5000)
+
+    augmentor = lambda x: scn.time_mask(x, T=100, num_masks=4, replace_with_zero=False, tau=TAU_TYPE)
 
     # setup dataloaders
-    train_dataset = slm.DS('train', mode=TAU_TYPE, drop_features=DROP_FEATURES)
+    train_dataset = slm.DS('train', mode=TAU_TYPE, drop_features=DROP_FEATURES, transform=augmentor)
     train_loader = DataLoader(train_dataset, batch_size=None, shuffle=True)
     val_dataset = slm.DS('val', mode=TAU_TYPE, drop_features=DROP_FEATURES)
 

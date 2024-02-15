@@ -169,7 +169,7 @@ class DS(Dataset):
                                       **ssdm.LOC_FEAT_CONFIG[feat])
 
             return {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
-                    'info': ('jsd', tid, feat, self.mode),
+                    'info': (tid, feat, self.mode),
                     }
        
         else:

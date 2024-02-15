@@ -4,13 +4,17 @@ from ssdm import base
 import torch
 from torch.utils.data import Dataset
 
-import os, json
+import os, json, pkg_resources
 import librosa, jams
 import numpy as np
 import xarray as xr
 import pandas as pd
+from tqdm import tqdm
+
+from scipy import stats
 
 from ssdm.expand_hier import expand_hierarchy
+
 
 class Track(base.Track):
     def __init__(
@@ -114,6 +118,47 @@ class Track(base.Track):
         return pd_series.to_xarray()
 
 
+def get_lsd_scores(
+    tids=[], 
+    **lsd_score_kwargs
+) -> xr.DataArray:
+    score_per_track = []
+    for tid in tqdm(tids):
+        track = Track(tid)
+        track_score = track.lsd_score(**lsd_score_kwargs)
+        score_per_track.append(track_score)
+    
+    return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
+
+
+def get_ids(
+    split: str = 'working',
+    out_type: str = 'list' # one of {'set', 'list'}
+) -> list:
+    """ split can be ['audio', 'jams', 'excluded', 'new_val', 'new_test', 'new_train']
+        Dicts sotred in id_path json file.
+    """
+    id_path = pkg_resources.resource_filename('ssdm', 'split_ids.json')
+    try:
+        with open(id_path, 'r') as f:
+            id_json = json.load(f)
+    except FileNotFoundError:
+        id_json = dict()
+        id_json[split] = []
+        with open(id_path, 'w') as f:
+            json.dump(id_json, f)
+    ids = id_json[split]
+        
+    if out_type == 'set':
+        return set(ids)
+    elif out_type == 'list':
+        ids.sort()
+        return ids
+    else:
+        print('invalid out_type')
+        return None
+
+
 class DS(Dataset):
     """ split='train',
         mode='rep', # {'rep', 'loc'}
@@ -127,7 +172,10 @@ class DS(Dataset):
                  infer=False,
                  drop_features=[],
                  precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/taus_1107.nc',
+                 transform = None
                 ):
+        self.transform = transform
+
         if mode not in ('rep', 'loc', 'both'):
             raise AssertionError('bad dataset mode, can only be rep or loc')
         self.mode = mode
@@ -147,7 +195,7 @@ class DS(Dataset):
         self.tau_thresh = [np.percentile(self.tau_scores, 25), np.percentile(self.tau_scores, 75)]
         
         tau_series = self.tau_scores.to_series()
-        split_ids = ssdm.get_ids(split, out_type='set')
+        split_ids = get_ids(split, out_type='list')
 
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
@@ -187,7 +235,7 @@ class DS(Dataset):
             idx = idx.tolist()
 
         tid, feat = self.ordered_keys[idx]
-        track = slm.Track(tid)
+        track = Track(tid)
         config = ssdm.DEFAULT_LSD_CONFIG.copy()
 
         if self.mode == 'rep':
@@ -198,7 +246,7 @@ class DS(Dataset):
                                 **ssdm.REP_FEAT_CONFIG[feat]
                                 )
             tau_percent = self.samples[(tid, feat)]
-            return {'data': torch.tensor(rep_ssm[None, None, :], dtype=torch.float32, device=self.device),
+            sample = {'data': torch.tensor(rep_ssm[None, None, :], dtype=torch.float32, device=self.device),
                     'label': torch.tensor([tau_percent > 0.5], dtype=torch.float32, device=self.device)[None, :],
                     'tau_percent': torch.tensor(tau_percent, dtype=torch.float32, device=self.device),
                     'info': (tid, feat, self.mode),
@@ -210,7 +258,7 @@ class DS(Dataset):
                                       **ssdm.LOC_FEAT_CONFIG[feat])
 
             tau_percent = self.samples[(tid, feat)]
-            return {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
+            sample = {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
                     'label': torch.tensor([tau_percent > 0.5], dtype=torch.float32)[None, :],
                     'tau_percent': torch.tensor(tau_percent, dtype=torch.float32, device=self.device),
                     'info': (tid, feat, self.mode),
@@ -218,3 +266,8 @@ class DS(Dataset):
        
         else:
             assert KeyError
+
+        if self.transform:
+            sample = self.transform(sample)
+
+        return sample

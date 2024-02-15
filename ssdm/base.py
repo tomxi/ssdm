@@ -25,7 +25,7 @@ class Track(object):
         feature_dir: str = '',
     ):
         self.tid = tid
-        self.dataset_dir = dataset_dir
+        self.dataset_dir = dataset_dir # where annotations are
         self.output_dir = output_dir
         self.feature_dir = feature_dir
 
@@ -420,6 +420,29 @@ class Track(object):
                 tau.to_netcdf(record_path)
         # return tau
         return tau.sel(**tau_sel_dict)
+
+
+class MyTrack(Track):
+    def __init__(self,
+                 audio_dir='/vast/qx244/my_tracks/audio', 
+                 output_dir='/vast/qx244/my_tracks', 
+                 title='gun_test.mp3',
+                ):
+        
+        super().__init__(tid=title, output_dir=output_dir)
+        
+        self.audio_dir = audio_dir
+        self.audio_path = os.path.join(audio_dir, title)
+        self.feature_dir = os.path.join(output_dir, 'features')
+        
+    def jam(self):
+        if self._jam is None:
+            j = jams.JAMS()
+            j.file_metadata.duration = librosa.get_duration(path=self.audio_path)
+            j.file_metadata.title = self.title
+            self._jam = j
+            
+        return self._jam
 
 
 def delay_embed(

@@ -579,6 +579,7 @@ class LocNet(nn.Module):
         r = self.loc_predictor(x)
         return r
 
+
 AVAL_MODELS = {
     'SmallRepOnly': SmallRepOnly,
     'LocOnly': LocOnly,
@@ -596,6 +597,7 @@ AVAL_MODELS = {
     'RepSwishDo2': RepSwishDo2,
     'RepSD3': RepSD3,
     'RepNet': RepNet,
+    'LocNet': LocNet,
 }
 
 ## https://github.com/scipy/scipy/blob/v1.11.3/scipy/sparse/csgraph/_laplacian.py#L524

@@ -49,6 +49,7 @@ def get_ids(
         return None
 
 
+#DEPREE These belong in each dataset's code
 def lucky_track(tids=get_ids(split='working'), announce=True):
     """Randomly pick a track from tids"""
     rand_idx = int(np.floor(np.random.rand() * len(tids)))
@@ -95,7 +96,7 @@ def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
     return train_set, val_set, test_set
 
 
-### Stand alone functions from Salami.py
+### Stand alone functions
 def anno_to_meet(
     anno: jams.Annotation, 
     ts: list,
@@ -232,6 +233,21 @@ def openseg2multi(
                              )
     
     return multi_anno
+
+
+def layer2mireval(multi_anno, layer=-1):
+    all_itvls, all_labels = multiseg_to_mireval(multi_anno)
+    return all_itvls[layer], all_labels[layer]
+
+
+def layer2openseg(multi_anno, layer=-1):
+    itvls, labels = layer2mireval(multi_anno, layer)
+    anno = jams.Annotation(namespace='segment_open')
+    for ival, label in zip(itvls, labels):
+        anno.append(time=ival[0], 
+                    duration=ival[1]-ival[0],
+                    value=str(label))
+    return anno
 
 
 ### END OF FORMATTING FUNCTIONS###

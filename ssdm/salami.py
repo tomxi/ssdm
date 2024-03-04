@@ -27,14 +27,6 @@ class Track(base.Track):
         super().__init__(tid, dataset_dir=dataset_dir, output_dir=output_dir, feature_dir=feature_dir)
         self.audio_path = os.path.join(dataset_dir, f'audio/{tid}/audio.mp3')
 
-    # def audio(
-    #     self, 
-    #     sr: float = 22050
-    # ) -> tuple:
-    #     if self._sr != sr:
-    #         self._y, self._sr = librosa.load(self.audio_path, sr=sr)
-    #     return self._y, self._sr
-
 
     def num_annos(
         self,
@@ -271,3 +263,4 @@ class DS(Dataset):
             sample = self.transform(sample)
 
         return sample
+

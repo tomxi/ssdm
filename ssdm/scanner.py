@@ -66,6 +66,7 @@ def train_epoch(ds_loader, net, criterion, optimizer, batch_size=8, lr_scheduler
                 lr_scheduler.step()
     return (running_loss / len(ds_loader)).item()
 
+
 # eval tools:
 def net_eval(ds, net, criterion, device='cpu', verbose=False):
     # ds_loader just need to be a iterable of samples
@@ -110,6 +111,7 @@ def net_infer(infer_ds, net, device='cpu', out_type='pd'):
             dims=['tid', 'f_type']
         )
         return xr_da
+
 
 #####  MODELS ### MODELS #####       
 class SmallRepOnly(nn.Module):
@@ -172,7 +174,7 @@ class LocOnly(nn.Module):
 
 class LocModel(nn.Module):
     def __init__(self):
-        super(LocModel, self).__init__()
+        super().__init__()
 
         self.activation = TempSwish
         self.dropout = nn.Dropout(0.2)
@@ -471,6 +473,112 @@ class RepModel2(nn.Module):
         return r
 
 
+class RepNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+        self.activation = TempSwish
+        self.dropout = nn.Dropout(0.2)
+        self.maxpool = nn.AdaptiveMaxPool2d((216, 216))
+        
+        self.convlayers1 = nn.Sequential(
+            nn.Conv2d(1, 8, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(8, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(8, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+        )
+
+        self.convlayers2 = nn.Sequential(
+            nn.Conv2d(12, 16, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+        )
+
+        self.convlayers3 = nn.Sequential(
+            nn.Conv2d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(24, 24, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+        )
+
+        self.rep_predictor = nn.Sequential(
+            nn.Linear(24 * 6 * 6, 24),
+            self.dropout,
+            self.activation(),
+            nn.Linear(24, 1), 
+            nn.Sigmoid()
+        )
+
+          
+    def forward(self, x):
+        x = self.convlayers1(x)
+        x = self.dropout(x)
+        x = self.maxpool(x)
+
+        x = self.convlayers2(x)
+        x = self.dropout(x)
+        x = self.convlayers3(x)
+
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        x = self.dropout(x)
+        r = self.rep_predictor(x)
+        return r
+
+
+class LocNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.activation = TempSwish
+        self.dropout = nn.Dropout(0.15)
+
+        self.maxpool = nn.AdaptiveMaxPool1d(216)
+        
+        self.convlayers1 = nn.Sequential(
+            nn.Conv1d(1, 8, kernel_size=5, padding='same', bias=False), nn.InstanceNorm1d(8, eps=0.01), self.activation(),
+            nn.MaxPool1d(kernel_size=3, stride=3),
+            nn.Conv1d(8, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm1d(12, eps=0.01), self.activation(),
+            nn.MaxPool1d(kernel_size=3, stride=3),
+            # nn.Conv1d(12, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm1d(12, eps=0.01), self.activation(), 
+        )
+
+        self.convlayers2 = nn.Sequential(
+            nn.Conv1d(12, 16, kernel_size=7, padding='same', bias=False), nn.InstanceNorm1d(16, eps=0.01), self.activation(),
+            nn.MaxPool1d(kernel_size=3, stride=3),
+            nn.Conv1d(16, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm1d(24, eps=0.01), self.activation(),
+            nn.MaxPool1d(kernel_size=3, stride=3),
+        )
+
+        self.convlayers3 = nn.Sequential(
+            nn.Conv1d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm1d(24, eps=0.01), self.activation(),
+            nn.MaxPool1d(kernel_size=2, stride=2),
+            nn.Conv1d(24, 24, kernel_size=5, padding='same', bias=False), nn.InstanceNorm1d(24, eps=0.01), self.activation(),
+            nn.MaxPool1d(kernel_size=2, stride=2),
+        )
+
+        self.loc_predictor = nn.Sequential(
+            nn.Linear(24 * 6, 24),
+            self.dropout, 
+            self.activation(),
+            nn.Linear(24, 1), 
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        x = self.convlayers1(x)
+        x = self.dropout(x)
+        x = self.maxpool(x)
+
+        x = self.convlayers2(x)
+        x = self.dropout(x)
+        x = self.convlayers3(x)
+
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        x = self.dropout(x)
+        r = self.loc_predictor(x)
+        return r
+
 AVAL_MODELS = {
     'SmallRepOnly': SmallRepOnly,
     'LocOnly': LocOnly,
@@ -487,6 +595,7 @@ AVAL_MODELS = {
     'RepLessDropout2': RepLessDropout2, # **
     'RepSwishDo2': RepSwishDo2,
     'RepSD3': RepSD3,
+    'RepNet': RepNet,
 }
 
 ## https://github.com/scipy/scipy/blob/v1.11.3/scipy/sparse/csgraph/_laplacian.py#L524

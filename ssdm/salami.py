@@ -1,5 +1,5 @@
 import ssdm
-from ssdm import base
+from ssdm import base, salami as slm
 
 import torch
 from torch.utils.data import Dataset
@@ -76,7 +76,7 @@ class Track(base.Track):
         with open(os.path.join(result_dir, filename), 'rb') as f:
             adobe_hier = json.load(f)
 
-        anno = ssdm.hier_to_multiseg(adobe_hier)
+        anno = ssdm.hier2multi(adobe_hier)
         anno.sandbox.update(mu=0.1, gamma=0.1)
         return anno
 
@@ -219,6 +219,13 @@ class DS(Dataset):
         self.ordered_keys = list(self.samples.keys())
         self.tids = list(split_ids)
 
+
+    def track_obj(self, **track_kwargs):
+        return Track(**track_kwargs)
+    
+    def __repr__(self):
+        return 'salami' + self.mode + self.split
+    
     def __len__(self):
         return len(self.samples)
 
@@ -263,4 +270,23 @@ class DS(Dataset):
             sample = self.transform(sample)
 
         return sample
+
+
+def get_adobe_scores(
+    tids=[],
+    anno_col_fn=lambda stack: stack.max(dim='anno_id'),
+    l_frame_size=0.1
+) -> xr.DataArray:
+    score_per_track = []
+    for tid in tqdm(tids):
+        track = Track(tid)
+        score_per_anno = []
+        for anno_id in range(track.num_annos()):
+            score_per_anno.append(track.adobe_l(anno_id=anno_id, l_frame_size=l_frame_size))
+
+        anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
+        track_flat = anno_col_fn(anno_stack)
+        score_per_track.append(track_flat)
+
+    return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
 

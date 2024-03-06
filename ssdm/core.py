@@ -90,4 +90,4 @@ def run_lsd(
     # Spectral Clustering with Config
     est_bdry_idxs, est_sgmt_labels = sc.do_segmentation_ssm(rep_ssm, path_sim, config)
     est_bdry_itvls = [sc.times_to_intervals(track.ts()[lvl]) for lvl in est_bdry_idxs]
-    return mireval_to_multiseg(est_bdry_itvls, est_sgmt_labels)
+    return mireval2multi(est_bdry_itvls, est_sgmt_labels)

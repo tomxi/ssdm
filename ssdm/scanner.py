@@ -557,7 +557,7 @@ class LocNet(nn.Module):
             nn.MaxPool1d(kernel_size=2, stride=2),
         )
 
-        self.loc_predictor = nn.Sequential(
+        self.rep_predictor = nn.Sequential(
             nn.Linear(24 * 6, 24),
             self.dropout, 
             self.activation(),
@@ -576,7 +576,7 @@ class LocNet(nn.Module):
 
         x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
         x = self.dropout(x)
-        r = self.loc_predictor(x)
+        r = self.rep_predictor(x)
         return r
 
 

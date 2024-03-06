@@ -7,7 +7,6 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn import preprocessing, cluster
 
-from tqdm import tqdm
 
 import jams
 import mir_eval
@@ -153,8 +152,8 @@ def compute_l(
     annotation: jams.Annotation,
     l_frame_size: float = 0.1
 ) -> np.array:
-    anno_interval, anno_label = multiseg_to_mireval(annotation)
-    proposal_interval, proposal_label = multiseg_to_mireval(proposal)
+    anno_interval, anno_label = multi2mireval(annotation)
+    proposal_interval, proposal_label = multi2mireval(proposal)
 
     # make last segment for estimation end at the same time as annotation
     end = max(anno_interval[-1][-1, 1], proposal_interval[-1][-1, 1])
@@ -169,8 +168,38 @@ def compute_l(
     )
 
 
+def compute_flat(
+    proposal: jams.Annotation, #Multi-seg
+    annotation: jams.Annotation, #Multi-seg,
+    # p_layer = -1,
+    a_layer = -1
+) -> np.array:
+    # TODO change the following 2 lines
+    ref_inter, ref_labels = ssdm.multi2mirevalflat(annotation, layer=a_layer) # Which anno layer?
+
+    num_prop_layers = len(multi2hier(proposal))
+    results = dict()
+    for p_layer in range(num_prop_layers):
+        est_inter, est_labels = ssdm.multi2mirevalflat(proposal, layer=p_layer)
+
+        # make last segment for estimation end at the same time as annotation
+        end_time = max(ref_inter[-1, 1], est_inter[-1, 1])
+        ref_inter[-1, 1] = end_time
+        est_inter[-1, 1] = end_time
+
+        results[str(p_layer)] = dict(
+            hr=mir_eval.segment.detection(ref_inter, est_inter, window=.5, trim=True),
+            hr3=mir_eval.segment.detection(ref_inter, est_inter, window=3, trim=True),
+            pfc=mir_eval.segment.pairwise(ref_inter, ref_labels, est_inter, est_labels),
+            nce=mir_eval.segment.vmeasure(ref_inter, ref_labels, est_inter, est_labels)
+        )
+
+    # Trun results into xarrays
+
+    return results
+
 ### Formatting functions ###
-def multiseg_to_hier(anno)-> list:
+def multi2hier(anno)-> list:
     n_lvl_list = [obs.value['level'] for obs in anno]
     n_lvl = max(n_lvl_list) + 1
     hier = [[[],[]] for i in range(n_lvl)]
@@ -183,7 +212,7 @@ def multiseg_to_hier(anno)-> list:
     return hier
 
 
-def hier_to_multiseg(hier) -> jams.Annotation:
+def hier2multi(hier) -> jams.Annotation:
     anno = jams.Annotation(namespace='multi_segment')
     for layer, (intervals, labels) in enumerate(hier):
         for ival, label in zip(intervals, labels):
@@ -193,7 +222,7 @@ def hier_to_multiseg(hier) -> jams.Annotation:
     return anno
 
 
-def hier_to_mireval(hier) -> tuple:
+def hier2mireval(hier) -> tuple:
     intervals = []
     labels = []
     for itv, lbl in hier:
@@ -203,7 +232,7 @@ def hier_to_mireval(hier) -> tuple:
     return intervals, labels
 
 
-def mireval_to_hier(itvls: np.ndarray, labels: list) -> list:
+def mireval2hier(itvls: np.ndarray, labels: list) -> list:
     hier = []
     n_lvl = len(labels)
     for lvl in range(n_lvl):
@@ -212,12 +241,12 @@ def mireval_to_hier(itvls: np.ndarray, labels: list) -> list:
     return hier
 
 
-def multiseg_to_mireval(anno) -> tuple:
-    return hier_to_mireval(multiseg_to_hier(anno))
+def multi2mireval(anno) -> tuple:
+    return hier2mireval(multi2hier(anno))
 
 
-def mireval_to_multiseg(itvls: np.ndarray, labels: list) -> jams.Annotation:
-    return hier_to_multiseg(mireval_to_hier(itvls, labels))
+def mireval2multi(itvls: np.ndarray, labels: list) -> jams.Annotation:
+    return hier2multi(mireval2hier(itvls, labels))
 
 
 def openseg2multi(
@@ -230,24 +259,27 @@ def openseg2multi(
             multi_anno.append(time=obs.time,
                               duration=obs.duration,
                               value={'label': obs.value, 'level': lvl},
-                             )
-    
+                             )  
     return multi_anno
 
 
-def layer2mireval(multi_anno, layer=-1):
-    all_itvls, all_labels = multiseg_to_mireval(multi_anno)
+def multi2mirevalflat(multi_anno, layer=-1):
+    all_itvls, all_labels = multi2mireval(multi_anno)
     return all_itvls[layer], all_labels[layer]
 
 
-def layer2openseg(multi_anno, layer=-1):
-    itvls, labels = layer2mireval(multi_anno, layer)
+def multi2openseg(multi_anno, layer=-1):
+    itvls, labels = multi2mirevalflat(multi_anno, layer)
     anno = jams.Annotation(namespace='segment_open')
     for ival, label in zip(itvls, labels):
         anno.append(time=ival[0], 
                     duration=ival[1]-ival[0],
                     value=str(label))
     return anno
+
+
+def openseg2mirevalflat(openseg_anno):
+    return multi2mirevalflat(openseg2multi([openseg_anno]))
 
 
 ### END OF FORMATTING FUNCTIONS###
@@ -262,63 +294,6 @@ def init_empty_xr(grid_coords, name=None):
                         coords=grid_coords,
                         name=name,
                         )
-
-# Move to SALAMI
-def get_lsd_scores(
-    tids=[], 
-    anno_col_fn=lambda stack: stack.max(dim='anno_id'), 
-    **lsd_score_kwargs
-) -> xr.DataArray:
-    score_per_track = []
-    for tid in tqdm(tids):
-        track = slm.Track(tid)
-        score_per_anno = []
-        for anno_id in range(track.num_annos()):
-            score_per_anno.append(track.lsd_score(anno_id=anno_id, **lsd_score_kwargs))
-        
-        anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
-        track_flat = anno_col_fn(anno_stack)
-        score_per_track.append(track_flat)
-    
-    return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
-
-# Move to SALAMI
-def get_adobe_scores(
-    tids=[],
-    anno_col_fn=lambda stack: stack.max(dim='anno_id'),
-    l_frame_size=0.1
-) -> xr.DataArray:
-    score_per_track = []
-    for tid in tqdm(tids):
-        track = slm.Track(tid)
-        score_per_anno = []
-        for anno_id in range(track.num_annos()):
-            score_per_anno.append(track.adobe_l(anno_id=anno_id, l_frame_size=l_frame_size))
-        
-        anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
-        track_flat = anno_col_fn(anno_stack)
-        score_per_track.append(track_flat)
-    
-    return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
-
-# Move to SALAMI
-def get_taus(
-    tids=[], 
-    anno_col_fn=lambda stack: stack.max(dim='anno_id'),
-    **tau_kwargs,
-) -> xr.DataArray:
-    tau_per_track = []
-    for tid in tqdm(tids):
-        track = slm.Track(tid)
-        tau_per_anno = []
-        for anno_id in range(track.num_annos()):
-            tau_per_anno.append(track.tau(anno_id=anno_id, **tau_kwargs))
-        
-        anno_stack = xr.concat(tau_per_anno, pd.Index(range(len(tau_per_anno)), name='anno_id'))
-        track_flat = anno_col_fn(anno_stack)
-        tau_per_track.append(track_flat)
-    
-    return xr.concat(tau_per_track, pd.Index(tids, name='tid')).rename()
 
 
 def pick_by_taus(
@@ -335,12 +310,12 @@ def pick_by_taus(
     out.orc_loc_pick = scores_grid.max(dim='rep_ftype').idxmax(dim='loc_ftype').squeeze()
     out.oracle = scores_grid.max(dim=['rep_ftype', 'loc_ftype']).squeeze()
     
-    rep_pick = rep_taus.idxmax(dim='f_type')
+    rep_pick = rep_taus.idxmax(dim='f_type').sortby('tid')
     
     if loc_taus is None:
-        loc_pick = out.orc_loc_pick.to_xarray()
+        loc_pick = out.orc_loc_pick.to_xarray().sortby('tid')
     else:
-        loc_pick = loc_taus.idxmax(dim='f_type').fillna('mfcc')
+        loc_pick = loc_taus.idxmax(dim='f_type').fillna('mfcc').sortby('tid')
 
     out.rep_pick = rep_pick
     out.loc_pick = loc_pick

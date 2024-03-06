@@ -106,6 +106,13 @@ class DS(Dataset):
     def __len__(self):
         return len(self.samples)
     
+
+    def __repr__(self):
+        return 'rwcp' + self.mode
+
+    def track_obj(self, **track_kwargs):
+        return Track(**track_kwargs)
+
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()

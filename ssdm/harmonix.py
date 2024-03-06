@@ -91,8 +91,14 @@ class DS(Dataset):
         self.samples = list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES))
         self.samples.sort()
 
+    def track_obj(self, **track_kwargs):
+        return Track(**track_kwargs)
+
     def __len__(self):
         return len(self.samples)
+    
+    def __repr__(self):
+        return 'hmx' + self.mode
     
     def __getitem__(self, idx):
         if torch.is_tensor(idx):

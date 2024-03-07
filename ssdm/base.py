@@ -350,6 +350,50 @@ class Track(object):
         return lsd_score_da.sel(**lsd_sel_dict)
 
 
+    def lsd_score_flat(self, anno_id=0, recompute=False) -> xr.DataArray:
+        # save 
+        if anno_id != 0:
+            anno_flag = f'a{anno_id}'
+        else:
+            anno_flag = ''
+        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{anno_flag}flat.nc')
+
+        if not os.path.exists(nc_path):
+            # build da to store
+            score_dims = dict(
+                rep_ftype=ssdm.AVAL_FEAT_TYPES,
+                loc_ftype=ssdm.AVAL_FEAT_TYPES,
+                m_type=['p', 'r', 'f'],
+                metric=['hr', 'hr3', 'pfc', 'nce'],
+                layer=[x+1 for x in range(10)],
+            )
+
+            score_da = xr.DataArray(
+                data=np.nan,  # Initialize the data with NaNs
+                coords=score_dims,
+                dims=list(score_dims.keys())
+            )
+
+            score_da.to_netcdf(nc_path)
+            recompute = True
+        else:
+            with xr.open_dataarray(nc_path) as score_da:
+                score_da.load()
+
+        if recompute:
+            # build all the lsd configs:
+            for rep_ftype in ssdm.AVAL_FEAT_TYPES:
+                for loc_ftype in ssdm.AVAL_FEAT_TYPES:
+                    feature_pair = dict(rep_ftype=rep_ftype, loc_ftype=loc_ftype)
+                    lsd_config = ssdm.DEFAULT_LSD_CONFIG.copy()
+                    lsd_config.update(feature_pair)
+                    score_da.loc[feature_pair] = ssdm.compute_flat(self.lsd(lsd_config), self.ref(mode='normal', anno_id=anno_id))
+            
+            score_da.to_netcdf(nc_path)
+
+        return score_da
+
+
     def tau(
         self,
         tau_sel_dict: dict = dict(),

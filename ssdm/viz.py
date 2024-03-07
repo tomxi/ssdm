@@ -155,6 +155,7 @@ def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True):
     return ax
 
 
+## Inspecting model weight tensors
 def view_channels_(cube, channel=0, **hv_img_args):
     if type(cube) is not np.ndarray:
         cube = cube.cpu().numpy()
@@ -206,7 +207,7 @@ def train_curve(json_path):
     return train_loss * val_loss * best_epoch_line * best_val_text
 
 
-# Show dataset performance
+# Show dataset performance heatmap... a bit too general
 def dataset_performance(dataset, 
                         tau_hat_rep_path, 
                         tau_hat_loc_path):
@@ -246,6 +247,4 @@ def dataset_performance(dataset,
     # F SCORES
 
     return o
-
-
 

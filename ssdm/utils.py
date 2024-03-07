@@ -178,23 +178,30 @@ def compute_flat(
     ref_inter, ref_labels = ssdm.multi2mirevalflat(annotation, layer=a_layer) # Which anno layer?
 
     num_prop_layers = len(multi2hier(proposal))
-    results = dict()
+
+    # get empty dataarray for result
+    results_dim = dict(
+        m_type=['p', 'r', 'f'],
+        metric=['hr', 'hr3', 'pfc', 'nce'],
+        layer=[x+1 for x in range(10)]
+    )
+    results = xr.DataArray(data=None, coords=results_dim, dims=list(results_dim.keys()))
     for p_layer in range(num_prop_layers):
         est_inter, est_labels = ssdm.multi2mirevalflat(proposal, layer=p_layer)
-
         # make last segment for estimation end at the same time as annotation
         end_time = max(ref_inter[-1, 1], est_inter[-1, 1])
         ref_inter[-1, 1] = end_time
         est_inter[-1, 1] = end_time
-
-        results[str(p_layer)] = dict(
+        
+        layer_result_dict = dict(
             hr=mir_eval.segment.detection(ref_inter, est_inter, window=.5, trim=True),
             hr3=mir_eval.segment.detection(ref_inter, est_inter, window=3, trim=True),
             pfc=mir_eval.segment.pairwise(ref_inter, ref_labels, est_inter, est_labels),
             nce=mir_eval.segment.vmeasure(ref_inter, ref_labels, est_inter, est_labels)
         )
 
-    # Trun results into xarrays
+        for metric in layer_result_dict:
+            results.loc[dict(layer=p_layer+1, metric=metric)] = list(layer_result_dict[metric])
 
     return results
 

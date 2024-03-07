@@ -7,6 +7,7 @@ import xarray as xr
 from scipy import spatial, sparse, stats
 from sklearn.metrics import roc_auc_score
 from tqdm import tqdm
+import random
 
 import ssdm
 from ssdm.utils import *
@@ -91,3 +92,29 @@ def run_lsd(
     est_bdry_idxs, est_sgmt_labels = sc.do_segmentation_ssm(rep_ssm, path_sim, config)
     est_bdry_itvls = [sc.times_to_intervals(track.ts()[lvl]) for lvl in est_bdry_idxs]
     return mireval2multi(est_bdry_itvls, est_sgmt_labels)
+
+
+def get_flat_lsd_scores(
+    ds,
+    shuffle=False,
+    anno_col_fn=lambda stack: stack.mean(dim='anno_id'), # activated when there are more than 1 annotation for a track
+) -> xr.DataArray:
+    score_per_track = []
+    tids = ds.tids
+    if shuffle:
+        random.shuffle(tids)
+
+    for tid in tqdm(tids):
+        track = ds.track_obj(tid=tid)
+        if track.num_annos() == 1:
+            score_per_track.append(track.lsd_score_flat())
+        else:
+            score_per_anno = []
+            for anno_id in range(track.num_annos()):
+                score_per_anno.append(track.lsd_score_flat(anno_id=anno_id))
+
+            anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
+            score_per_track.append(anno_col_fn(anno_stack))
+    
+    return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
+

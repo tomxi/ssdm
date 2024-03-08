@@ -1,103 +1,19 @@
-import pkg_resources
-import json
 import xarray as xr
-
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
 from sklearn import preprocessing, cluster
-
+from scipy import sparse
+from tqdm import tqdm
+import random
 
 import jams
 import mir_eval
 
-from ssdm import salami as slm
-
-# import matplotlib
-# import matplotlib.pyplot as plt
-
 import ssdm
-# import musicsections as ms
+import ssdm.scluster as sc
 
-#DEPREE These belong in each dataset's code
-def get_ids(
-    split: str = 'working',
-    out_type: str = 'list' # one of {'set', 'list'}
-) -> list:
-    """ split can be ['audio', 'jams', 'excluded', 'new_val', 'new_test', 'new_train']
-        Dicts sotred in id_path json file.
-    """
-    id_path = pkg_resources.resource_filename('ssdm', 'split_ids.json')
-    try:
-        with open(id_path, 'r') as f:
-            id_json = json.load(f)
-    except FileNotFoundError:
-        id_json = dict()
-        id_json[split] = []
-        with open(id_path, 'w') as f:
-            json.dump(id_json, f)
-    ids = id_json[split]
-        
-    if out_type == 'set':
-        return set(ids)
-    elif out_type == 'list':
-        ids.sort()
-        return ids
-    else:
-        print('invalid out_type')
-        return None
-
-
-#DEPREE These belong in each dataset's code
-def lucky_track(tids=get_ids(split='working'), announce=True):
-    """Randomly pick a track from tids"""
-    rand_idx = int(np.floor(np.random.rand() * len(tids)))
-    tid = tids[rand_idx]
-    if announce:
-        print(f'track {tid} is the lucky track!')
-    return slm.Track(tid)
-
-
-# MOVE TO SALAMI
-# add new splits to split_ids.json
-def update_split_json(split_name='', split_idx=[]):
-    # add new splits to split_id.json file at json_path
-    # read from json and get dict
-    json_path = pkg_resources.resource_filename('ssdm', 'split_ids.json')
-    try:
-        with open(json_path, 'r') as f:
-            split_dict = json.load(f)
-    except FileNotFoundError:
-        split_dict = dict()
-        split_dict[split_name] = split_idx
-        with open(json_path, 'w') as f:
-            json.dump(split_dict, f)
-        return split_dict
-    
-    # add new split to dict
-    split_dict[split_name] = split_idx
-    
-    # save json again
-    with open(json_path, 'w') as f:
-        json.dump(split_dict, f)
-        
-    with open(json_path, 'r') as f:
-        return json.load(f)
-
-
-# MOVE TO SALAMI    
-def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
-    dev_set, test_set = train_test_split(arr, test_size = test_ratio, random_state = random_state)
-    train_set, val_set = train_test_split(dev_set, test_size = val_ratio / (1 - test_ratio), random_state = random_state)
-    train_set.sort()
-    val_set.sort()
-    test_set.sort()
-    return train_set, val_set, test_set
-
-
-### Stand alone functions
 def anno_to_meet(
-    anno: jams.Annotation, 
+    anno: jams.Annotation,  # multi-layer
     ts: list,
     num_layers: int = None,
 ) -> np.array:
@@ -202,8 +118,8 @@ def compute_flat(
 
         for metric in layer_result_dict:
             results.loc[dict(layer=p_layer+1, metric=metric)] = list(layer_result_dict[metric])
-
     return results
+
 
 ### Formatting functions ###
 def multi2hier(anno)-> list:
@@ -290,19 +206,6 @@ def openseg2mirevalflat(openseg_anno):
 
 
 ### END OF FORMATTING FUNCTIONS###
-
-## Score collecting functions
-def init_empty_xr(grid_coords, name=None):
-    shape = [len(grid_coords[option]) for option in grid_coords]
-    empty_data = np.empty(shape)
-    empty_data[:] = np.nan
-    return xr.DataArray(empty_data,
-                        dims=grid_coords.keys(),
-                        coords=grid_coords,
-                        name=name,
-                        )
-
-
 def pick_by_taus(
     scores_grid: xr.DataArray, # tids * num_feat * num_feat
     rep_taus: xr.DataArray, # tids * num_feat
@@ -355,4 +258,67 @@ def quantize(data, quantize_method='percentile', quant_bins=8):
         assert('bad quantize method')
 
     return quant_data_flat.reshape(data_shape)
+
+
+# HELPER functin to run laplacean spectral decomposition TODO this is where the rescaling happens
+def run_lsd(
+    track,
+    config: dict,
+    recompute_ssm: bool = False,
+    loc_sigma: float = 95
+) -> jams.Annotation:
+    def mask_diag(sq_mat, width=13):
+        # carve out width from the full ssm
+        sq_mat_lil = sparse.lil_matrix(sq_mat)
+        for diag in range(-width + 1, width):
+            sq_mat_lil.setdiag(0, diag)
+        return sq_mat_lil.toarray()
+
+    # Compute/get SSM mats
+    rep_ssm = track.ssm(feature=config['rep_ftype'],
+                        distance=config['rep_metric'],
+                        width=config['rec_width'],
+                        full=bool(config['rec_full']),
+                        recompute=recompute_ssm,
+                        **ssdm.REP_FEAT_CONFIG[config['rep_ftype']]
+                        )
+    if config['rec_full']:
+        rep_ssm = mask_diag(rep_ssm, width=config['rec_width'])
+
+    # track.path_sim alwasy recomputes.
+    path_sim = track.path_sim(feature=config['loc_ftype'],
+                              distance=config['loc_metric'],
+                              sigma_percentile=loc_sigma,
+                              **ssdm.LOC_FEAT_CONFIG[config['loc_ftype']]
+                             )
+
+    # Spectral Clustering with Config
+    est_bdry_idxs, est_sgmt_labels = sc.do_segmentation_ssm(rep_ssm, path_sim, config)
+    est_bdry_itvls = [sc.times_to_intervals(track.ts()[lvl]) for lvl in est_bdry_idxs]
+    return mireval2multi(est_bdry_itvls, est_sgmt_labels)
+
+
+def get_flat_lsd_scores(
+    ds,
+    shuffle=False,
+    anno_col_fn=lambda stack: stack.mean(dim='anno_id'), # activated when there are more than 1 annotation for a track
+) -> xr.DataArray:
+    score_per_track = []
+    tids = ds.tids
+    if shuffle:
+        random.shuffle(tids)
+
+    for tid in tqdm(tids):
+        track = ds.track_obj(tid=tid)
+        if track.num_annos() == 1:
+            score_per_track.append(track.lsd_score_flat())
+        else:
+            score_per_anno = []
+            for anno_id in range(track.num_annos()):
+                score_per_anno.append(track.lsd_score_flat(anno_id=anno_id))
+
+            anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
+            score_per_track.append(anno_col_fn(anno_stack))
+
+    return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
 

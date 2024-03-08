@@ -1,5 +1,6 @@
+from sklearn.model_selection import train_test_split
 import ssdm
-from ssdm import base, salami as slm
+from ssdm import base
 
 import torch
 from torch.utils.data import Dataset
@@ -289,4 +290,40 @@ def get_adobe_scores(
         score_per_track.append(track_flat)
 
     return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
+
+
+def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
+    dev_set, test_set = train_test_split(arr, test_size = test_ratio, random_state = random_state)
+    train_set, val_set = train_test_split(dev_set, test_size = val_ratio / (1 - test_ratio), random_state = random_state)
+    train_set.sort()
+    val_set.sort()
+    test_set.sort()
+    return train_set, val_set, test_set
+
+
+# MOVE TO SALAMI
+# add new splits to split_ids.json
+def update_split_json(split_name='', split_idx=[]):
+    # add new splits to split_id.json file at json_path
+    # read from json and get dict
+    json_path = pkg_resources.resource_filename('ssdm', 'split_ids.json')
+    try:
+        with open(json_path, 'r') as f:
+            split_dict = json.load(f)
+    except FileNotFoundError:
+        split_dict = dict()
+        split_dict[split_name] = split_idx
+        with open(json_path, 'w') as f:
+            json.dump(split_dict, f)
+        return split_dict
+
+    # add new split to dict
+    split_dict[split_name] = split_idx
+
+    # save json again
+    with open(json_path, 'w') as f:
+        json.dump(split_dict, f)
+
+    with open(json_path, 'r') as f:
+        return json.load(f)
 

@@ -1,4 +1,5 @@
 import ssdm
+import ssdm.utils
 from . import feature
 from .expand_hier import expand_hierarchy
 import librosa
@@ -274,7 +275,7 @@ class Track(object):
         if recompute:
             print('computing! -- lsd')
             # genearte new multi_segment annotation and store/overwrite it in the original jams file.
-            lsd_anno = ssdm.run_lsd(self, config=config, recompute_ssm=recompute, loc_sigma=path_sim_sigma_percentile)
+            lsd_anno = ssdm.utils.run_lsd(self, config=config, recompute_ssm=recompute, loc_sigma=path_sim_sigma_percentile)
             print('Done! -- lsd')
             # update jams file
             # print('updating jams! -- lsd')
@@ -301,7 +302,7 @@ class Track(object):
         if not os.path.exists(nc_path):
             init_grid = ssdm.LSD_SEARCH_GRID.copy()
             init_grid.update(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm'])
-            lsd_score_da = ssdm.init_empty_xr(init_grid, name=str(self.tid))
+            lsd_score_da = xr.DataArray(np.nan, dims=init_grid.keys(), coords=init_grid, name=str(self.tid))
             lsd_score_da.to_netcdf(nc_path)
         else:
             with xr.open_dataarray(nc_path) as lsd_score_da:
@@ -371,7 +372,8 @@ class Track(object):
             score_da = xr.DataArray(
                 data=np.nan,  # Initialize the data with NaNs
                 coords=score_dims,
-                dims=list(score_dims.keys())
+                dims=list(score_dims.keys()),
+                name=str(self.tid)
             )
 
             score_da.to_netcdf(nc_path)
@@ -414,7 +416,7 @@ class Track(object):
             grid_coords = dict(f_type=ssdm.AVAL_FEAT_TYPES, 
                                tau_type=['rep', 'loc'], 
                                )
-            tau = ssdm.init_empty_xr(grid_coords)
+            tau = xr.DataArray(np.nan, coords=grid_coords, dims=grid_coords.keys())
             tau.to_netcdf(record_path)
         else:
             with xr.open_dataarray(record_path) as tau:

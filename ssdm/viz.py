@@ -127,7 +127,7 @@ def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True):
         da = da.expand_dims(dim='_', axis=0)
         da = da.assign_coords(_=[''])
     
-    im = ax.imshow(da, cmap='coolwarm')
+    im = ax.imshow(da.values.astype(float), cmap='coolwarm')
     
     ycoord, xcoord = da.dims
     xticks = da.indexes[xcoord]
@@ -247,4 +247,3 @@ def dataset_performance(dataset,
     # F SCORES
 
     return o
-

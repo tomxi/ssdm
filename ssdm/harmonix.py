@@ -83,7 +83,7 @@ class DS(Dataset):
         if mode not in ('rep', 'loc'):
             raise AssertionError('bad dataset mode, can only be rep or loc')
         self.mode = mode
-        self.tids = ssdm.get_ids('harmonix', out_type='list')
+        self.tids = get_ids(out_type='list')
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
         else:

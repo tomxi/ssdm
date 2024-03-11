@@ -4,7 +4,7 @@ import numpy as np
 from sklearn import preprocessing, cluster
 from scipy import sparse
 from tqdm import tqdm
-import random
+import random, os
 
 import jams
 import mir_eval
@@ -303,22 +303,45 @@ def get_flat_lsd_scores(
     shuffle=False,
     anno_col_fn=lambda stack: stack.mean(dim='anno_id'), # activated when there are more than 1 annotation for a track
 ) -> xr.DataArray:
-    score_per_track = []
-    tids = ds.tids
-    if shuffle:
-        random.shuffle(tids)
+    save_path = f'/vast/qx244/{ds}_flat_lsd_scores.nc'
+    if not os.path.exists(save_path):
+        score_per_track = []
+        tids = ds.tids
+        if shuffle:
+            random.shuffle(tids)
 
-    for tid in tqdm(tids):
-        track = ds.track_obj(tid=tid)
-        if track.num_annos() == 1:
-            score_per_track.append(track.lsd_score_flat())
-        else:
-            score_per_anno = []
-            for anno_id in range(track.num_annos()):
-                score_per_anno.append(track.lsd_score_flat(anno_id=anno_id))
+        for tid in tqdm(tids):
+            track = ds.track_obj(tid=tid)
+            if track.num_annos() == 1:
+                score_per_track.append(track.lsd_score_flat())
+            else:
+                score_per_anno = []
+                for anno_id in range(track.num_annos()):
+                    score_per_anno.append(track.lsd_score_flat(anno_id=anno_id))
 
-            anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
-            score_per_track.append(anno_col_fn(anno_stack))
+                anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
+                score_per_track.append(anno_col_fn(anno_stack))
 
-    return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
+        xr.concat(score_per_track, pd.Index(tids, name='tid')).rename().to_netcdf(save_path)
+    return xr.load_dataarray(save_path)
+
+
+def dataset_performance_flat(score_da, tau_hat_rep, tau_hat_loc):
+    best_layer = score_da.sel(m_type='f').idxmax(dim='layer', fill_value=4)
+    layer_score_da = score_da.sel(layer=best_layer.drop_vars('m_type')).sortby('tid')
+
+    rep_pick = tau_hat_rep.idxmax(dim='f_type').sortby('tid')
+    loc_pick = tau_hat_loc.idxmax(dim='f_type').sortby('tid')
+
+    tau_hat_rep_score = layer_score_da.sel(rep_ftype=rep_pick).drop_vars('rep_ftype').expand_dims(rep_ftype=['tau_hat'])
+    tau_hat_loc_score = layer_score_da.sel(loc_ftype=loc_pick).drop_vars('loc_ftype').expand_dims(loc_ftype=['tau_hat'])
+    tau_hat_both_score = layer_score_da.sel(rep_ftype=rep_pick, loc_ftype=loc_pick).drop_vars(['loc_ftype', 'rep_ftype']).expand_dims(loc_ftype=['tau_hat'], rep_ftype=['tau_hat'])
+
+    score_with_tau_rep = xr.concat([layer_score_da, tau_hat_rep_score], dim='rep_ftype')
+    full_tau_loc_score = xr.concat([tau_hat_loc_score, tau_hat_both_score], dim='rep_ftype')
+    full_score = xr.concat([score_with_tau_rep, full_tau_loc_score], dim='loc_ftype')
+    return full_score
+
+    average_performance = full_score.mean(dim=['tid'])
+    return average_performance
 

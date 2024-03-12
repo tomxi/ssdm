@@ -91,10 +91,11 @@ def get_ids(out_type: str = 'list'):
     single_segment = set([86, 119, 207])
     flipped_files = set([79 ,82])
     mid_set = melids - issue_files - duplicate_files - flipped_files - single_segment
+    mid_set_strings = {str(x) for x in mid_set}
     if out_type == 'list':
-        return list(mid_set)
+        return list(mid_set_strings)
     if out_type == 'set':
-        return melids
+        return mid_set_strings
     else:
         raise KeyError('bad out_type')
 

@@ -207,43 +207,23 @@ def train_curve(json_path):
     return train_loss * val_loss * best_epoch_line * best_val_text
 
 
-# Show dataset performance heatmap... a bit too general
-def dataset_performance(dataset, 
-                        tau_hat_rep_path, 
-                        tau_hat_loc_path):
-    # L SCORES # WITH TAU-HAT PICKING
-    score_per_track = []
-    for tid in dataset.tids:
-        track = dataset.track_obj(tid=tid)
-        score_per_track.append(track.lsd_score())
+def plot_mean_score(ds, rep_model='RepNet20240303_epoch28', loc_model='LocNet20240303_epoch17', heir=False):
+    score_da = ssdm.get_lsd_scores(ds, shuffle=False, heir=heir)
+    ds_str = str(ds).replace('loc', 'rep')
+    tau_hat_rep = xr.open_dataarray(f'/vast/qx244/salami/tau_hat_{ds_str}-{rep_model}.nc')
+    ds_str = str(ds).replace('rep', 'loc')
+    tau_hat_loc = xr.open_dataarray(f'/vast/qx244/salami/tau_hat_{ds_str}-{loc_model}.nc')
+
+    ds_score = ssdm.dataset_performance(score_da, tau_hat_rep, tau_hat_loc, heir=heir)
+    if not heir:
+        ds_score = ds_score.sel(m_type='f')
     
-    score_da = xr.concat(score_per_track, pd.Index(dataset.tids, name='tid')).rename().sortby('tid')
-    
-
-    # add tau-hat pick performance:
-    tau_hat_rep = xr.open_dataarray(tau_hat_rep_path)
-    tau_hat_loc = xr.open_dataarray(tau_hat_loc_path)
-
-    rep_pick = tau_hat_rep.idxmax(dim='f_type').sortby('tid')
-    loc_pick = tau_hat_loc.idxmax(dim='f_type').sortby('tid')
-
-    tau_hat_rep_score = score_da.sel(rep_ftype=rep_pick).drop_vars('rep_ftype').expand_dims(rep_ftype=['tau_hat'])
-    tau_hat_loc_score = score_da.sel(loc_ftype=loc_pick).drop_vars('loc_ftype').expand_dims(loc_ftype=['tau_hat'])
-    tau_hat_both_score = score_da.sel(rep_ftype=rep_pick, loc_ftype=loc_pick).drop_vars(['loc_ftype', 'rep_ftype']).expand_dims(loc_ftype=['tau_hat'], rep_ftype=['tau_hat'])
-
-    score_with_tau_rep = xr.concat([score_da, tau_hat_rep_score], dim='rep_ftype')
-    full_tau_loc_score = xr.concat([tau_hat_loc_score, tau_hat_both_score], dim='rep_ftype')
-    full_score = xr.concat([score_with_tau_rep, full_tau_loc_score], dim='loc_ftype')
-    
-    if 'anno_id' not in full_score.indexes:
-        average_performance = full_score.mean(dim=['tid'])
+    fig, axes = plt.subplots(1, 3, figsize=(19,4))
+    if heir:
+        for i, l_type in enumerate(ds_score.l_type):
+            heatmap(ds_score.sel(l_type=l_type).mean(dim='tid'), title=f'{ds}, {l_type.item()}'.replace('rep', ''), ax=axes[i])
     else:
-        average_performance = full_score.mean(dim=['anno_id', 'tid'])
+        for i, metric in enumerate(['hr', 'hr3', 'nce']):
+            heatmap(ds_score.sel(metric=metric).mean(dim='tid'), title=f'{ds}, {metric}'.replace('rep', ''), ax=axes[i])
 
-    o = []
-    for l_type in ['lr']:
-        o.append(heatmap(average_performance.sel(l_type=l_type), title=f'{dataset} {l_type} average score'))
-    
-    # F SCORES
-
-    return o
+    return fig, axes

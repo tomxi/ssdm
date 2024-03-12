@@ -348,7 +348,12 @@ class Track(object):
                 lsd_score_da.loc[coord_idx] = list(l_score)
                 lsd_score_da.to_netcdf(nc_path)
         # return lsd_score_da
-        return lsd_score_da.sel(**lsd_sel_dict)
+        out = lsd_score_da.sel(**lsd_sel_dict)
+        try:
+            out.drop_vars('anno_id')
+        except ValueError:
+            pass
+        return out
 
 
     def lsd_score_flat(self, anno_id=0, recompute=False) -> xr.DataArray:

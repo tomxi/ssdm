@@ -64,10 +64,12 @@ def get_ids(out_type: str = 'list'):
     
 
 def get_lsd_scores(
-    tids=[], 
+    tids=None, 
     **lsd_score_kwargs
 ) -> xr.DataArray:
     score_per_track = []
+    if tids == None:
+        tids = get_ids()
     for tid in tqdm(tids):
         track = Track(tid)
         score_per_track.append(track.lsd_score(**lsd_score_kwargs))

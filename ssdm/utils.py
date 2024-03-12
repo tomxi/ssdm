@@ -229,7 +229,7 @@ def pick_by_taus(
 
     out.rep_pick = rep_pick
     out.loc_pick = loc_pick
-    out.score = scores_grid.sel(rep_ftype=rep_pick, loc_ftype=loc_pick)
+    out.score = scores_grid.sortby('tid').sel(rep_ftype=rep_pick, loc_ftype=loc_pick)
     
     return out
 
@@ -298,12 +298,17 @@ def run_lsd(
     return mireval2multi(est_bdry_itvls, est_sgmt_labels)
 
 
-def get_flat_lsd_scores(
+def get_lsd_scores(
     ds,
     shuffle=False,
     anno_col_fn=lambda stack: stack.mean(dim='anno_id'), # activated when there are more than 1 annotation for a track
+    heir=False,
 ) -> xr.DataArray:
-    save_path = f'/vast/qx244/{ds}_flat_lsd_scores.nc'
+    ds_str = str(ds).replace('rep', '').replace('loc', '')
+    if heir:
+        save_path = f'/vast/qx244/{ds_str}_heir_lsd_scores.nc'
+    else:
+        save_path = f'/vast/qx244/{ds_str}_flat_lsd_scores.nc'
     if not os.path.exists(save_path):
         score_per_track = []
         tids = ds.tids
@@ -313,35 +318,111 @@ def get_flat_lsd_scores(
         for tid in tqdm(tids):
             track = ds.track_obj(tid=tid)
             if track.num_annos() == 1:
-                score_per_track.append(track.lsd_score_flat())
+                if heir:
+                    score_per_track.append(track.lsd_score())
+                else:
+                    score_per_track.append(track.lsd_score_flat())
             else:
                 score_per_anno = []
                 for anno_id in range(track.num_annos()):
-                    score_per_anno.append(track.lsd_score_flat(anno_id=anno_id))
+                    if heir:
+                        score_per_anno.append(track.lsd_score(anno_id=anno_id))
+                    else:
+                        score_per_anno.append(track.lsd_score_flat(anno_id=anno_id))
 
                 anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
                 score_per_track.append(anno_col_fn(anno_stack))
 
         xr.concat(score_per_track, pd.Index(tids, name='tid')).rename().to_netcdf(save_path)
-    return xr.load_dataarray(save_path)
+    return xr.load_dataarray(save_path).sortby('tid')
 
 
-def dataset_performance_flat(score_da, tau_hat_rep, tau_hat_loc):
-    best_layer = score_da.sel(m_type='f').idxmax(dim='layer', fill_value=4)
-    layer_score_da = score_da.sel(layer=best_layer.drop_vars('m_type')).sortby('tid')
+def dataset_performance(score_da, tau_hat_rep, tau_hat_loc, heir=False):
+    if heir:
+        working_da = score_da.sortby('tid')
+    else:
+        best_layer = score_da.sel(m_type='f').idxmax(dim='layer', fill_value=4)
+        working_da = score_da.sel(layer=best_layer.drop_vars('m_type')).sortby('tid')
 
     rep_pick = tau_hat_rep.idxmax(dim='f_type').sortby('tid')
     loc_pick = tau_hat_loc.idxmax(dim='f_type').sortby('tid')
 
-    tau_hat_rep_score = layer_score_da.sel(rep_ftype=rep_pick).drop_vars('rep_ftype').expand_dims(rep_ftype=['tau_hat'])
-    tau_hat_loc_score = layer_score_da.sel(loc_ftype=loc_pick).drop_vars('loc_ftype').expand_dims(loc_ftype=['tau_hat'])
-    tau_hat_both_score = layer_score_da.sel(rep_ftype=rep_pick, loc_ftype=loc_pick).drop_vars(['loc_ftype', 'rep_ftype']).expand_dims(loc_ftype=['tau_hat'], rep_ftype=['tau_hat'])
+    tau_hat_rep_score = working_da.sel(rep_ftype=rep_pick).drop_vars('rep_ftype').expand_dims(rep_ftype=['tau_hat'])
+    tau_hat_loc_score = working_da.sel(loc_ftype=loc_pick).drop_vars('loc_ftype').expand_dims(loc_ftype=['tau_hat'])
+    tau_hat_both_score = working_da.sel(rep_ftype=rep_pick, loc_ftype=loc_pick).drop_vars(['loc_ftype', 'rep_ftype']).expand_dims(loc_ftype=['tau_hat'], rep_ftype=['tau_hat'])
 
-    score_with_tau_rep = xr.concat([layer_score_da, tau_hat_rep_score], dim='rep_ftype')
+    score_with_tau_rep = xr.concat([working_da, tau_hat_rep_score], dim='rep_ftype')
     full_tau_loc_score = xr.concat([tau_hat_loc_score, tau_hat_both_score], dim='rep_ftype')
     full_score = xr.concat([score_with_tau_rep, full_tau_loc_score], dim='loc_ftype')
     return full_score
 
-    average_performance = full_score.mean(dim=['tid'])
-    return average_performance
+
+def full_performance(ds, rep_model='RepNet20240303_epoch28', loc_model='LocNet20240303_epoch17'):
+    # Performance with flat and heir scores
+    ds_str = str(ds).replace('loc', 'rep')
+    tau_hat_rep = xr.open_dataarray(f'/vast/qx244/salami/tau_hat_{ds_str}-{rep_model}.nc')
+    ds_str = str(ds).replace('rep', 'loc')
+    tau_hat_loc = xr.open_dataarray(f'/vast/qx244/salami/tau_hat_{ds_str}-{loc_model}.nc')
+    
+    
+    sda_flat = get_lsd_scores(ds, shuffle=False, heir=False)
+    sda_heir = get_lsd_scores(ds, shuffle=False, heir=True)
+    full_score_flat = dataset_performance(sda_flat, tau_hat_rep, tau_hat_loc, heir=False)
+    full_score_heir = dataset_performance(sda_heir, tau_hat_rep, tau_hat_loc, heir=True)
+    full_score = xr.concat(
+        [full_score_flat.drop_vars('layer'),
+         full_score_heir.rename(l_type='m_type').assign_coords(m_type=['p', 'r', 'f']).expand_dims(metric=['l'])],
+        dim='metric'
+    )
+    
+    ds_str = str(ds).replace('loc', '').replace('rep', '')
+    return full_score.assign_coords(tid=ds_str + full_score.tid)
+
+
+def dev_deploy_perf(
+    dev_ds, all_ds, 
+    m_type='r', metric='l', 
+    rep_model='RepNet20240303_epoch28', 
+    loc_model='LocNet20240303_epoch17',
+    drop_feats=[]
+):
+    # look at the dev_ds and pick the best pair of features on average
+    dev_mean_score = full_performance(dev_ds).sel(m_type=m_type, metric=metric).mean('tid')
+    dev_mean_score = dev_mean_score.drop_sel(rep_ftype=drop_feats + ['tau_hat'], loc_ftype=drop_feats + ['tau_hat'])
+    dev_rep_pick = dev_mean_score.max(dim='loc_ftype').idxmax(dim='rep_ftype').item()
+    dev_loc_pick = dev_mean_score.max(dim='rep_ftype').idxmax(dim='loc_ftype').item()
+    
+    # Don't include the dev_ds in the deploy set, and combine all other ds.
+    deploy_sda_list = []
+    for ds in all_ds:
+        if type(ds) is not type(dev_ds):
+            deploy_sda_part = full_performance(ds).sel(m_type=m_type, metric=metric)
+            deploy_sda_part = deploy_sda_part.drop_sel(rep_ftype=drop_feats, loc_ftype=drop_feats)
+            deploy_sda_list.append(deploy_sda_part)
+    deploy_sda = xr.concat(deploy_sda_list, dim='tid')
+
+    deploy_naive_perf = deploy_sda.sel(rep_ftype=dev_rep_pick, loc_ftype=dev_loc_pick)
+
+    ## Get all the tau_hats!
+    tau_hat_reps = []
+    tau_hat_locs = []
+    for ds in all_ds:
+        if type(ds) is type(dev_ds):
+#             print('skipping the dev set')
+            continue
+        else:
+            ds_str = str(ds).replace('loc', 'rep')
+            tau_hat_rep = xr.open_dataarray(f'/vast/qx244/salami/tau_hat_{ds_str}-{rep_model}.nc')
+            tau_hat_rep = tau_hat_rep.drop_sel(f_type=drop_feats)
+            tau_hat_reps.append(tau_hat_rep.assign_coords(tid=ds_str.replace('rep', '') + tau_hat_rep.tid))
+            ds_str = str(ds).replace('rep', 'loc')
+            tau_hat_loc = xr.open_dataarray(f'/vast/qx244/salami/tau_hat_{ds_str}-{loc_model}.nc')
+            tau_hat_loc = tau_hat_loc.drop_sel(f_type=drop_feats)
+            tau_hat_locs.append(tau_hat_loc.assign_coords(tid=ds_str.replace('loc', '') + tau_hat_loc.tid))
+
+    deploy_th_rep = xr.concat(tau_hat_reps, dim='tid')
+    deploy_th_loc = xr.concat(tau_hat_locs, dim='tid')
+    deploy_tau_perf = pick_by_taus(deploy_sda, deploy_th_rep, deploy_th_loc)
+    
+    return deploy_naive_perf, deploy_tau_perf, (dev_rep_pick, dev_loc_pick)
 

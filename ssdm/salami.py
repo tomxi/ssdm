@@ -1,5 +1,6 @@
 import ssdm
 from ssdm import base
+from ssdm import scluster
 
 import torch
 from torch.utils.data import Dataset
@@ -160,15 +161,15 @@ class DS(Dataset):
     """
     def __init__(self, 
                  split='working',
-                 mode='rep', # {'rep', 'loc'}
+                 mode='rep', # {'rep', 'loc', 'both'}
                  infer=True,
                 #  drop_features=[],
                 #  precomputed_tau_fp='/home/qx244/scanning-ssm/ssdm/taus_1107.nc',
                  transform=None,
-                 sample_select_fn=ssdm.utils.select_samples_using_tau_percentile,
+                 sample_select_fn=ssdm.utils.select_samples_using_outstanding_l_score,
                 ):
         self.transform = transform
-        if mode not in ('rep', 'loc'):
+        if mode not in ('rep', 'loc', 'both'):
             raise AssertionError('bad dataset mode, can only be rep or loc')
         self.mode = mode
         self.split = split
@@ -182,11 +183,19 @@ class DS(Dataset):
         self.infer = infer
         if infer:
             # just get all the combos, returns the percentile of the sample tau value [0~1]
-            self.samples = {pair: 0.5 \
-                            for pair in list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES)) \
-                            if pair[0] in self.tids}
+            if self.mode != 'both':
+                self.samples = {pair: 0.5 \
+                                for pair in list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES)) \
+                                if pair[0] in self.tids}
+            else:
+                self.samples = {pair: 0.5 \
+                                for pair in list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES)) \
+                                if pair[0] in self.tids}
         else:
-            self.samples = sample_select_fn(self)
+            if self.mode == 'both':
+                self.samples = sample_select_fn(self, feat_pair=True)
+            else:
+                self.samples = sample_select_fn(self)
         self.ordered_keys = list(self.samples.keys())
 
     def track_obj(self, **track_kwargs):
@@ -202,35 +211,43 @@ class DS(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        tid, feat = self.ordered_keys[idx]
+        tid, *feats = self.ordered_keys[idx]
         track = Track(tid)
         config = ssdm.DEFAULT_LSD_CONFIG.copy()
 
         if self.mode == 'rep':
-            rep_ssm = track.ssm(feature=feat, 
+            rep_ssm = track.ssm(feature=feats[0], 
                                 distance=config['rep_metric'],
                                 width=config['rec_width'],
                                 full=config['rec_full'],
-                                **ssdm.REP_FEAT_CONFIG[feat]
+                                **ssdm.REP_FEAT_CONFIG[feats[0]]
                                 )
-            label = self.samples[(tid, feat)]
-            sample = {'data': torch.tensor(rep_ssm[None, None, :], dtype=torch.float32, device=self.device),
-                    'label': torch.tensor([label], dtype=torch.float32, device=self.device)[None, :],
-                    # 'tau_percent': torch.tensor(tau_percent, dtype=torch.float32, device=self.device),
-                    'info': (tid, feat, self.mode),
-                    }
+            data = rep_ssm
+            
         
         elif self.mode == 'loc':
-            path_sim = track.path_sim(feature=feat, 
+            path_sim = track.path_sim(feature=feats[0], 
                                       distance=config['loc_metric'],
-                                      **ssdm.LOC_FEAT_CONFIG[feat])
-
-            label = self.samples[(tid, feat)]
-            sample = {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
-                    'label': torch.tensor([label], dtype=torch.float32)[None, :],
-                    # 'tau_percent': torch.tensor(tau_percent, dtype=torch.float32, device=self.device),
-                    'info': (tid, feat, self.mode),
-                    }
+                                      **ssdm.LOC_FEAT_CONFIG[feats[0]])
+            data = path_sim
+            
+        elif self.mode == 'both':
+            # rep_ssm = track.ssm(feature=feats[0], 
+            #                     distance=config['rep_metric'],
+            #                     width=config['rec_width'],
+            #                     full=config['rec_full'],
+            #                     **ssdm.REP_FEAT_CONFIG[feats[0]]
+            #                     )
+            # path_sim = track.path_sim(feature=feats[1], 
+            #                           distance=config['loc_metric'],
+            #                           **ssdm.LOC_FEAT_CONFIG[feats[1]])
+            data = track.combined_rec_mat(config_update=config)
+        
+        label = self.samples[(tid, *feats)]
+        sample = {'data': torch.tensor(data[None, None, :], dtype=torch.float32, device=self.device),
+                  'label': torch.tensor([label], dtype=torch.float32, device=self.device)[None, :],
+                  'info': (tid, *feats, self.mode),
+                 }
 
         if self.transform:
             sample = self.transform(sample)

@@ -27,7 +27,7 @@ def time_mask(sample, T=40, num_masks=1, replace_with_zero=False, tau='rep'):
 
         mask_end = random.randrange(t_zero, t_zero + t)
 
-        if tau == 'rep':
+        if tau == 'rep' or tau == 'both':
             if (replace_with_zero): 
                 cloned[0, 0][t_zero:mask_end, :] = 0
                 cloned[0, 0][:, t_zero:mask_end] = 0

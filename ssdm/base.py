@@ -1,5 +1,6 @@
 import ssdm
 import ssdm.utils
+from ssdm import scluster
 from . import feature
 from .expand_hier import expand_hierarchy
 import librosa
@@ -221,13 +222,43 @@ class Track(object):
             pathsim = np.load(pathsim_path, allow_pickle=True)
         return pathsim
 
+
+    def combined_rec_mat(
+        self, 
+        config_update: dict = dict(),
+        recompute: bool  = False,
+        path_sim_sigma_percentile: float = 95,
+    ):
+        config = ssdm.DEFAULT_LSD_CONFIG.copy()
+        config.update(config_update)
+        record_path = os.path.join(self.output_dir, f'lsd/{self.tid}_{config["rep_ftype"]}_{config["loc_ftype"]}_{path_sim_sigma_percentile}.npy')
+        if recompute or not os.path.exists(record_path):
+            # calculated combined rec mat and save
+            rep_ssm = self.ssm(feature=config['rep_ftype'], 
+                                distance=config['rep_metric'],
+                                width=config['rec_width'],
+                                full=config['rec_full'],
+                                **ssdm.REP_FEAT_CONFIG[config['rep_ftype']]
+                                )
+            path_sim = self.path_sim(feature=config['loc_ftype'], 
+                                      distance=config['loc_metric'],
+                                      **ssdm.LOC_FEAT_CONFIG[config['loc_ftype']])
+            record = scluster.combine_ssms(rep_ssm, path_sim, rec_smooth=config['rec_smooth'])
+            with open(record_path, 'wb') as f:
+                np.save(f, record)
+
+        # read npy file
+        with open(record_path, 'rb') as f:
+            record = np.load(record_path, allow_pickle=True)
+        return record
+
     
     def lsd(
-            self,
-            config_update: dict = dict(),
-            recompute: bool  = False,
-            print_config: bool = False,
-            path_sim_sigma_percentile: float = 95,
+        self,
+        config_update: dict = dict(),
+        recompute: bool  = False,
+        print_config: bool = False,
+        path_sim_sigma_percentile: float = 95,
     ) -> jams.Annotation:
         # load lsd jams and file/log handeling...
 

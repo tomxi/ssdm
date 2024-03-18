@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import json, argparse
 
+import ssdm
 import ssdm.scanner as scn
 import ssdm.salami as slm
 from ssdm import harmonix as hmx
@@ -12,7 +13,7 @@ from ssdm import harmonix as hmx
 # BACKUP, not using this anymore
 # DROP_FEATURES=[]
 
-def train(MODEL_ID, EPOCH, DATE, TAU_TYPE='rep', DS='slm', LS='tau'):
+def train(MODEL_ID, EPOCH, DATE, TAU_TYPE='rep', DS='slm', LS='score'):
     """DS can be slm and hmx for now, LS can be tau or score"""
     print(MODEL_ID, EPOCH, DATE, TAU_TYPE, DS, LS)
 
@@ -36,7 +37,7 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE='rep', DS='slm', LS='tau'):
          'weight_decay': 1e-5}  # Only weight decay for the specified layer
     ])
 
-    if TAU_TYPE == 'rep':
+    if TAU_TYPE == 'rep' or TAU_TYPE == 'both':
         lr_scheduler = optim.lr_scheduler.CyclicLR(optimizer,
                                                 base_lr=1e-9,
                                                 max_lr=1e-4,
@@ -53,14 +54,18 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE='rep', DS='slm', LS='tau'):
                                                 step_size_up=5000)
 
     augmentor = lambda x: scn.time_mask(x, T=100, num_masks=4, replace_with_zero=False, tau=TAU_TYPE)
+    if LS == 'score':
+        sample_selector = ssdm.select_samples_using_outstanding_l_score
+    elif LS == 'tau':
+        sample_selector = ssdm.select_samples_using_tau_percentile
 
     # setup dataloaders
     if DS == 'slm':
-        train_dataset = slm.DS('train', infer=False, mode=TAU_TYPE, transform=augmentor)
-        val_dataset = slm.DS('val', infer=False, mode=TAU_TYPE)
+        train_dataset = slm.DS('train', infer=False, mode=TAU_TYPE, transform=augmentor, sample_select_fn=sample_selector)
+        val_dataset = slm.DS('val', infer=False, mode=TAU_TYPE, sample_select_fn=sample_selector)
     elif DS == 'hmx':
-        train_dataset = hmx.DS(split='train', infer=False, mode=TAU_TYPE, transform=augmentor)
-        val_dataset = hmx.DS(split='val', infer=False, mode=TAU_TYPE)
+        train_dataset = hmx.DS(split='train', infer=False, mode=TAU_TYPE, transform=augmentor, sample_select_fn=sample_selector)
+        val_dataset = hmx.DS(split='val', infer=False, mode=TAU_TYPE, sample_select_fn=sample_selector)
 
     train_loader = DataLoader(train_dataset, batch_size=None, shuffle=True)
 
@@ -104,12 +109,11 @@ if __name__ == '__main__':
     parser.add_argument('total_epoch', help='total number of epochs to train')
     parser.add_argument('date', help='just a marker really, can be any text but mmdd is the intension')
     parser.add_argument('tau_type', help='which tau? rep or loc')
-    # parser.add_argument('dataset', help='Which dataset? slm or hmx')
+    parser.add_argument('dataset', help='Which dataset? slm or hmx')
     # parser.add_argument('learning_signal', help='tau or score')
 
     kwargs = parser.parse_args()
     # print(kwargs)
-    for ds in ['slm', 'hmx']:
-        for l_sig in ['tau', 'score']:
-            train(kwargs.model_id, kwargs.total_epoch, kwargs.date, kwargs.tau_type, ds, l_sig)
+    for l_sig in ['score']:
+        train(kwargs.model_id, kwargs.total_epoch, kwargs.date, kwargs.tau_type, kwargs.dataset, l_sig)
     print('done without failure!')

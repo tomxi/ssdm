@@ -476,21 +476,25 @@ def select_samples_using_tau_percentile(ds, low=25, high=75):
     return {**neg_samples, **pos_samples}
 
 
-def select_samples_using_outstanding_l_score(ds, low=25, high=75, l_type='lr'):
+def select_samples_using_outstanding_l_score(ds, low=25, high=75, l_type='lr', feat_pair=False):
     scores_full = ssdm.get_lsd_scores(type(ds)(infer=True), heir=True).sel(l_type=l_type)
     best_on_avg_rep_feat = scores_full.mean(dim='tid').max(dim='loc_ftype').idxmax(dim='rep_ftype').item()
     best_on_avg_loc_feat = scores_full.mean(dim='tid').max(dim='rep_ftype').idxmax(dim='loc_ftype').item()
     diff_from_boa = scores_full - scores_full.sel(rep_ftype=best_on_avg_rep_feat, loc_ftype=best_on_avg_loc_feat)
 
     # Different ds.modes requires different treatment
+    if feat_pair:
+        diff_flat = diff_from_boa.stack(sid=['tid', 'rep_ftype', 'loc_ftype'])
+    else:
+        if ds.mode == 'rep':
+            diff_flat = diff_from_boa.mean(dim='loc_ftype').stack(sid=['tid', 'rep_ftype'])
+        elif ds.mode == 'loc':
+            diff_flat = diff_from_boa.mean(dim='rep_ftype').stack(sid=['tid', 'loc_ftype'])
 
-    if ds.mode == 'rep':
-        diff_flat = diff_from_boa.mean(dim='loc_ftype').stack(sid=['tid', 'rep_ftype'])
-    elif ds.mode == 'loc':
-        diff_flat = diff_from_boa.mean(dim='rep_ftype').stack(sid=['tid', 'loc_ftype'])
-
-    neg_sids = diff_flat.where(diff_flat < np.percentile(diff_flat, low), drop=True).indexes['sid']
-    pos_sids = diff_flat.where(diff_flat > np.percentile(diff_flat, high), drop=True).indexes['sid']    
+    neg_sids = diff_flat.where(diff_flat < min(np.percentile(diff_flat, low), 0), 
+                               drop=True).indexes['sid']
+    pos_sids = diff_flat.where(diff_flat > max(np.percentile(diff_flat, high), 0), 
+                               drop=True).indexes['sid']
     neg_samples = {sid: 0 for sid in neg_sids if sid[0] in ds.tids}
     pos_samples = {sid: 1 for sid in pos_sids if sid[0] in ds.tids}
     return {**neg_samples, **pos_samples}

@@ -32,13 +32,21 @@ class Track(base.Track):
 
 
 def get_ids(
+    split: str = None,
     out_type: str = 'list' # one of {'set', 'list'}
 ) -> list:
     id_path = pkg_resources.resource_filename('ssdm', 'split_ids.json')
     with open(id_path, 'r') as f:
         id_json = json.load(f)
-    ids = id_json['harmonix']
-        
+    all_ids = id_json['harmonix']
+    
+    if split:
+    # Get different splits: can be train test val
+        split_dict = ssdm.create_splits(all_ids, val_ratio=0.15, test_ratio=0.15, random_state=20230327)
+        ids = split_dict[split]
+    else:
+        ids = all_ids
+
     if out_type == 'set':
         return set(ids)
     elif out_type == 'list':
@@ -49,57 +57,60 @@ def get_ids(
         return None
 
 
-def get_taus(
-    tids=[], 
-    **tau_kwargs,
-) -> xr.DataArray:
-    tau_per_track = []
-    for tid in tqdm(tids):
-        track = Track(tid)
-        track_tau = track.tau(**tau_kwargs)
-        tau_per_track.append(track_tau)
-    
-    return xr.concat(tau_per_track, pd.Index(tids, name='tid')).rename()
-
-
-def get_lsd_scores(
-    tids=[], 
-    **lsd_score_kwargs
-) -> xr.DataArray:
-    score_per_track = []
-    for tid in tqdm(tids):
-        track = Track(tid)
-        track_score = track.lsd_score(**lsd_score_kwargs)
-        score_per_track.append(track_score)
-    
-    return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
-
-
 class DS(Dataset):
     """ 
     mode='rep', # {'rep', 'loc'}
     """
-    def __init__(self, mode='rep'):
+    def __init__(self, mode='rep', infer=True, tids=None, split=None, transform=None, sample_select_fn=ssdm.utils.select_samples_using_tau_percentile):
         if mode not in ('rep', 'loc'):
             raise AssertionError('bad dataset mode, can only be rep or loc')
         self.mode = mode
-        self.tids = get_ids(out_type='list')
+        if tids is None:
+            self.tids = get_ids(split=split, out_type='list')
+            self.split = split
+        else:
+            self.tids = tids
+            self.split = f'custom{len(tids)}'
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
         else:
             self.device = torch.device("cpu")
-        self.samples = list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES))
+        self.infer=infer
+
+        # sample building
+        if self.infer:
+            self.samples = list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES))
+        else:
+            self.labels = sample_select_fn(self)
+            self.samples = list(self.labels.keys())
         self.samples.sort()
+        self.transform=transform
+        
+    # def select_samples_using_tau_percentile(self, low=25, high=75):
+    #     taus_full = ssdm.get_taus(type(self)())
+    #     tau_flat = taus_full.sel(tau_type=self.mode).stack(sid=['tid', 'f_type'])
+    #     neg_sids = tau_flat.where(tau_flat < np.percentile(tau_flat, low), drop=True).indexes['sid']
+    #     pos_sids = tau_flat.where(tau_flat > np.percentile(tau_flat, high), drop=True).indexes['sid']
+    #     neg_samples = {sid: 0 for sid in neg_sids}
+    #     pos_samples = {sid: 1 for sid in pos_sids}
+    #     return {**neg_samples, **pos_samples}
+
 
     def track_obj(self, **track_kwargs):
         return Track(**track_kwargs)
 
+    
     def __len__(self):
         return len(self.samples)
-    
+
+
     def __repr__(self):
-        return 'hmx' + self.mode
-    
+        if self.split:
+            return f'hmx{self.mode}{self.split}'
+        else:
+            return f'hmx{self.mode}{len(self.tids)}'
+
+
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
@@ -116,19 +127,23 @@ class DS(Dataset):
                                 full=config['rec_full'],
                                 **ssdm.REP_FEAT_CONFIG[feat]
                                 )
-
-            return {'data': torch.tensor(rep_ssm[None, None, :], dtype=torch.float32, device=self.device),
-                    'info': (tid, feat, self.mode),
-                    }
-        
+            datum = {'data': torch.tensor(rep_ssm[None, None, :], dtype=torch.float32, device=self.device),
+                     'info': (tid, feat, self.mode)}
+    
         elif self.mode == 'loc':
             path_sim = track.path_sim(feature=feat, 
                                       distance=config['loc_metric'],
                                       **ssdm.LOC_FEAT_CONFIG[feat])
 
-            return {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
-                    'info': (tid, feat, self.mode),
-                    }
-       
+            datum = {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
+                     'info': (tid, feat, self.mode)}
         else:
-            assert KeyError
+            assert KeyError('bad mode: can onpy be rep or loc')
+        
+        if not self.infer:
+            datum['label'] = torch.tensor([self.labels[self.samples[idx]]], dtype=torch.float32)[None, :]
+        
+        if self.transform:
+            datum = self.transform(datum)
+        
+        return datum

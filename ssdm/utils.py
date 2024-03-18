@@ -1,3 +1,4 @@
+from sklearn.model_selection import train_test_split
 import xarray as xr
 import pandas as pd
 import numpy as np
@@ -282,6 +283,7 @@ def run_lsd(
                         recompute=recompute_ssm,
                         **ssdm.REP_FEAT_CONFIG[config['rep_ftype']]
                         )
+    
     if config['rec_full']:
         rep_ssm = mask_diag(rep_ssm, width=config['rec_width'])
 
@@ -289,6 +291,7 @@ def run_lsd(
     path_sim = track.path_sim(feature=config['loc_ftype'],
                               distance=config['loc_metric'],
                               sigma_percentile=loc_sigma,
+                              recompute=True,
                               **ssdm.LOC_FEAT_CONFIG[config['loc_ftype']]
                              )
 
@@ -301,15 +304,17 @@ def run_lsd(
 def get_lsd_scores(
     ds,
     shuffle=False,
-    anno_col_fn=lambda stack: stack.mean(dim='anno_id'), # activated when there are more than 1 annotation for a track
+    anno_col_fn=lambda stack: stack.max(dim='anno_id'), # activated when there are more than 1 annotation for a track
     heir=False,
+    recollect=False,
+    **lsd_kwargs,
 ) -> xr.DataArray:
     ds_str = str(ds).replace('rep', '').replace('loc', '')
     if heir:
-        save_path = f'/vast/qx244/{ds_str}_heir_lsd_scores.nc'
+        save_path = f'/vast/qx244/{ds_str}_{len(ds)}_heir_lsd_scores.nc'
     else:
-        save_path = f'/vast/qx244/{ds_str}_flat_lsd_scores.nc'
-    if not os.path.exists(save_path):
+        save_path = f'/vast/qx244/{ds_str}_{len(ds)}_flat_lsd_scores.nc'
+    if recollect or (not os.path.exists(save_path)):
         score_per_track = []
         tids = ds.tids
         if shuffle:
@@ -319,21 +324,46 @@ def get_lsd_scores(
             track = ds.track_obj(tid=tid)
             if track.num_annos() == 1:
                 if heir:
-                    score_per_track.append(track.lsd_score())
+                    score_per_track.append(track.lsd_score(**lsd_kwargs))
                 else:
-                    score_per_track.append(track.lsd_score_flat())
+                    score_per_track.append(track.lsd_score_flat(**lsd_kwargs))
             else:
                 score_per_anno = []
                 for anno_id in range(track.num_annos()):
                     if heir:
-                        score_per_anno.append(track.lsd_score(anno_id=anno_id))
+                        score_per_anno.append(track.lsd_score(anno_id=anno_id, **lsd_kwargs))
                     else:
-                        score_per_anno.append(track.lsd_score_flat(anno_id=anno_id))
-
+                        score_per_anno.append(track.lsd_score_flat(anno_id=anno_id, **lsd_kwargs))
+                # print(score_per_anno)
                 anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
                 score_per_track.append(anno_col_fn(anno_stack))
 
-        xr.concat(score_per_track, pd.Index(tids, name='tid')).rename().to_netcdf(save_path)
+        xr.concat(score_per_track, pd.Index(tids, name='tid'), coords='minimal').rename().to_netcdf(save_path)
+    return xr.load_dataarray(save_path).sortby('tid')
+
+
+def get_taus(
+    ds,
+    shuffle=False,
+    anno_col_fn=lambda stack: stack.max(dim='anno_id'), # activated when there are more than 1 annotation for a track
+    recollect=False,
+    **tau_kwargs,
+):
+    ds_str = str(ds).replace('rep', '').replace('loc', '')
+    save_path = f'/vast/qx244/{ds_str}_{len(ds)}_blocky_taus.nc'
+    if recollect or not os.path.exists(save_path):
+        tau_per_track = []
+        tids = ds.tids
+        if shuffle:
+            random.shuffle(tids)
+        for tid in tqdm(tids):
+            track = ds.track_obj(tid=tid)
+            tau_per_anno = []
+            for anno_id in range(track.num_annos()):
+                tau_per_anno.append(track.tau(anno_id=anno_id, **tau_kwargs))
+            anno_stack = xr.concat(tau_per_anno, pd.Index(range(len(tau_per_anno)), name='anno_id'))
+            tau_per_track.append(anno_col_fn(anno_stack))
+        xr.concat(tau_per_track, pd.Index(tids, name='tid'), coords='minimal').rename().to_netcdf(save_path)
     return xr.load_dataarray(save_path).sortby('tid')
 
 
@@ -380,33 +410,33 @@ def full_performance(ds, rep_model='RepNet20240303_epoch28', loc_model='LocNet20
 
 
 def dev_deploy_perf(
-    dev_ds, all_ds, 
+    dev_ds, all_ds_list, 
     m_type='r', metric='l', 
     rep_model='RepNet20240303_epoch28', 
     loc_model='LocNet20240303_epoch17',
     drop_feats=[]
 ):
     # look at the dev_ds and pick the best pair of features on average
-    dev_mean_score = full_performance(dev_ds).sel(m_type=m_type, metric=metric).mean('tid')
+    dev_mean_score = full_performance(dev_ds, rep_model=rep_model, loc_model=loc_model).sel(m_type=m_type, metric=metric).mean('tid')
     dev_mean_score = dev_mean_score.drop_sel(rep_ftype=drop_feats + ['tau_hat'], loc_ftype=drop_feats + ['tau_hat'])
     dev_rep_pick = dev_mean_score.max(dim='loc_ftype').idxmax(dim='rep_ftype').item()
     dev_loc_pick = dev_mean_score.max(dim='rep_ftype').idxmax(dim='loc_ftype').item()
     
     # Don't include the dev_ds in the deploy set, and combine all other ds.
     deploy_sda_list = []
-    for ds in all_ds:
+    for ds in all_ds_list:
         if type(ds) is not type(dev_ds):
-            deploy_sda_part = full_performance(ds).sel(m_type=m_type, metric=metric)
+            deploy_sda_part = full_performance(ds, rep_model=rep_model, loc_model=loc_model).sel(m_type=m_type, metric=metric)
             deploy_sda_part = deploy_sda_part.drop_sel(rep_ftype=drop_feats, loc_ftype=drop_feats)
             deploy_sda_list.append(deploy_sda_part)
-    deploy_sda = xr.concat(deploy_sda_list, dim='tid')
+    deploy_sda = xr.concat(deploy_sda_list, dim='tid', coords='minimal')
 
     deploy_naive_perf = deploy_sda.sel(rep_ftype=dev_rep_pick, loc_ftype=dev_loc_pick)
 
     ## Get all the tau_hats!
     tau_hat_reps = []
     tau_hat_locs = []
-    for ds in all_ds:
+    for ds in all_ds_list:
         if type(ds) is type(dev_ds):
 #             print('skipping the dev set')
             continue
@@ -426,3 +456,41 @@ def dev_deploy_perf(
     
     return deploy_naive_perf, deploy_tau_perf, (dev_rep_pick, dev_loc_pick)
 
+
+def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
+    dev_set, test_set = train_test_split(arr, test_size = test_ratio, random_state = random_state)
+    train_set, val_set = train_test_split(dev_set, test_size = val_ratio / (1 - test_ratio), random_state = random_state)
+    train_set.sort()
+    val_set.sort()
+    test_set.sort()
+    return dict(train=train_set, val=val_set, test=test_set)
+
+
+def select_samples_using_tau_percentile(ds, low=25, high=75):
+    taus_full = ssdm.get_taus(type(ds)(infer=True))
+    tau_flat = taus_full.sel(tau_type=ds.mode).stack(sid=['tid', 'f_type'])
+    neg_sids = tau_flat.where(tau_flat < np.percentile(tau_flat, low), drop=True).indexes['sid']
+    pos_sids = tau_flat.where(tau_flat > np.percentile(tau_flat, high), drop=True).indexes['sid']
+    neg_samples = {sid: 0 for sid in neg_sids if sid[0] in ds.tids}
+    pos_samples = {sid: 1 for sid in pos_sids if sid[0] in ds.tids}
+    return {**neg_samples, **pos_samples}
+
+
+def select_samples_using_outstanding_l_score(ds, low=25, high=75, l_type='lr'):
+    scores_full = ssdm.get_lsd_scores(type(ds)(infer=True), heir=True).sel(l_type=l_type)
+    best_on_avg_rep_feat = scores_full.mean(dim='tid').max(dim='loc_ftype').idxmax(dim='rep_ftype').item()
+    best_on_avg_loc_feat = scores_full.mean(dim='tid').max(dim='rep_ftype').idxmax(dim='loc_ftype').item()
+    diff_from_boa = scores_full - scores_full.sel(rep_ftype=best_on_avg_rep_feat, loc_ftype=best_on_avg_loc_feat)
+
+    # Different ds.modes requires different treatment
+
+    if ds.mode == 'rep':
+        diff_flat = diff_from_boa.mean(dim='loc_ftype').stack(sid=['tid', 'rep_ftype'])
+    elif ds.mode == 'loc':
+        diff_flat = diff_from_boa.mean(dim='rep_ftype').stack(sid=['tid', 'loc_ftype'])
+
+    neg_sids = diff_flat.where(diff_flat < np.percentile(diff_flat, low), drop=True).indexes['sid']
+    pos_sids = diff_flat.where(diff_flat > np.percentile(diff_flat, high), drop=True).indexes['sid']    
+    neg_samples = {sid: 0 for sid in neg_sids if sid[0] in ds.tids}
+    pos_samples = {sid: 1 for sid in pos_sids if sid[0] in ds.tids}
+    return {**neg_samples, **pos_samples}

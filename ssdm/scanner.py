@@ -71,7 +71,7 @@ def train_epoch(ds_loader, net, criterion, optimizer, batch_size=8, lr_scheduler
 def net_eval(ds, net, criterion, device='cpu', verbose=False):
     # ds_loader just need to be a iterable of samples
     # make result DF
-    result_df = pd.DataFrame(columns=('tau_hat', 'pred', 'tau_percent', 'label', 'loss'))
+    result_df = pd.DataFrame(columns=('tau_hat', 'pred', 'label', 'loss'))
     ds_loader = DataLoader(ds, batch_size=None, shuffle=False)
 
     net.to(device)
@@ -84,7 +84,7 @@ def net_eval(ds, net, criterion, device='cpu', verbose=False):
             tau_hat = net(data)
             label = s['label'].to(device)
             loss = criterion(tau_hat, label)
-            result_df.loc['_'.join(s['info'])] = (tau_hat.item(), int(tau_hat >= 0.5), s['tau_percent'].item(), label.item(), loss.item())      
+            result_df.loc['_'.join(s['info'])] = (tau_hat.item(), int(tau_hat >= 0.5), label.item(), loss.item())      
     return result_df.astype('float')
 
 

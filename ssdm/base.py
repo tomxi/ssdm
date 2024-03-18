@@ -273,7 +273,7 @@ class Track(object):
             lsd_anno = lsd_annos[0]
     
         if recompute:
-            print('computing! -- lsd')
+            print('computing! -- lsd', self.tid)
             # genearte new multi_segment annotation and store/overwrite it in the original jams file.
             lsd_anno = ssdm.utils.run_lsd(self, config=config, recompute_ssm=recompute, loc_sigma=path_sim_sigma_percentile)
             print('Done! -- lsd')
@@ -350,8 +350,8 @@ class Track(object):
         # return lsd_score_da
         out = lsd_score_da.sel(**lsd_sel_dict)
         try:
-            out.drop_vars('anno_id')
-        except ValueError:
+            out = out.sel(anno_id=anno_id)
+        except:
             pass
         return out
 
@@ -417,22 +417,19 @@ class Track(object):
         am_str = f'{anno_mode}' if anno_mode != 'expand' else ''
         eigen_block_txt = f'blocky' if eigen_block else ''
         record_path = os.path.join(self.output_dir, f'taus/{self.tid}_rw{rec_width}{suffix}{am_str}{eigen_block_txt}.nc')
-        if not os.path.exists(record_path):
+        try:
+            with xr.open_dataarray(record_path) as tau:
+                tau.load()
+        except:
             grid_coords = dict(f_type=ssdm.AVAL_FEAT_TYPES, 
                                tau_type=['rep', 'loc'], 
                                )
             tau = xr.DataArray(np.nan, coords=grid_coords, dims=grid_coords.keys())
             tau.to_netcdf(record_path)
-        else:
-            with xr.open_dataarray(record_path) as tau:
-                tau.load()
 
         if recompute or tau.sel(**tau_sel_dict).isnull().any():
-
             # build lsd_configs from tau_sel_dict
-
             config_midx = tau.sel(**tau_sel_dict).coords.to_index()
-
             meet_mat = ssdm.anno_to_meet(self.ref(mode=anno_mode, **anno_id_kwarg), self.ts())
             meet_mat_diag = np.diag(meet_mat, k=1)
             # print(config_midx)
@@ -445,7 +442,6 @@ class Track(object):
                         recompute=recompute,
                         **ssdm.REP_FEAT_CONFIG[f_type]
                     )
-
                     if eigen_block:
                         combined_graph = ssdm.scluster.combine_ssms(ssm, meet_mat_diag)
                         _, evecs = ssdm.scluster.embed_ssms(combined_graph, evec_smooth=13)
@@ -454,7 +450,6 @@ class Track(object):
                         tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
                             quant_block.flatten(), meet_mat.flatten()
                         )[0]
-
                     else:
                         quant_sim = ssdm.quantize(ssm, quantize_method=quantize, quant_bins=quant_bins)
                         tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
@@ -469,8 +464,10 @@ class Track(object):
                     
                     tau.loc[dict(f_type=f_type, tau_type=tau_type)] = roc_auc_score(self.path_ref(**anno_id_kwarg), path_sim)        
                 tau.to_netcdf(record_path)
-        # return tau
-        return tau.sel(**tau_sel_dict)
+        try:
+            return tau.sel(**anno_id_kwarg, **tau_sel_dict)
+        except KeyError:
+            return tau.sel(**tau_sel_dict)
 
 
 class MyTrack(Track):

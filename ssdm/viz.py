@@ -227,3 +227,45 @@ def plot_mean_score(ds, rep_model='RepNet20240303_epoch28', loc_model='LocNet202
             heatmap(ds_score.sel(metric=metric).mean(dim='tid'), title=f'{ds}, {metric}'.replace('rep', ''), ax=axes[i])
 
     return fig, axes
+
+
+# Show dataset performance heatmap... a bit too general
+def dataset_performance(dataset, 
+                        tau_hat_rep_path, 
+                        tau_hat_loc_path):
+    # L SCORES # WITH TAU-HAT PICKING
+    score_per_track = []
+    for tid in dataset.tids:
+        track = dataset.track_obj(tid=tid)
+        score_per_track.append(track.lsd_score())
+    
+    score_da = xr.concat(score_per_track, pd.Index(dataset.tids, name='tid')).rename().sortby('tid')
+    
+
+    # add tau-hat pick performance:
+    tau_hat_rep = xr.open_dataarray(tau_hat_rep_path)
+    tau_hat_loc = xr.open_dataarray(tau_hat_loc_path)
+
+    rep_pick = tau_hat_rep.idxmax(dim='f_type').sortby('tid')
+    loc_pick = tau_hat_loc.idxmax(dim='f_type').sortby('tid')
+
+    tau_hat_rep_score = score_da.sel(rep_ftype=rep_pick).drop_vars('rep_ftype').expand_dims(rep_ftype=['tau_hat'])
+    tau_hat_loc_score = score_da.sel(loc_ftype=loc_pick).drop_vars('loc_ftype').expand_dims(loc_ftype=['tau_hat'])
+    tau_hat_both_score = score_da.sel(rep_ftype=rep_pick, loc_ftype=loc_pick).drop_vars(['loc_ftype', 'rep_ftype']).expand_dims(loc_ftype=['tau_hat'], rep_ftype=['tau_hat'])
+
+    score_with_tau_rep = xr.concat([score_da, tau_hat_rep_score], dim='rep_ftype')
+    full_tau_loc_score = xr.concat([tau_hat_loc_score, tau_hat_both_score], dim='rep_ftype')
+    full_score = xr.concat([score_with_tau_rep, full_tau_loc_score], dim='loc_ftype')
+    
+    if 'anno_id' not in full_score.indexes:
+        average_performance = full_score.mean(dim=['tid'])
+    else:
+        average_performance = full_score.mean(dim=['anno_id', 'tid'])
+
+    o = []
+    for l_type in ['lr']:
+        o.append(heatmap(average_performance.sel(l_type=l_type), title=f'{dataset} {l_type} average score'))
+    
+    # F SCORES
+
+    return o

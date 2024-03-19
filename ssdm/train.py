@@ -93,13 +93,13 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE='rep', DS='slm', LS='score'):
             # update best_loss and save model
             best_loss = loss
             best_state = net.state_dict()
-            torch.save(best_state, f'{DATE}{MODEL_ID}_{DS}{LS}_epoch{epoch}')
+            torch.save(best_state, f'{DATE}{MODEL_ID}_{DS}{LS}{TAU_TYPE}_epoch{epoch}')
         
         # save simple log as json
         trainning_info = {'train_loss': train_losses,
                         'val_loss': val_losses,
                         'val_accu': val_accus}
-        with open(f'{DATE}{MODEL_ID}_{DS}{LS}_{EPOCH}epoch.json', 'w') as file:
+        with open(f'{DATE}{MODEL_ID}_{DS}{LS}{TAU_TYPE}_{EPOCH}epoch.json', 'w') as file:
             json.dump(trainning_info, file)
 
 

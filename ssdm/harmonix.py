@@ -62,7 +62,7 @@ class DS(Dataset):
     """ 
     mode='rep', # {'rep', 'loc', 'both}
     """
-    def __init__(self, mode='rep', infer=True, tids=None, split=None, transform=None, sample_select_fn=ssdm.utils.select_samples_using_tau_percentile):
+    def __init__(self, mode='rep', infer=True, tids=None, split=None, transform=None, sample_select_fn=ssdm.utils.select_samples_using_outstanding_l_score):
         if mode not in ('rep', 'loc', 'both'):
             raise AssertionError('bad dataset mode, can only be rep or loc both')
         self.mode = mode
@@ -85,18 +85,16 @@ class DS(Dataset):
             else:
                 self.samples = list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES))
         else:
-            if self.mode == 'both':
-                self.labels = sample_select_fn(self, feat_pair=True)
-            else:
-                self.labels = sample_select_fn(self)
+            self.labels = sample_select_fn(self)
             self.samples = list(self.labels.keys())
         self.samples.sort()
         self.transform=transform
 
+
     def track_obj(self, **track_kwargs):
         return Track(**track_kwargs)
 
-    
+
     def __len__(self):
         return len(self.samples)
 
@@ -127,8 +125,8 @@ class DS(Dataset):
     
         elif self.mode == 'loc':
             data = track.path_sim(feature=feats[0], 
-                                      distance=config['loc_metric'],
-                                      **ssdm.LOC_FEAT_CONFIG[feats[0]])
+                                  distance=config['loc_metric'],
+                                  **ssdm.LOC_FEAT_CONFIG[feats[0]])
 
         elif self.mode == 'both':
             # repd = track.ssm(feature=feats[0], 
@@ -144,7 +142,7 @@ class DS(Dataset):
             data = track.combined_rec_mat(config_update=config)
 
         else:
-            assert KeyError('bad mode: can onpy be rep or loc')
+            assert KeyError('bad mode: can onpy be rep or loc or both')
         
         datum = {'data': torch.tensor(data[None, None, :], dtype=torch.float32, device=self.device),
                  'info': (tid, *feats, self.mode)}

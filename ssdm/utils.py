@@ -350,7 +350,7 @@ def get_taus(
     **tau_kwargs,
 ):
     ds_str = str(ds).replace('rep', '').replace('loc', '')
-    save_path = f'/vast/qx244/{ds_str}_{len(ds)}_blocky_taus.nc'
+    save_path = f'/vast/qx244/{ds_str}_blocky_taus.nc'
     if recollect or not os.path.exists(save_path):
         tau_per_track = []
         tids = ds.tids
@@ -467,34 +467,52 @@ def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
 
 
 def select_samples_using_tau_percentile(ds, low=25, high=75):
-    taus_full = ssdm.get_taus(type(ds)(infer=True))
-    tau_flat = taus_full.sel(tau_type=ds.mode).stack(sid=['tid', 'f_type'])
-    neg_sids = tau_flat.where(tau_flat < np.percentile(tau_flat, low), drop=True).indexes['sid']
-    pos_sids = tau_flat.where(tau_flat > np.percentile(tau_flat, high), drop=True).indexes['sid']
-    neg_samples = {sid: 0 for sid in neg_sids if sid[0] in ds.tids}
-    pos_samples = {sid: 1 for sid in pos_sids if sid[0] in ds.tids}
-    return {**neg_samples, **pos_samples}
+    taus_full = ssdm.get_taus(type(ds)(split='train', infer=True))
+    if ds.mode == 'both':
+        print('not implemented yet')
+        raise NotImplementedError
+    else:
+        tau_flat = taus_full.sel(tau_type=ds.mode).stack(sid=['tid', 'f_type'])
+        neg_sids = tau_flat.where(tau_flat < np.percentile(tau_flat, low), drop=True).indexes['sid']
+        pos_sids = tau_flat.where(tau_flat > np.percentile(tau_flat, high), drop=True).indexes['sid']
+        neg_samples = {sid: 0 for sid in neg_sids if sid[0] in ds.tids}
+        pos_samples = {sid: 1 for sid in pos_sids if sid[0] in ds.tids}
+        return {**neg_samples, **pos_samples}
 
 
-def select_samples_using_outstanding_l_score(ds, low=25, high=75, l_type='lr', feat_pair=False):
-    scores_full = ssdm.get_lsd_scores(type(ds)(infer=True), heir=True).sel(l_type=l_type)
+def select_samples_using_outstanding_l_score(ds, neg_eps_pct=50, l_type='lr'):
+    scores_full = ssdm.get_lsd_scores(type(ds)(split='train', infer=True), heir=True).sel(l_type=l_type)
     best_on_avg_rep_feat = scores_full.mean(dim='tid').max(dim='loc_ftype').idxmax(dim='rep_ftype').item()
     best_on_avg_loc_feat = scores_full.mean(dim='tid').max(dim='rep_ftype').idxmax(dim='loc_ftype').item()
-    diff_from_boa = scores_full - scores_full.sel(rep_ftype=best_on_avg_rep_feat, loc_ftype=best_on_avg_loc_feat)
+    ds_score = ssdm.get_lsd_scores(type(ds)(split=ds.split, infer=True), heir=True).sel(l_type=l_type)
+    diff_from_boa = ds_score - ds_score.sel(rep_ftype=best_on_avg_rep_feat, loc_ftype=best_on_avg_loc_feat)
 
     # Different ds.modes requires different treatment
-    if feat_pair:
+    if ds.mode == 'both':
         diff_flat = diff_from_boa.stack(sid=['tid', 'rep_ftype', 'loc_ftype'])
-    else:
-        if ds.mode == 'rep':
-            diff_flat = diff_from_boa.mean(dim='loc_ftype').stack(sid=['tid', 'rep_ftype'])
-        elif ds.mode == 'loc':
-            diff_flat = diff_from_boa.mean(dim='rep_ftype').stack(sid=['tid', 'loc_ftype'])
+    elif ds.mode == 'rep':
+        diff_flat = diff_from_boa.mean(dim='loc_ftype').stack(sid=['tid', 'rep_ftype'])
+    elif ds.mode == 'loc':
+        diff_flat = diff_from_boa.mean(dim='rep_ftype').stack(sid=['tid', 'loc_ftype'])
 
-    neg_sids = diff_flat.where(diff_flat < min(np.percentile(diff_flat, low), 0), 
-                               drop=True).indexes['sid']
-    pos_sids = diff_flat.where(diff_flat > max(np.percentile(diff_flat, high), 0), 
-                               drop=True).indexes['sid']
-    neg_samples = {sid: 0 for sid in neg_sids if sid[0] in ds.tids}
-    pos_samples = {sid: 1 for sid in pos_sids if sid[0] in ds.tids}
+    all_neg_perf_gaps = diff_flat.where(diff_flat < 0, drop=True)
+    neg_eps = np.percentile(all_neg_perf_gaps, neg_eps_pct)
+    neg_sids = diff_flat.where(diff_flat < neg_eps, drop=True).indexes['sid']
+    pos_sids = diff_flat.where(diff_flat >= 0, drop=True).indexes['sid']
+
+    # Filter by taus: it has to have a tau score that's in the upper half of all taus
+    if ds.mode == 'both':
+        # In place of TAUs for now... just use l-scores: upper half or lower half
+        pos_samples = {s: 1 for s in pos_sids if ds_score.loc[s] >= np.median(ds_score)}
+        neg_samples = {s: 0 for s in neg_sids if ds_score.loc[s] <= np.median(ds_score)}
+    else:
+        ds_tau = get_taus(ds).sel(tau_type=ds.mode)
+        p_taus = {p: ds_tau.loc[p].item() for p in pos_sids}
+        n_taus = {n: ds_tau.loc[n].item() for n in neg_sids}
+        all_taus = get_taus(type(ds)(split='train', infer=True)).sel(tau_type=ds.mode)
+
+        pos_samples = {s: 1 for s in p_taus if p_taus[s] >= np.median(all_taus)}
+        neg_samples = {s: 0 for s in n_taus if n_taus[s] <= np.median(all_taus)}
+
+    print(f'{ds} has \n \t {len(pos_samples)} pos samples; {len(neg_samples)} neg samples.')
     return {**neg_samples, **pos_samples}

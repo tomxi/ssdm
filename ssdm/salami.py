@@ -173,7 +173,7 @@ class DS(Dataset):
             raise AssertionError('bad dataset mode, can only be rep or loc')
         self.mode = mode
         self.split = split
-        self.tids = get_ids(split, out_type='list')
+        self.tids = get_ids(self.split, out_type='list')
 
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
@@ -185,17 +185,12 @@ class DS(Dataset):
             # just get all the combos, returns the percentile of the sample tau value [0~1]
             if self.mode != 'both':
                 self.samples = {pair: 0.5 \
-                                for pair in list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES)) \
-                                if pair[0] in self.tids}
+                                for pair in list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES))}
             else:
                 self.samples = {pair: 0.5 \
-                                for pair in list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES)) \
-                                if pair[0] in self.tids}
+                                for pair in list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES))}
         else:
-            if self.mode == 'both':
-                self.samples = sample_select_fn(self, feat_pair=True)
-            else:
-                self.samples = sample_select_fn(self)
+            self.samples = sample_select_fn(self)
         self.ordered_keys = list(self.samples.keys())
 
     def track_obj(self, **track_kwargs):

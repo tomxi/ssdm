@@ -499,6 +499,16 @@ class Track(object):
             return tau.sel(**anno_id_kwarg, **tau_sel_dict)
         except KeyError:
             return tau.sel(**tau_sel_dict)
+        
+    def num_dist_segs(self):
+        num_seg_per_anno = []
+        for aid in range(self.num_annos()):
+            ref_anno = ssdm.multi2openseg(self.ref(mode='normal'))
+            segs = []
+            for obs in ref_anno:
+                segs.append(obs.value)
+            num_seg_per_anno.append(len(set(segs)))
+        return max(num_seg_per_anno)
 
 
 class MyTrack(Track):

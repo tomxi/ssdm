@@ -67,6 +67,30 @@ def train_epoch(ds_loader, net, criterion, optimizer, batch_size=8, lr_scheduler
     return (running_loss / len(ds_loader)).item()
 
 
+def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size=8, lr_scheduler=None, device='cpu'):
+    running_loss_util = 0.
+    running_loss_nlvl = 0.
+    optimizer.zero_grad()
+    net.to(device)
+    net.train()
+    for i, s in enumerate(ds_loader):
+        util, nlayer = net(s['data'])
+        u_loss = util_loss(util, s['label'])
+        nl_loss = nlvl_loss(nlayer, s['uniq_segs'])
+        loss = u_loss + nl_loss
+        loss.backward()
+        
+        running_loss_util += u_loss.item()
+        running_loss_nlvl += nl_loss.item()
+        
+        if i % batch_size == (batch_size - 1):
+            # take back prop step
+            optimizer.step()
+            optimizer.zero_grad()
+            if lr_scheduler is not None:
+                lr_scheduler.step()
+    return (running_loss_util / len(ds_loader)).item(), (running_loss_nlvl / len(ds_loader)).item()
+
 # eval tools:
 def net_eval(ds, net, criterion, device='cpu', verbose=False):
     # ds_loader just need to be a iterable of samples
@@ -88,6 +112,28 @@ def net_eval(ds, net, criterion, device='cpu', verbose=False):
     return result_df.astype('float')
 
 
+# eval tools:
+def net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device='cpu', verbose=False):
+    # ds_loader just need to be a iterable of samples
+    # make result DF
+    result_df = pd.DataFrame(columns=('util', 'nlvl', 'u_loss', 'lvl_loss', 'loss', 'label', 'uniq_seg'))
+    ds_loader = DataLoader(ds, batch_size=None, shuffle=False)
+
+    net.to(device)
+    net.eval()
+    with torch.no_grad():
+        if verbose:
+            ds_loader = tqdm(ds_loader)
+        for s in ds_loader:
+            util, nlayer = net(s['data'])
+            u_loss = util_loss(util, s['label'])
+            nl_loss = nlvl_loss(nlayer, s['uniq_segs'])
+            best_nlvl = torch.argmax(nlayer)
+            result_df.loc['_'.join(s['info'])] = (util.item(), best_nlvl.item(), u_loss.item(), nl_loss.item(),
+                                                  u_loss.item() + nl_loss.item(), s['label'].item(), s['uniq_segs'].item())      
+    return result_df.astype('float')
+
+
 def net_infer(infer_ds, net, device='cpu', out_type='pd'):
     # out_type can be 'pd' or 'xr'
     result_df = pd.DataFrame(columns=(ssdm.AVAL_FEAT_TYPES), index=infer_ds.tids)
@@ -101,6 +147,31 @@ def net_infer(infer_ds, net, device='cpu', out_type='pd'):
             data = s['data'].to(device)
             tau_hat = net(data)
             result_df.loc[tid][feat] = tau_hat.item()
+
+    if out_type == 'pd':
+        return result_df.astype('float')
+    
+    elif out_type == 'xr':
+        xr_da = xr.DataArray(
+            result_df.sort_index(), 
+            dims=['tid', 'f_type']
+        )
+        return xr_da
+    
+
+def net_infer_multi_loss(infer_ds, net, device='cpu', out_type='pd'):
+    # out_type can be 'pd' or 'xr'
+    result_df = pd.DataFrame(columns=(ssdm.AVAL_FEAT_TYPES), index=infer_ds.tids)
+    infer_loader = DataLoader(infer_ds, batch_size=None, shuffle=False)
+
+    net.to(device)
+    net.eval()
+    with torch.no_grad():
+        for s in tqdm(infer_loader):
+            tid, feat = s['info'][:2]
+            data = s['data'].to(device)
+            tau_hat, nlvl = net(data)
+            result_df.loc[tid][feat] = (tau_hat.item(), torch.argmax(nlvl).item())
 
     if out_type == 'pd':
         return result_df.astype('float')
@@ -580,6 +651,100 @@ class LocNet(nn.Module):
         return r
 
 
+class EvecNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.pre_pool_layers = nn.Sequential(
+            nn.Conv2d(1, 8, kernel_size=5, padding='same', bias=False), 
+            nn.InstanceNorm2d(8, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1)),
+            nn.Conv2d(8, 12, kernel_size=5, padding='same', bias=False), 
+            nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1)),
+            nn.Conv2d(12, 16, kernel_size=5, padding='same', bias=False), 
+            nn.InstanceNorm2d(16, eps=0.01), nn.ReLU(inplace=True),
+        )
+        
+        self.maxpool = nn.AdaptiveMaxPool2d((216, 20))
+
+        self.post_pool_layers = nn.Sequential(
+            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), 
+            nn.InstanceNorm2d(24, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=(3, 1), stride=(3, 1)),
+            nn.Conv2d(24, 36, kernel_size=7, padding='same', bias=False), 
+            nn.InstanceNorm2d(36, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=(3, 1), stride=(3, 1)),
+            nn.Conv2d(36, 36, kernel_size=7, padding='same', bias=False), 
+            nn.InstanceNorm2d(36, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1)),
+        )
+        
+        self.predictor = nn.Sequential(
+            nn.Linear(36 * 12 * 20, 72),
+            nn.ReLU(inplace=True),
+            nn.Linear(72, 1), 
+            nn.Sigmoid()
+        ) 
+        
+    def forward(self, x):
+        x = self.pre_pool_layers(x)
+        x = self.maxpool(x)
+        x = self.post_pool_layers(x)
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        x = self.predictor(x)
+        return x
+
+
+class EvecNetMulti(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.pre_pool_layers = nn.Sequential(
+            nn.Conv2d(1, 8, kernel_size=5, padding='same', bias=False), 
+            nn.InstanceNorm2d(8, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1)),
+            nn.Conv2d(8, 12, kernel_size=5, padding='same', bias=False), 
+            nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1)),
+            nn.Conv2d(12, 16, kernel_size=5, padding='same', bias=False), 
+            nn.InstanceNorm2d(16, eps=0.01), nn.ReLU(inplace=True),
+        )
+        
+        self.maxpool = nn.AdaptiveMaxPool2d((216, 20))
+
+        self.post_pool_layers = nn.Sequential(
+            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), 
+            nn.InstanceNorm2d(24, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=(3, 1), stride=(3, 1)),
+            nn.Conv2d(24, 36, kernel_size=7, padding='same', bias=False), 
+            nn.InstanceNorm2d(36, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=(3, 1), stride=(3, 1)),
+            nn.Conv2d(36, 36, kernel_size=7, padding='same', bias=False), 
+            nn.InstanceNorm2d(36, eps=0.01), nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1)),
+        )
+        
+        self.pre_predictor = nn.Sequential(
+            nn.Linear(36 * 12 * 20, 72),
+            nn.ReLU(inplace=True)
+        )
+
+        self.utility_head = nn.Sequential(
+            nn.Linear(72, 1), 
+            nn.Sigmoid()
+        ) 
+
+        self.num_layer_head = nn.Linear(72, 20)
+        
+    def forward(self, x):
+        x = self.pre_pool_layers(x)
+        x = self.maxpool(x)
+        x = self.post_pool_layers(x)
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        x = self.pre_predictor(x)
+        return self.utility_head(x), self.num_layer_head(x)
+
+
+
 AVAL_MODELS = {
     'SmallRepOnly': SmallRepOnly,
     'LocOnly': LocOnly,
@@ -598,6 +763,8 @@ AVAL_MODELS = {
     'RepSD3': RepSD3,
     'RepNet': RepNet,
     'LocNet': LocNet,
+    'EvecNet': EvecNet,
+    'EvecNetMulti': EvecNetMulti,
 }
 
 ## https://github.com/scipy/scipy/blob/v1.11.3/scipy/sparse/csgraph/_laplacian.py#L524

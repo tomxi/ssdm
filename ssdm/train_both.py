@@ -13,7 +13,7 @@ from ssdm import harmonix as hmx
 # BACKUP, not using this anymore
 # DROP_FEATURES=[]
 
-def train(MODEL_ID, EPOCH, DATE, TAU_TYPE='rep', DS='slm', LS='score'):
+def train(MODEL_ID, EPOCH, DATE, TAU_TYPE='both', DS='hmx', LS='score'):
     """DS can be slm and hmx for now, LS can be tau or score"""
     print(MODEL_ID, EPOCH, DATE, TAU_TYPE, DS, LS)
 
@@ -23,7 +23,6 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE='rep', DS='slm', LS='score'):
 
     # Initialize network based on model_id:
     net = scn.AVAL_MODELS[MODEL_ID]().to(device)
-    net.to(device)
 
     # L2 Regularization on specified layers:
     layer_with_weight_decay = net.predictor
@@ -31,33 +30,18 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE='rep', DS='slm', LS='score'):
     # training tools
     criterion = torch.nn.BCELoss()
     optimizer = optim.AdamW([
-        # {'params': [param for name, param in net.named_parameters() if 'predictor' not in name], 
-        #  'weight_decay': 1e-6},
+        {'params': [param for name, param in net.named_parameters() if 'predictor' not in name], 
+         'weight_decay': 1e-6},
         {'params': layer_with_weight_decay.parameters(), 
          'weight_decay': 1e-5}  # Only weight decay for the specified layer
     ])
 
-    if TAU_TYPE == 'rep' or TAU_TYPE == 'both':
-        lr_scheduler = optim.lr_scheduler.CyclicLR(optimizer,
-                                                base_lr=1e-9,
-                                                max_lr=1e-4,
-                                                cycle_momentum=False,
-                                                mode='triangular',
-                                                step_size_up=1000)
+    lr_scheduler = optim.lr_scheduler.CyclicLR(
+        optimizer, base_lr=1e-9, max_lr=1e-4, cycle_momentum=False, mode='triangular', step_size_up=1000
+    )
         
-    elif TAU_TYPE == 'loc':
-        lr_scheduler = optim.lr_scheduler.CyclicLR(optimizer,
-                                                base_lr=1e-9,
-                                                max_lr=1e-3,
-                                                cycle_momentum=False,
-                                                mode='triangular',
-                                                step_size_up=5000)
-
     augmentor = lambda x: scn.time_mask(x, T=100, num_masks=4, replace_with_zero=False, tau=TAU_TYPE)
-    if LS == 'score':
-        sample_selector = ssdm.select_samples_using_outstanding_l_score
-    elif LS == 'tau':
-        sample_selector = ssdm.select_samples_using_tau_percentile
+    sample_selector = ssdm.select_samples_using_outstanding_l_score
 
     # setup dataloaders
     if DS == 'slm':

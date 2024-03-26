@@ -161,6 +161,7 @@ class DS(Dataset):
     """
     def __init__(self, 
                  split='working',
+                 tids=[],
                  mode='rep', # {'rep', 'loc', 'both'}
                  infer=True,
                 #  drop_features=[],
@@ -173,7 +174,10 @@ class DS(Dataset):
             raise AssertionError('bad dataset mode, can only be rep or loc')
         self.mode = mode
         self.split = split
-        self.tids = get_ids(self.split, out_type='list')
+        if not tids:
+            self.tids = get_ids(self.split, out_type='list')
+        else:
+            self.tids=tids
 
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
@@ -207,6 +211,7 @@ class DS(Dataset):
             idx = idx.tolist()
 
         tid, *feats = self.ordered_keys[idx]
+        s_info = (tid, *feats, self.mode)
         track = Track(tid)
         config = ssdm.DEFAULT_LSD_CONFIG.copy()
 
@@ -217,33 +222,46 @@ class DS(Dataset):
                                 full=config['rec_full'],
                                 **ssdm.REP_FEAT_CONFIG[feats[0]]
                                 )
-            data = rep_ssm
+            data = torch.tensor(rep_ssm, dtype=torch.float32, device=self.device)
             
         
         elif self.mode == 'loc':
             path_sim = track.path_sim(feature=feats[0], 
                                       distance=config['loc_metric'],
                                       **ssdm.LOC_FEAT_CONFIG[feats[0]])
-            data = path_sim
+            data = torch.tensor(path_sim, dtype=torch.float32, device=self.device)
             
         elif self.mode == 'both':
-            # rep_ssm = track.ssm(feature=feats[0], 
-            #                     distance=config['rep_metric'],
-            #                     width=config['rec_width'],
-            #                     full=config['rec_full'],
-            #                     **ssdm.REP_FEAT_CONFIG[feats[0]]
-            #                     )
-            # path_sim = track.path_sim(feature=feats[1], 
-            #                           distance=config['loc_metric'],
-            #                           **ssdm.LOC_FEAT_CONFIG[feats[1]])
-            data = track.combined_rec_mat(config_update=config)
+            save_path = os.path.join(self.track_obj().output_dir, 'evecs/'+'_'.join(s_info)+'.pt')
+            # Try to see if it's already calculated. if so load:
+            try:
+                first_evecs = torch.load(save_path) # load
+            # else: calculate
+            except:
+                # print(save_path)
+                lsd_config = dict(rep_ftype=feats[0], loc_ftype=feats[1])
+                rec_mat = torch.tensor(track.combined_rec_mat(config_update=lsd_config), dtype=torch.float32, device=self.device)
+                # compute normalized laplacian
+                with torch.no_grad():
+                    rec_mat += 1e-30 # makes inverses nice...
+                    # Compute the degree matrix
+                    degree_matrix = torch.diag(torch.sum(rec_mat, dim=1))
+                    unnormalized_laplacian = degree_matrix - rec_mat
+                    # Compute the normalized Laplacian matrix
+                    degree_inv = torch.inverse(degree_matrix)
+                    normalized_laplacian = degree_inv @ unnormalized_laplacian
+
+                    evals, evecs = torch.linalg.eig(normalized_laplacian)
+                    first_evecs = evecs.real[:, :20]
+                    torch.save(first_evecs, save_path)
+            data = first_evecs.to(torch.float32).to(self.device)
         
         label = self.samples[(tid, *feats)]
-        sample = {'data': torch.tensor(data[None, None, :], dtype=torch.float32, device=self.device),
+        sample = {'data': data[None, None, :],
                   'label': torch.tensor([label], dtype=torch.float32, device=self.device)[None, :],
-                  'info': (tid, *feats, self.mode),
+                  'info': s_info,
+                  'uniq_segs': torch.tensor([track.num_dist_segs() - 1], dtype=torch.long, device=self.device),
                  }
-
         if self.transform:
             sample = self.transform(sample)
 

@@ -60,18 +60,22 @@ def get_ids(
 
 class DS(Dataset):
     """ 
-    mode='rep', # {'rep', 'loc', 'both}
+    mode='rep', # {'rep', 'loc', 'both'}
     """
     def __init__(self, mode='rep', infer=True, tids=None, split=None, transform=None, sample_select_fn=ssdm.utils.select_samples_using_outstanding_l_score):
         if mode not in ('rep', 'loc', 'both'):
             raise AssertionError('bad dataset mode, can only be rep or loc both')
         self.mode = mode
+
+        # Save the following
         if tids is None:
             self.tids = get_ids(split=split, out_type='list')
             self.split = split
         else:
             self.tids = tids
             self.split = f'custom{len(tids)}'
+        # Save the above
+            
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
         else:
@@ -136,7 +140,7 @@ class DS(Dataset):
             save_path = os.path.join(self.track_obj().output_dir, 'evecs/'+'_'.join(s_info)+'.pt')
             # Try to see if it's already calculated. if so load:
             try:
-                first_evecs = torch.load(save_path) # load
+                first_evecs = torch.load(save_path, map_location=self.device) # load
             # else: calculate
             except:
                 # print(save_path)
@@ -158,10 +162,11 @@ class DS(Dataset):
             data = first_evecs.to(torch.float32).to(self.device)
         else:
             assert KeyError('bad mode: can onpy be rep or loc or both')
-        
+        best_nlvl = min(track.num_dist_segs() - 1, 10)
+
         datum = {'data': data[None, None, :],
                  'info': s_info,
-                 'uniq_segs': torch.tensor([track.num_dist_segs() - 1], dtype=torch.long, device=self.device)}
+                 'uniq_segs': torch.tensor([best_nlvl], dtype=torch.long, device=self.device)}
 
         if not self.infer:
             datum['label'] = torch.tensor([self.labels[self.samples[idx]]], dtype=torch.float32, device=self.device)[None, :]
@@ -170,3 +175,21 @@ class DS(Dataset):
             datum = self.transform(datum)
         
         return datum
+    
+
+class NewDS(base.DS):
+    def __init__(self, mode='rep', infer=False, 
+                 split='train', tids=None, transform=None,
+                 sample_select_fn=ssdm.select_samples_using_outstanding_l_score):
+        self.name = 'hmx'
+
+        if tids is None:
+            self.tids = get_ids(split=split, out_type='list')
+            self.split = split
+        else:
+            self.tids = tids
+            self.split = f'custom{len(tids)}'
+        
+        super().__init__(mode=mode, infer=infer, sample_select_fn=sample_select_fn, transform=transform)
+    def track_obj(self, **track_kwargs):
+        return Track(**track_kwargs)

@@ -235,7 +235,7 @@ class DS(Dataset):
             save_path = os.path.join(self.track_obj().output_dir, 'evecs/'+'_'.join(s_info)+'.pt')
             # Try to see if it's already calculated. if so load:
             try:
-                first_evecs = torch.load(save_path) # load
+                first_evecs = torch.load(save_path, map_location=self.device) # load
             # else: calculate
             except:
                 # print(save_path)
@@ -252,15 +252,16 @@ class DS(Dataset):
                     normalized_laplacian = degree_inv @ unnormalized_laplacian
 
                     evals, evecs = torch.linalg.eig(normalized_laplacian)
-                    first_evecs = evecs.real[:, :20]
+                    first_evecs = evecs.real[:, :20].to(torch.float32)
                     torch.save(first_evecs, save_path)
             data = first_evecs.to(torch.float32).to(self.device)
         
         label = self.samples[(tid, *feats)]
+        best_nlvl = min(track.num_dist_segs() - 1, 10)
         sample = {'data': data[None, None, :],
                   'label': torch.tensor([label], dtype=torch.float32, device=self.device)[None, :],
                   'info': s_info,
-                  'uniq_segs': torch.tensor([track.num_dist_segs() - 1], dtype=torch.long, device=self.device),
+                  'uniq_segs': torch.tensor([best_nlvl], dtype=torch.long, device=self.device),
                  }
         if self.transform:
             sample = self.transform(sample)
@@ -313,3 +314,20 @@ def update_split_json(split_name='', split_idx=[]):
     with open(json_path, 'r') as f:
         return json.load(f)
 
+
+class NewDS(base.DS):
+    def __init__(self, mode='rep', infer=False, 
+                 split='train', tids=None, transform=None,
+                 sample_select_fn=ssdm.select_samples_using_outstanding_l_score):
+        self.name = 'slm'
+
+        if tids is None:
+            self.tids = get_ids(split=split, out_type='list')
+            self.split = split
+        else:
+            self.tids = tids
+            self.split = f'custom{len(tids)}'
+        
+        super().__init__(mode=mode, infer=infer, sample_select_fn=sample_select_fn, transform=transform)
+    def track_obj(self, **track_kwargs):
+        return Track(**track_kwargs)

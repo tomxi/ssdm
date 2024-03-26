@@ -147,3 +147,19 @@ class DS(Dataset):
        
         else:
             assert KeyError
+
+
+class NewDS(base.DS):
+    def __init__(self, mode='rep', tids=None):
+        self.name = 'rwcp'
+        if not tids:
+            self.tids=get_ids(out_type='list')
+            self.split=''
+        else:
+            self.tids=tids
+            self.split=f'custom{len(tids)}'
+        
+        super().__init__(mode=mode, infer=True)
+
+    def track_obj(self, **track_kwargs):
+        return Track(**track_kwargs)

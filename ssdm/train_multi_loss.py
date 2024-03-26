@@ -38,14 +38,15 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE='both', DS='hmx', LS='score'):
     )
 
     # setup dataloaders   
-    augmentor = lambda x: scn.time_mask(x, T=100, num_masks=4, replace_with_zero=False, tau=TAU_TYPE)
+    # augmentor = lambda x: scn.time_mask(x, T=100, num_masks=4, replace_with_zero=False, tau=TAU_TYPE)
+    augmentor = None
     sample_selector = ssdm.select_samples_using_outstanding_l_score
     if DS == 'slm':
-        train_dataset = slm.DS('train', infer=False, mode=TAU_TYPE, transform=augmentor, sample_select_fn=sample_selector)
-        val_dataset = slm.DS('val', infer=False, mode=TAU_TYPE, sample_select_fn=sample_selector)
+        train_dataset = slm.NewDS(split='train', infer=False, mode=TAU_TYPE, transform=augmentor, sample_select_fn=sample_selector)
+        val_dataset = slm.NewDS(split='val', infer=False, mode=TAU_TYPE, sample_select_fn=sample_selector)
     elif DS == 'hmx':
-        train_dataset = hmx.DS(split='train', infer=False, mode=TAU_TYPE, transform=augmentor, sample_select_fn=sample_selector)
-        val_dataset = hmx.DS(split='val', infer=False, mode=TAU_TYPE, sample_select_fn=sample_selector)
+        train_dataset = hmx.NewDS(split='train', infer=False, mode=TAU_TYPE, transform=augmentor, sample_select_fn=sample_selector)
+        val_dataset = hmx.NewDS(split='val', infer=False, mode=TAU_TYPE, sample_select_fn=sample_selector)
 
     train_loader = DataLoader(train_dataset, batch_size=None, shuffle=True)
 

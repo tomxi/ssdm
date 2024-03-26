@@ -6,13 +6,16 @@ from .expand_hier import expand_hierarchy
 import librosa
 
 import jams
-import json
+import json, itertools, os
+
+import torch
+from torch.utils.data import Dataset
+
 import numpy as np
 import xarray as xr
 from scipy import spatial, stats
 from sklearn.metrics import roc_auc_score
 
-import os
 from librosa.segment import recurrence_matrix
 from librosa.feature import stack_memory
 from librosa import frames_to_time
@@ -226,31 +229,21 @@ class Track(object):
     def combined_rec_mat(
         self, 
         config_update: dict = dict(),
-        recompute: bool  = False,
-        path_sim_sigma_percentile: float = 95,
     ):
         config = ssdm.DEFAULT_LSD_CONFIG.copy()
         config.update(config_update)
-        record_path = os.path.join(self.output_dir, f'lsd/{self.tid}_{config["rep_ftype"]}_{config["loc_ftype"]}_{path_sim_sigma_percentile}.npy')
-        if recompute or not os.path.exists(record_path):
-            # calculated combined rec mat and save
-            rep_ssm = self.ssm(feature=config['rep_ftype'], 
-                                distance=config['rep_metric'],
-                                width=config['rec_width'],
-                                full=config['rec_full'],
-                                **ssdm.REP_FEAT_CONFIG[config['rep_ftype']]
-                                )
-            path_sim = self.path_sim(feature=config['loc_ftype'], 
-                                      distance=config['loc_metric'],
-                                      **ssdm.LOC_FEAT_CONFIG[config['loc_ftype']])
-            record = scluster.combine_ssms(rep_ssm, path_sim, rec_smooth=config['rec_smooth'])
-            with open(record_path, 'wb') as f:
-                np.save(f, record)
-
-        # read npy file
-        with open(record_path, 'rb') as f:
-            record = np.load(record_path, allow_pickle=True)
-        return record
+        # record_path = os.path.join(self.output_dir, f'lsd/{self.tid}_{config["rep_ftype"]}_{config["loc_ftype"]}_{path_sim_sigma_percentile}.npy')
+        # calculated combined rec mat
+        rep_ssm = self.ssm(feature=config['rep_ftype'], 
+                            distance=config['rep_metric'],
+                            width=config['rec_width'],
+                            full=config['rec_full'],
+                            **ssdm.REP_FEAT_CONFIG[config['rep_ftype']]
+                            )
+        path_sim = self.path_sim(feature=config['loc_ftype'], 
+                                    distance=config['loc_metric'],
+                                    **ssdm.LOC_FEAT_CONFIG[config['loc_ftype']])
+        return scluster.combine_ssms(rep_ssm, path_sim, rec_smooth=config['rec_smooth'])
 
     
     def lsd(
@@ -532,6 +525,121 @@ class MyTrack(Track):
             self._jam = j
             
         return self._jam
+
+
+class DS(Dataset):
+    def __init__(
+        self, 
+        mode='rep',
+        infer=True,
+        transform=None,
+        sample_select_fn=None
+    ):
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
+
+        if mode not in ('rep', 'loc', 'both'):
+            raise AssertionError('bad dataset mode, can only be rep or loc both')
+        self.mode = mode
+        self.infer = infer
+        self.sample_select_fn = sample_select_fn
+
+        # sample building
+        if self.infer:
+            if self.mode == 'both':
+                self.samples = list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES))
+            else:
+                self.samples = list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES))
+        else:
+            self.labels = sample_select_fn(self)
+            self.samples = list(self.labels.keys())
+        self.samples.sort()
+        self.transform=transform
+
+
+    def __len__(self):
+        return len(self.samples)
+
+
+    def __repr__(self):
+        return f'{self.name}{self.mode}{self.split}'
+
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        tid, *feats = self.samples[idx]
+        track = self.track_obj(tid=tid)
+
+        config = ssdm.DEFAULT_LSD_CONFIG.copy()
+
+        s_info = (tid, *feats, self.mode)
+
+        if self.mode == 'rep':
+            data = track.ssm(
+                feature=feats[0], 
+                distance=config['rep_metric'],
+                width=config['rec_width'],
+                full=config['rec_full'],
+                **ssdm.REP_FEAT_CONFIG[feats[0]]
+            )
+            data = torch.tensor(data, dtype=torch.float32, device=self.device)
+    
+        elif self.mode == 'loc':
+            data = track.path_sim(feature=feats[0], 
+                                  distance=config['loc_metric'],
+                                  **ssdm.LOC_FEAT_CONFIG[feats[0]])
+            data = torch.tensor(data, dtype=torch.float32, device=self.device)
+
+        elif self.mode == 'both':
+            save_path = os.path.join(self.track_obj().output_dir, 'evecs/'+'_'.join(s_info)+'.npy')
+            # Try to see if it's already calculated
+            old_save_path = save_path.replace('.npy', '.pt')
+            if os.path.exists(old_save_path):
+                try:
+                    first_evecs = torch.load(old_save_path, map_location=self.device) # load
+                    # Resave
+                    np.save(save_path, first_evecs.squeeze().cpu().numpy())
+                except:
+                    pass
+                os.remove(old_save_path)
+            
+            try:
+                first_evecs = np.load(save_path)
+            except:
+                lsd_config = dict(rep_ftype=feats[0], loc_ftype=feats[1])
+                rec_mat = torch.tensor(track.combined_rec_mat(config_update=lsd_config), dtype=torch.float32, device=self.device)
+                # compute normalized laplacian
+                with torch.no_grad():
+                    rec_mat += 1e-30 # make inverses nice...
+                    degree_matrix = torch.diag(torch.sum(rec_mat, dim=1))
+                    unnormalized_laplacian = degree_matrix - rec_mat
+                    # Compute the Random Walk normalized Laplacian matrix
+                    degree_inv = torch.inverse(degree_matrix)
+                    normalized_laplacian = degree_inv @ unnormalized_laplacian
+                    evals, evecs = torch.linalg.eig(normalized_laplacian)
+                    first_evecs = evecs.real[:, :20].to(torch.float32)
+                    # save first 20 eigen vectors
+                    np.save(save_path, first_evecs.squeeze().cpu().numpy())
+            data = torch.tensor(first_evecs, dtype=torch.float32, device=self.device)
+        else:
+            assert KeyError('bad mode: can onpy be rep or loc or both')
+        best_nlvl = min(track.num_dist_segs() - 1, 10)
+
+        datum = {'data': data[None, None, :],
+                 'info': s_info,
+                 'uniq_segs': torch.tensor([best_nlvl], dtype=torch.long, device=self.device)}
+
+        if not self.infer:
+            datum['label'] = torch.tensor([self.labels[self.samples[idx]]], dtype=torch.float32, device=self.device)[None, :]
+        
+        if self.transform:
+            datum = self.transform(datum)
+        
+        return datum
 
 
 def delay_embed(

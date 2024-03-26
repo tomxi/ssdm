@@ -89,7 +89,7 @@ def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size
             optimizer.zero_grad()
             if lr_scheduler is not None:
                 lr_scheduler.step()
-    return (running_loss_util / len(ds_loader)).item(), (running_loss_nlvl / len(ds_loader)).item()
+    return (running_loss_util / len(ds_loader)), (running_loss_nlvl / len(ds_loader))
 
 # eval tools:
 def net_eval(ds, net, criterion, device='cpu', verbose=False):
@@ -127,6 +127,7 @@ def net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device='cpu', verbose=Fal
         for s in ds_loader:
             util, nlayer = net(s['data'])
             u_loss = util_loss(util, s['label'])
+
             nl_loss = nlvl_loss(nlayer, s['uniq_segs'])
             best_nlvl = torch.argmax(nlayer)
             result_df.loc['_'.join(s['info'])] = (util.item(), best_nlvl.item(), u_loss.item(), nl_loss.item(),
@@ -733,7 +734,7 @@ class EvecNetMulti(nn.Module):
             nn.Sigmoid()
         ) 
 
-        self.num_layer_head = nn.Linear(72, 20)
+        self.num_layer_head = nn.Linear(72, 11)
         
     def forward(self, x):
         x = self.pre_pool_layers(x)

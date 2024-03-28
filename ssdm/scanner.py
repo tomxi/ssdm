@@ -67,7 +67,7 @@ def train_epoch(ds_loader, net, criterion, optimizer, batch_size=8, lr_scheduler
     return (running_loss / len(ds_loader)).item()
 
 
-def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size=8, lr_scheduler=None, device='cpu'):
+def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size=8, lr_scheduler=None, device='cpu', loss_type='multi'):
     running_loss_util = 0.
     running_loss_nlvl = 0.
     optimizer.zero_grad()
@@ -77,7 +77,13 @@ def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size
         util, nlayer = net(s['data'])
         u_loss = util_loss(util, s['label'])
         nl_loss = nlvl_loss(nlayer, s['uniq_segs'])
-        loss = u_loss + nl_loss
+        
+        if loss_type == 'multi':
+            loss = u_loss + (nl_loss / 10)
+        elif loss_type == 'util':
+            loss = u_loss
+        elif loss_type == 'nlvl':
+            loss = nl_loss
         loss.backward()
         
         running_loss_util += u_loss.item()
@@ -160,7 +166,9 @@ def net_infer(infer_ds, net, device='cpu', out_type='pd'):
         return xr_da
     
 
+# Need fixing
 def net_infer_multi_loss(infer_ds, net, device='cpu', out_type='pd'):
+    assert NotImplementedError
     # out_type can be 'pd' or 'xr'
     result_df = pd.DataFrame(columns=(ssdm.AVAL_FEAT_TYPES), index=infer_ds.tids)
     infer_loader = DataLoader(infer_ds, batch_size=None, shuffle=False)
@@ -699,33 +707,35 @@ class EvecNet(nn.Module):
 class EvecNetMulti(nn.Module):
     def __init__(self):
         super().__init__()
-        self.pre_pool_layers = nn.Sequential(
-            nn.Conv2d(1, 8, kernel_size=5, padding='same', bias=False), 
-            nn.InstanceNorm2d(8, eps=0.01), nn.ReLU(inplace=True),
+
+        self.dropout = nn.Dropout(0.2)
+        self.activation = TempSwish
+
+        self.convlayers1 = nn.Sequential(
+            nn.Conv2d(1, 8, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(8, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=(3, 1), stride=(3, 1)),
+            nn.Conv2d(8, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=(3, 1), stride=(3, 1)),
+        )
+
+        self.convlayers2 = nn.Sequential(
+            nn.Conv2d(12, 16, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=(3, 1), stride=(3, 1)),
+            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=(3, 1), stride=(3, 1)),
+        )
+
+        self.convlayers3 = nn.Sequential(
+            nn.Conv2d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
             nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1)),
-            nn.Conv2d(8, 12, kernel_size=5, padding='same', bias=False), 
-            nn.InstanceNorm2d(12, eps=0.01), nn.ReLU(inplace=True),
+            nn.Conv2d(24, 24, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
             nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1)),
-            nn.Conv2d(12, 16, kernel_size=5, padding='same', bias=False), 
-            nn.InstanceNorm2d(16, eps=0.01), nn.ReLU(inplace=True),
         )
         
         self.maxpool = nn.AdaptiveMaxPool2d((216, 20))
-
-        self.post_pool_layers = nn.Sequential(
-            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), 
-            nn.InstanceNorm2d(24, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=(3, 1), stride=(3, 1)),
-            nn.Conv2d(24, 36, kernel_size=7, padding='same', bias=False), 
-            nn.InstanceNorm2d(36, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=(3, 1), stride=(3, 1)),
-            nn.Conv2d(36, 36, kernel_size=7, padding='same', bias=False), 
-            nn.InstanceNorm2d(36, eps=0.01), nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1)),
-        )
         
         self.pre_predictor = nn.Sequential(
-            nn.Linear(36 * 12 * 20, 72),
+            nn.Linear(24 * 6 * 20, 72),
             nn.ReLU(inplace=True)
         )
 
@@ -737,11 +747,76 @@ class EvecNetMulti(nn.Module):
         self.num_layer_head = nn.Linear(72, 11)
         
     def forward(self, x):
-        x = self.pre_pool_layers(x)
+        x = self.convlayers1(x)
+        x = self.dropout(x)
         x = self.maxpool(x)
-        x = self.post_pool_layers(x)
+
+        x = self.convlayers2(x)
+        x = self.dropout(x)
+        x = self.convlayers3(x)
+
         x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        x = self.dropout(x)
         x = self.pre_predictor(x)
+        x = self.dropout(x)
+        return self.utility_head(x), self.num_layer_head(x)
+
+
+class EvecNetMulti2(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.dropout = nn.Dropout(0.15)
+        self.activation = TempSwish
+
+        self.convlayers1 = nn.Sequential(
+            nn.Conv2d(1, 12, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=(3, 1), stride=(3, 1)),
+            nn.Conv2d(12, 12, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=(3, 1), stride=(3, 1)),
+        )
+
+        self.maxpool = nn.AdaptiveMaxPool2d((216, 20))
+
+        self.convlayers2 = nn.Sequential(
+            nn.Conv2d(12, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=(3, 1), stride=(3, 1)),
+            nn.Conv2d(12, 16, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=(3, 1), stride=(3, 1)),
+        )
+
+        self.convlayers3 = nn.Sequential(
+            nn.Conv2d(16, 16, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(16, 24, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+        )
+        
+        self.pre_predictor = nn.Sequential(
+            nn.Linear(24 * 6 * 5, 64),
+            nn.ReLU(inplace=True)
+        )
+
+        self.utility_head = nn.Sequential(
+            nn.Linear(64, 1), 
+            nn.Sigmoid()
+        ) 
+
+        self.num_layer_head = nn.Linear(64, 11)
+        
+    def forward(self, x):
+        x = self.convlayers1(x)
+        x = self.dropout(x)
+        x = self.maxpool(x)
+
+        x = self.convlayers2(x)
+        x = self.dropout(x)
+        x = self.convlayers3(x)
+
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        x = self.dropout(x)
+        x = self.pre_predictor(x)
+        x = self.dropout(x)
         return self.utility_head(x), self.num_layer_head(x)
 
 
@@ -766,6 +841,7 @@ AVAL_MODELS = {
     'LocNet': LocNet,
     'EvecNet': EvecNet,
     'EvecNetMulti': EvecNetMulti,
+    'EvecNetMulti2': EvecNetMulti2,
 }
 
 ## https://github.com/scipy/scipy/blob/v1.11.3/scipy/sparse/csgraph/_laplacian.py#L524

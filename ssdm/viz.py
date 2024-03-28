@@ -207,6 +207,37 @@ def train_curve(json_path):
     return train_loss * val_loss * best_epoch_line * best_val_text
 
 
+def train_curve_multi_loss(json_path):
+    with open(json_path) as f:
+        train_curves = json.load(f)
+
+    util_train_loss = [pair[0] for pair in train_curves['train_loss']]
+    nlvl_train_loss = [pair[1] for pair in train_curves['train_loss']]
+    util_val_loss = [pair[0] for pair in train_curves['val_loss']]
+    nlvl_val_loss = [pair[1] for pair in train_curves['val_loss']]
+
+    train_u_loss = hv.Curve(util_train_loss, label='Train util BCE loss')
+    val_u_loss = hv.Curve(util_val_loss, label='Val util BCE loss')
+
+    train_lvl_loss = hv.Curve(nlvl_train_loss, label='Train n_lvl CE loss')
+    val_lvl_loss = hv.Curve(nlvl_val_loss, label='Val n_lvl CE loss')
+
+    best_u_epoch = np.asarray(util_val_loss).argmin()
+    best_val_u_loss = np.asarray(util_val_loss).min()
+    best_u_epoch_line = hv.VLine(x=best_u_epoch)
+
+    best_nlvl_epoch = np.asarray(nlvl_val_loss).argmin()
+    best_val_nlvl_loss = np.asarray(nlvl_val_loss).min()
+    best_nlvl_epoch_line = hv.VLine(x=best_nlvl_epoch)
+    best_val_text = hv.Text(
+        1, 0, 
+        f" Best util epoch {best_u_epoch}: val util loss: {best_val_u_loss:.3f} \n Best nlvl epoch {best_nlvl_epoch}: val nlvl loss: {best_val_nlvl_loss:.3f}"
+    ).opts(text_align='left', text_baseline='bottom')
+
+
+    return train_u_loss * val_u_loss * best_u_epoch_line * best_val_text * train_lvl_loss * val_lvl_loss * best_nlvl_epoch_line
+
+
 def plot_mean_score(ds, rep_model='RepNet20240303_epoch28', loc_model='LocNet20240303_epoch17', heir=False):
     score_da = ssdm.get_lsd_scores(ds, shuffle=False, heir=heir)
     ds_str = str(ds).replace('loc', 'rep')

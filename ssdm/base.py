@@ -14,6 +14,7 @@ from torch.utils.data import Dataset
 import numpy as np
 import xarray as xr
 from scipy import spatial, stats
+from scipy.linalg import eig
 from sklearn.metrics import roc_auc_score
 
 from librosa.segment import recurrence_matrix
@@ -228,6 +229,7 @@ class Track(object):
 
     def combined_rec_mat(
         self, 
+        recompute: bool = False,
         config_update: dict = dict(),
     ):
         config = ssdm.DEFAULT_LSD_CONFIG.copy()
@@ -238,6 +240,7 @@ class Track(object):
                             distance=config['rep_metric'],
                             width=config['rec_width'],
                             full=config['rec_full'],
+                            recompute=recompute,
                             **ssdm.REP_FEAT_CONFIG[config['rep_ftype']]
                             )
         path_sim = self.path_sim(feature=config['loc_ftype'], 
@@ -557,6 +560,7 @@ class DS(Dataset):
             self.samples = list(self.labels.keys())
         self.samples.sort()
         self.transform=transform
+        self.output_dir = self.track_obj().output_dir
 
 
     def __len__(self):
@@ -572,13 +576,14 @@ class DS(Dataset):
             idx = idx.tolist()
 
         tid, *feats = self.samples[idx]
-        track = self.track_obj(tid=tid)
+        # track = self.track_obj(tid=tid)
 
         config = ssdm.DEFAULT_LSD_CONFIG.copy()
 
         s_info = (tid, *feats, self.mode)
 
         if self.mode == 'rep':
+            track = self.track_obj(tid=tid)
             data = track.ssm(
                 feature=feats[0], 
                 distance=config['rep_metric'],
@@ -589,49 +594,45 @@ class DS(Dataset):
             data = torch.tensor(data, dtype=torch.float32, device=self.device)
     
         elif self.mode == 'loc':
+            track = self.track_obj(tid=tid)
             data = track.path_sim(feature=feats[0], 
                                   distance=config['loc_metric'],
                                   **ssdm.LOC_FEAT_CONFIG[feats[0]])
             data = torch.tensor(data, dtype=torch.float32, device=self.device)
 
         elif self.mode == 'both':
-            save_path = os.path.join(self.track_obj().output_dir, 'evecs/'+'_'.join(s_info)+'.npy')
-            # Try to see if it's already calculated
-            old_save_path = save_path.replace('.npy', '.pt')
-            if os.path.exists(old_save_path):
-                try:
-                    first_evecs = torch.load(old_save_path, map_location=self.device) # load
-                    # Resave
-                    np.save(save_path, first_evecs.squeeze().cpu().numpy())
-                except:
-                    pass
-                os.remove(old_save_path)
-            
+            save_path = os.path.join(self.output_dir, 'evecs/'+'_'.join(s_info)+'.npy')
             try:
                 first_evecs = np.load(save_path)
             except:
+                track = self.track_obj(tid=tid)
                 lsd_config = dict(rep_ftype=feats[0], loc_ftype=feats[1])
-                rec_mat = torch.tensor(track.combined_rec_mat(config_update=lsd_config), dtype=torch.float32, device=self.device)
-                # compute normalized laplacian
-                with torch.no_grad():
-                    rec_mat += 1e-30 # make inverses nice...
-                    degree_matrix = torch.diag(torch.sum(rec_mat, dim=1))
-                    unnormalized_laplacian = degree_matrix - rec_mat
-                    # Compute the Random Walk normalized Laplacian matrix
-                    degree_inv = torch.inverse(degree_matrix)
-                    normalized_laplacian = degree_inv @ unnormalized_laplacian
-                    evals, evecs = torch.linalg.eig(normalized_laplacian)
-                    first_evecs = evecs.real[:, :20].to(torch.float32)
-                    # save first 20 eigen vectors
-                    np.save(save_path, first_evecs.squeeze().cpu().numpy())
+                rec_mat = track.combined_rec_mat(config_update=lsd_config)
+
+                degree_matrix = np.diag(np.sum(rec_mat, axis=1))
+                unnormalized_laplacian = degree_matrix - rec_mat
+                # Compute the Random Walk normalized Laplacian matrix
+                degree_inv = np.linalg.inv(degree_matrix)
+                normalized_laplacian = degree_inv @ unnormalized_laplacian
+                evals, evecs = eig(normalized_laplacian)
+                first_evecs = evecs.real[:, :20]
+                np.save(save_path, first_evecs)
             data = torch.tensor(first_evecs, dtype=torch.float32, device=self.device)
         else:
             assert KeyError('bad mode: can onpy be rep or loc or both')
-        best_nlvl = min(track.num_dist_segs() - 1, 10)
+        
+        # best_nlvl = min(track.num_dist_segs() - 1, 10)
+        nlvl_save_path = os.path.join(self.output_dir, 'evecs/'+s_info[0]+'_nlvl.npy')
+        try:
+            best_nlvl = np.load(nlvl_save_path)
+        except:
+            track = self.track_obj(tid=tid)
+            best_nlvl = np.array([min(track.num_dist_segs() - 1, 10)])
+            np.save(nlvl_save_path, best_nlvl)
 
         datum = {'data': data[None, None, :],
                  'info': s_info,
-                 'uniq_segs': torch.tensor([best_nlvl], dtype=torch.long, device=self.device)}
+                 'uniq_segs': torch.tensor(best_nlvl, dtype=torch.long, device=self.device)}
 
         if not self.infer:
             datum['label'] = torch.tensor([self.labels[self.samples[idx]]], dtype=torch.float32, device=self.device)[None, :]
@@ -640,6 +641,9 @@ class DS(Dataset):
             datum = self.transform(datum)
         
         return datum
+
+    def track_obj(self):
+        raise NotImplementedError
 
 
 def delay_embed(

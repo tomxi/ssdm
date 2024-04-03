@@ -4,6 +4,7 @@ from ssdm import scluster
 from . import feature
 from .expand_hier import expand_hierarchy
 import librosa
+import madmom
 
 import jams
 import json, itertools, os
@@ -20,6 +21,9 @@ from sklearn.metrics import roc_auc_score
 from librosa.segment import recurrence_matrix
 from librosa.feature import stack_memory
 from librosa import frames_to_time
+
+np.int = int
+np.float = float
 
 
 class Track(object):
@@ -65,7 +69,30 @@ class Track(object):
         return 1
     
 
-    def representation(self, feat_type='mfcc', use_track_ts=True, recompute=False, **delay_emb_kwargs):
+    def _madmom_beats(self, recompute=False):
+        """
+        https://github.com/morgan76/Triplet_Mining/blob/189f897a55b0ae14d8fc9417accad27266d6c94e/features.py#L41C1-L50C17
+        """
+        # add caching
+        save_path = os.path.join(self.feature_dir, f'{self.tid}_madmom_beat.npy')
+        if not recompute:
+            try:
+                return np.load(save_path)
+            except:
+                recompute = True
+        proc = madmom.features.beats.DBNBeatTrackingProcessor(fps=100)
+        act = madmom.features.beats.RNNBeatProcessor()(self.audio_path)
+        beat_times = np.asarray(proc(act))
+        if beat_times[0] > 0:
+            beat_times = np.insert(beat_times, 0, 0)
+        if beat_times[-1] < self.ts(mode='frame')[-1]:
+            beat_times = np.append(beat_times, self.ts(mode='frame')[-1])
+        np.save(save_path, beat_times)
+        return beat_times
+
+
+
+    def representation(self, feat_type='mfcc', use_track_ts=True, recompute=False, beat_sync=False, **delay_emb_kwargs):
         """delay_emb_kwargs: add_noise, n_steps, delay"""
         delay_emb_config = dict(add_noise=False, n_steps=1, delay=1)
         delay_emb_config.update(delay_emb_kwargs)
@@ -88,22 +115,31 @@ class Track(object):
         if use_track_ts:
             fmat = fmat[:, :len(self.ts())]
 
+        if beat_sync:
+            assert self.ts()[0] == 0
+            beat_frames = librosa.time_to_frames(self.ts(mode='beat'), sr=1 / self.ts(mode='frame')[1], hop_length=1)
+            fmat = librosa.util.sync(fmat, beat_frames, aggregate=np.mean)
+
         return delay_embed(fmat, **delay_emb_config)
 
 
-    def ts(self) -> np.array:
+    def ts(self, mode='frame') -> np.array: # mode can also be beat
         if self._track_ts is None:
             num_frames = np.asarray(
-                [self.representation(feat, use_track_ts=False).shape[-1] for feat in ssdm.AVAL_FEAT_TYPES]
+                [self.representation(feat, use_track_ts=False, beat_sync=False).shape[-1] for feat in ssdm.AVAL_FEAT_TYPES]
             )
             self._track_ts = frames_to_time(
                 list(range(np.min(num_frames))), 
                 hop_length=feature._HOP_LEN, 
                 sr=feature._AUDIO_SR)
-        return self._track_ts
+            
+        if mode == 'frame':
+            return self._track_ts
+        elif mode == 'beat':
+            return self._madmom_beats()
 
 
-    def ref(self, mode='expand', **anno_id_kwarg):
+    def ref(self, mode='expand', ts_mode='frame', **anno_id_kwarg):
         seg_anns = self.jam().search(namespace='segment_open')
 
         def fill_out_anno(anno, ts):
@@ -121,7 +157,7 @@ class Track(object):
                         )
             return anno
         
-        anno = fill_out_anno(seg_anns[0], self.ts())
+        anno = fill_out_anno(seg_anns[0], self.ts(mode=ts_mode))
         if mode == 'expand':
             return ssdm.openseg2multi(expand_hierarchy(anno))
         elif mode == 'normal':
@@ -132,12 +168,13 @@ class Track(object):
             self,
             mode: str = 'expand', # {'normal', 'expand'}
             binarize: bool = True,
+            ts_mode:str = 'frame',
             **anno_id_kwarg
         ):
         # Get reference annotation
         ref_anno = self.ref(mode, **anno_id_kwarg)
         # Get annotation meet matrix
-        anno_meet = ssdm.anno_to_meet(ref_anno, self.ts())
+        anno_meet = ssdm.anno_to_meet(ref_anno, self.ts(mode=ts_mode))
         # Pull out diagonal
         anno_diag = anno_meet.diagonal(1)
         if binarize:
@@ -145,11 +182,11 @@ class Track(object):
         return anno_diag.astype(int)
     
 
-    def ssm(self, feature='mfcc', distance='cosine', full=False, add_noise=True, n_steps=6, delay=2, width=30, recompute=False): 
+    def ssm(self, feature='mfcc', distance='cosine', full=False, add_noise=True, n_steps=6, delay=2, width=30, recompute=False, beat_sync=False): 
         # save
         # npy path
         ssm_info_str = f'n{feature}_{distance}{f"_fw{width}"}_s'
-        feat_info_str = f's{n_steps}xd{delay}{"_n" if add_noise else ""}'
+        feat_info_str = f's{n_steps}xd{delay}{"_n" if add_noise else ""}{"_sync" if beat_sync else ""}'
         ssm_path = os.path.join(
             self.output_dir, 
             f'ssms/{self.tid}_{ssm_info_str}_{feat_info_str}.npy'
@@ -169,7 +206,7 @@ class Track(object):
         # compute
         if recompute:
             # prepare feature matrix
-            feat_mat = self.representation(feature, add_noise=add_noise, n_steps=n_steps, delay=delay)
+            feat_mat = self.representation(feature, beat_sync=beat_sync, add_noise=add_noise, n_steps=n_steps, delay=delay)
             # fix width with short tracks
             feat_max_width = ((feat_mat.shape[-1] - 1) // 2) - 5
             if width >= feat_max_width:
@@ -191,9 +228,9 @@ class Track(object):
         return ssm
     
     
-    def path_sim(self, feature='mfcc', distance='sqeuclidean', add_noise=True, n_steps=6, delay=2, sigma_percentile=95, recompute=False): 
+    def path_sim(self, feature='mfcc', distance='sqeuclidean', add_noise=True, n_steps=6, delay=2, sigma_percentile=95, recompute=False, beat_sync=False): 
         path_sim_info_str = f'pathsim_{feature}_{distance}'
-        feat_info_str = f'ns{n_steps}xd{delay}xap{sigma_percentile}{"_n" if add_noise else ""}'
+        feat_info_str = f'ns{n_steps}xd{delay}xap{sigma_percentile}{"_n" if add_noise else ""}{"_sync" if beat_sync else ""}'
         pathsim_path = os.path.join(
             self.output_dir, 
             f'ssms/{self.tid}_{path_sim_info_str}_{feat_info_str}.npy'
@@ -207,7 +244,7 @@ class Track(object):
             recompute = True
 
         if recompute:
-            feat_mat = delay_embed(self.representation(feature), add_noise, n_steps, delay)
+            feat_mat = delay_embed(self.representation(feature, beat_sync=beat_sync), add_noise, n_steps, delay)
             frames = feat_mat.shape[1]
             path_dist = []
             for i in range(frames-1):
@@ -230,6 +267,7 @@ class Track(object):
     def combined_rec_mat(
         self, 
         recompute: bool = False,
+        beat_sync: bool = False,
         config_update: dict = dict(),
     ):
         config = ssdm.DEFAULT_LSD_CONFIG.copy()
@@ -241,11 +279,13 @@ class Track(object):
                             width=config['rec_width'],
                             full=config['rec_full'],
                             recompute=recompute,
+                            beat_sync=beat_sync,
                             **ssdm.REP_FEAT_CONFIG[config['rep_ftype']]
                             )
         path_sim = self.path_sim(feature=config['loc_ftype'], 
-                                    distance=config['loc_metric'],
-                                    **ssdm.LOC_FEAT_CONFIG[config['loc_ftype']])
+                                 distance=config['loc_metric'],
+                                 beat_sync=beat_sync,
+                                 **ssdm.LOC_FEAT_CONFIG[config['loc_ftype']])
         return scluster.combine_ssms(rep_ssm, path_sim, rec_smooth=config['rec_smooth'])
 
     
@@ -254,6 +294,7 @@ class Track(object):
         config_update: dict = dict(),
         recompute: bool  = False,
         print_config: bool = False,
+        beat_sync: bool = False,
         path_sim_sigma_percentile: float = 95,
     ) -> jams.Annotation:
         # load lsd jams and file/log handeling...
@@ -265,7 +306,7 @@ class Track(object):
             print(config)
 
         record_path = os.path.join(self.output_dir, 
-                                f'lsd/{self.tid}_{config["rep_ftype"]}_{config["loc_metric"]}_{config["rec_width"]}_{path_sim_sigma_percentile}.jams'
+                                f'lsd/{self.tid}_{config["rep_ftype"]}_{config["loc_metric"]}_{config["rec_width"]}_{path_sim_sigma_percentile}{"_sync" if beat_sync else ""}.jams'
                                 )
         
         if not os.path.exists(record_path):
@@ -302,7 +343,7 @@ class Track(object):
         if recompute:
             print('computing! -- lsd', self.tid)
             # genearte new multi_segment annotation and store/overwrite it in the original jams file.
-            lsd_anno = ssdm.utils.run_lsd(self, config=config, recompute_ssm=recompute, loc_sigma=path_sim_sigma_percentile)
+            lsd_anno = ssdm.utils.run_lsd(self, config=config, recompute_ssm=recompute, beat_sync=beat_sync, loc_sigma=path_sim_sigma_percentile)
             print('Done! -- lsd')
             # update jams file
             # print('updating jams! -- lsd')
@@ -321,11 +362,12 @@ class Track(object):
         lsd_sel_dict: dict = dict(),
         recompute: bool = False,
         l_frame_size: float = 0.1,
+        beat_sync: bool = False,
         path_sim_sigma_percent: float = 95,
         anno_id: int = 0,
     ) -> xr.DataArray:
         #initialize file if doesn't exist or load the xarray nc file
-        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{l_frame_size}p{path_sim_sigma_percent}rw5.nc')
+        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{l_frame_size}p{path_sim_sigma_percent}{"_sync" if beat_sync else ""}.nc')
         if not os.path.exists(nc_path):
             init_grid = ssdm.LSD_SEARCH_GRID.copy()
             init_grid.update(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm'])
@@ -366,7 +408,7 @@ class Track(object):
                 # Only compute if value doesn't exist:
                 ###
                 # print('recomputing l score')
-                proposal = self.lsd(lsd_conf, print_config=False, path_sim_sigma_percentile=path_sim_sigma_percent, recompute=recompute)
+                proposal = self.lsd(lsd_conf, print_config=False, beat_sync=beat_sync, path_sim_sigma_percentile=path_sim_sigma_percent, recompute=recompute)
                 annotation = self.ref(anno_id=anno_id)
                 # search l_score from old places first?
                 l_score = ssdm.compute_l(proposal, annotation, l_frame_size=l_frame_size)
@@ -383,13 +425,13 @@ class Track(object):
         return out
 
 
-    def lsd_score_flat(self, anno_id=0, recompute=False) -> xr.DataArray:
+    def lsd_score_flat(self, anno_id=0, beat_sync=False, recompute=False) -> xr.DataArray:
         # save 
         if anno_id != 0:
             anno_flag = f'a{anno_id}'
         else:
             anno_flag = ''
-        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{anno_flag}flat.nc')
+        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{anno_flag}flat{"_sync" if beat_sync else ""}.nc')
 
         if not os.path.exists(nc_path):
             # build da to store
@@ -421,13 +463,14 @@ class Track(object):
                     feature_pair = dict(rep_ftype=rep_ftype, loc_ftype=loc_ftype)
                     lsd_config = ssdm.DEFAULT_LSD_CONFIG.copy()
                     lsd_config.update(feature_pair)
-                    score_da.loc[feature_pair] = ssdm.compute_flat(self.lsd(lsd_config), self.ref(mode='normal', anno_id=anno_id))
+                    score_da.loc[feature_pair] = ssdm.compute_flat(self.lsd(lsd_config, beat_sync=beat_sync), self.ref(mode='normal', anno_id=anno_id))
             
             score_da.to_netcdf(nc_path)
 
         return score_da
 
 
+    # DEPREE
     def tau(
         self,
         tau_sel_dict: dict = dict(),
@@ -436,9 +479,12 @@ class Track(object):
         quantize: str = 'percentile', # None, 'kmeans' or 'percentile'
         quant_bins: int = 7, # used for loc tau quant schemes
         rec_width: int = 30,
+        beat_sync: bool = False,
         eigen_block: bool = True,
         **anno_id_kwarg
     ) -> xr.DataArray:
+        if beat_sync:
+            raise NotImplementedError('use tau_both')
         # test if record_path exist, if no, set recompute to true.
         suffix = f'_{quantize}{quant_bins}' if quantize is not None else ''
         am_str = f'{anno_mode}' if anno_mode != 'expand' else ''
@@ -471,7 +517,7 @@ class Track(object):
                     )
                     if eigen_block:
                         combined_graph = ssdm.scluster.combine_ssms(ssm, meet_mat_diag)
-                        _, evecs = ssdm.scluster.embed_ssms(combined_graph, evec_smooth=13)
+                        _, evecs = ssdm.scluster.embed_ssms(combined_graph, evec_smooth=ssdm.DEFAULT_LSD_CONFIG['evec_smooth'])
                         first_evecs = evecs[:, :10]
                         quant_block = ssdm.quantize(np.matmul(first_evecs, first_evecs.T), quant_bins=quant_bins)
                         tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
@@ -504,12 +550,14 @@ class Track(object):
         lap_norm: str = 'random_walk', # symmetrical or random_walk
         quantize: str = 'percentile', # None, 'kmeans' or 'percentile'
         quant_bins: int = 7, # used for loc tau quant schemes
+        beat_sync: bool = False,
         verbose: bool = False,
         **anno_id_kwarg
     ) -> xr.DataArray:
         # test if record_path exist, if no, set recompute to true.
         quantize_suffix = f'_{quantize}{quant_bins}' if quantize is not None else ''
-        record_path = os.path.join(self.output_dir, f'taus/{self.tid}_{anno_mode}{quantize_suffix}{lap_norm}.nc')
+        beat_suffix = "_sync" if beat_sync else ""
+        record_path = os.path.join(self.output_dir, f'taus/{self.tid}_{anno_mode}{quantize_suffix}{lap_norm}{beat_suffix}.nc')
         
         if not recompute:
             try:
@@ -531,13 +579,13 @@ class Track(object):
             # Compute the combined rec mat
             feat_combo = dict(rep_ftype=rep_ftype, loc_ftype=loc_ftype)
             # Combined rec -> evecs function function (with caching, and normalization param lap_norm)
-            evecs = self.embedded_rec_mat(feat_combo=feat_combo, lap_norm=lap_norm, recompute=False)
+            evecs = self.embedded_rec_mat(feat_combo=feat_combo, beat_sync=beat_sync, lap_norm=lap_norm, recompute=False)
             # Calculate the LRA of the normalized laplacian, and use that to compute corr with anno_meet_mat
             lap_low_rank_approx = evecs[:, :quant_bins] @ evecs[:, :quant_bins].T
             if quantize:
                 lap_low_rank_approx = ssdm.quantize(lap_low_rank_approx, quant_bins=quant_bins)
             
-            meet_mat = ssdm.anno_to_meet(self.ref(mode=anno_mode, anno_id=anno_id), self.ts())
+            meet_mat = ssdm.anno_to_meet(self.ref(mode=anno_mode, anno_id=anno_id), self.ts(mode='beat'))
             tau.loc[anno_id, rep_ftype, loc_ftype] = stats.kendalltau(
                 lap_low_rank_approx.flatten(), meet_mat.flatten()
                 )[0]
@@ -548,15 +596,16 @@ class Track(object):
         return tau.sel(**anno_id_kwarg)
 
 
-    def embedded_rec_mat(self, feat_combo=dict(), lap_norm='random_walk', recompute=False):
-        save_path = os.path.join(self.output_dir, f'evecs/{self.tid}_rep_{feat_combo["rep_ftype"]}_loc_{feat_combo["loc_ftype"]}_{lap_norm}.npy')
+    def embedded_rec_mat(self, feat_combo=dict(), lap_norm='random_walk', beat_sync=False, recompute=False):
+        beat_suffix = {"_sync" if beat_sync else ""}
+        save_path = os.path.join(self.output_dir, f'evecs/{self.tid}_rep_{feat_combo["rep_ftype"]}_loc_{feat_combo["loc_ftype"]}_{lap_norm}{beat_suffix}.npy')
         if not recompute:
             try:
                 return np.load(save_path)
             except:
                 recompute = True
         
-        rec_mat = self.combined_rec_mat(config_update=feat_combo)
+        rec_mat = self.combined_rec_mat(config_update=feat_combo, beat_sync=beat_sync)
         degree_matrix = np.diag(np.sum(rec_mat, axis=1))
         unnormalized_laplacian = degree_matrix - rec_mat
         # Compute the Random Walk normalized Laplacian matrix

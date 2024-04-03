@@ -1,11 +1,6 @@
 import ssdm
 from ssdm import base
-from ssdm import scluster
-
-import torch
-from torch.utils.data import Dataset
-
-import os, json, pkg_resources, itertools
+import os, json, pkg_resources
 import librosa, jams
 import numpy as np
 import xarray as xr
@@ -111,19 +106,6 @@ class Track(base.Track):
         return pd_series.to_xarray()
 
 
-# def get_lsd_scores(
-#     tids=[], 
-#     **lsd_score_kwargs
-# ) -> xr.DataArray:
-#     score_per_track = []
-#     for tid in tqdm(tids):
-#         track = Track(tid)
-#         track_score = track.lsd_score(**lsd_score_kwargs)
-#         score_per_track.append(track_score)
-    
-#     return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
-
-
 def get_ids(
     split: str = 'working',
     out_type: str = 'list' # one of {'set', 'list'}
@@ -150,124 +132,6 @@ def get_ids(
     else:
         print('invalid out_type')
         return None
-
-
-# class DS(Dataset):
-#     """ split='working',
-#         mode='rep', # {'rep', 'loc'}
-#         infer=False,
-#         drop_features=[],
-#         precomputed_tau_fp = '/home/qx244/scanning-ssm/ssdm/taus_1107.nc'
-#     """
-#     def __init__(self, 
-#                  split='working',
-#                  tids=[],
-#                  mode='rep', # {'rep', 'loc', 'both'}
-#                  infer=True,
-#                 #  drop_features=[],
-#                 #  precomputed_tau_fp='/home/qx244/scanning-ssm/ssdm/taus_1107.nc',
-#                  transform=None,
-#                  sample_select_fn=ssdm.utils.select_samples_using_outstanding_l_score,
-#                 ):
-#         self.transform = transform
-#         if mode not in ('rep', 'loc', 'both'):
-#             raise AssertionError('bad dataset mode, can only be rep or loc')
-#         self.mode = mode
-#         self.split = split
-#         if not tids:
-#             self.tids = get_ids(self.split, out_type='list')
-#         else:
-#             self.tids=tids
-
-#         if torch.cuda.is_available():
-#             self.device = torch.device("cuda")
-#         else:
-#             self.device = torch.device("cpu")
-
-#         self.infer = infer
-#         if infer:
-#             # just get all the combos, returns the percentile of the sample tau value [0~1]
-#             if self.mode != 'both':
-#                 self.samples = {pair: 0.5 \
-#                                 for pair in list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES))}
-#             else:
-#                 self.samples = {pair: 0.5 \
-#                                 for pair in list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES))}
-#         else:
-#             self.samples = sample_select_fn(self)
-#         self.ordered_keys = list(self.samples.keys())
-
-#     def track_obj(self, **track_kwargs):
-#         return Track(**track_kwargs)
-    
-#     def __repr__(self):
-#         return 'salami' + self.mode + self.split
-    
-#     def __len__(self):
-#         return len(self.samples)
-
-#     def __getitem__(self, idx):
-#         if torch.is_tensor(idx):
-#             idx = idx.tolist()
-
-#         tid, *feats = self.ordered_keys[idx]
-#         s_info = (tid, *feats, self.mode)
-#         track = Track(tid)
-#         config = ssdm.DEFAULT_LSD_CONFIG.copy()
-
-#         if self.mode == 'rep':
-#             rep_ssm = track.ssm(feature=feats[0], 
-#                                 distance=config['rep_metric'],
-#                                 width=config['rec_width'],
-#                                 full=config['rec_full'],
-#                                 **ssdm.REP_FEAT_CONFIG[feats[0]]
-#                                 )
-#             data = torch.tensor(rep_ssm, dtype=torch.float32, device=self.device)
-            
-        
-#         elif self.mode == 'loc':
-#             path_sim = track.path_sim(feature=feats[0], 
-#                                       distance=config['loc_metric'],
-#                                       **ssdm.LOC_FEAT_CONFIG[feats[0]])
-#             data = torch.tensor(path_sim, dtype=torch.float32, device=self.device)
-            
-#         elif self.mode == 'both':
-#             save_path = os.path.join(self.track_obj().output_dir, 'evecs/'+'_'.join(s_info)+'.pt')
-#             # Try to see if it's already calculated. if so load:
-#             try:
-#                 first_evecs = torch.load(save_path, map_location=self.device) # load
-#             # else: calculate
-#             except:
-#                 # print(save_path)
-#                 lsd_config = dict(rep_ftype=feats[0], loc_ftype=feats[1])
-#                 rec_mat = torch.tensor(track.combined_rec_mat(config_update=lsd_config), dtype=torch.float32, device=self.device)
-#                 # compute normalized laplacian
-#                 with torch.no_grad():
-#                     rec_mat += 1e-30 # makes inverses nice...
-#                     # Compute the degree matrix
-#                     degree_matrix = torch.diag(torch.sum(rec_mat, dim=1))
-#                     unnormalized_laplacian = degree_matrix - rec_mat
-#                     # Compute the normalized Laplacian matrix
-#                     degree_inv = torch.inverse(degree_matrix)
-#                     normalized_laplacian = degree_inv @ unnormalized_laplacian
-
-#                     evals, evecs = torch.linalg.eig(normalized_laplacian)
-#                     first_evecs = evecs.real[:, :20].to(torch.float32)
-#                     torch.save(first_evecs, save_path)
-#             data = first_evecs.to(torch.float32).to(self.device)
-        
-#         label = self.samples[(tid, *feats)]
-#         best_nlvl = min(track.num_dist_segs() - 1, 10)
-#         sample = {'data': data[None, None, :],
-#                   'label': torch.tensor([label], dtype=torch.float32, device=self.device)[None, :],
-#                   'info': s_info,
-#                   'uniq_segs': torch.tensor([best_nlvl], dtype=torch.long, device=self.device),
-#                  }
-#         if self.transform:
-#             sample = self.transform(sample)
-
-#         return sample
-
 
 def get_adobe_scores(
     tids=[],

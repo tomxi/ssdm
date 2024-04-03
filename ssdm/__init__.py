@@ -1,3 +1,7 @@
+import numpy as np
+np.int = int
+np.float = float
+
 from .core import *
 from .utils import *
 

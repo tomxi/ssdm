@@ -13,8 +13,29 @@ import sklearn.cluster
 import librosa
 
 # Being modification by tomxi
-def combine_ssms(rep_ssm, loc_path_sim, rec_smooth=7):
+def normalize_matrix(X, maxnorm=False):
+    """Normalize matrix by dividing it by its norm
+    Parameters
+    ----------
+    X : np.ndarray
+        matrix
+    maxnorm : bool, optional
+        If True normalize matrix by its max instead of norm (by default False)
+    Returns
+    -------
+    [type]
+        [description]
+    """
+    if maxnorm:
+        X /= X.max() + np.finfo(np.float64).eps
+    else:
+        X /= np.linalg.norm(X) + np.finfo(np.float64).eps
+        #for i in range(X.shape[0]):
+        #    X[i,:] /= np.max(X[i,:])
+    return X
 
+
+def combine_ssms(rep_ssm, loc_path_sim, rec_smooth=7):
     # Enhance diagonals with a median filter (Equation 2)
     df = librosa.segment.timelag_filter(scipy.ndimage.median_filter)
     Rf = df(rep_ssm, size=(1, rec_smooth))
@@ -23,6 +44,9 @@ def combine_ssms(rep_ssm, loc_path_sim, rec_smooth=7):
 
     ##########################################################
     # And compute the balanced combination (Equations 6, 7, 9)
+    Rf = normalize_matrix(Rf, False)
+    R_path = normalize_matrix(R_path, False)
+
     deg_path = np.sum(R_path, axis=1)
     deg_rec = np.sum(Rf, axis=1)
 

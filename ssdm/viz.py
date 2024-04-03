@@ -27,10 +27,10 @@ def anno_meet_mats(track, mode='expand'):
     return axs
 
 
-def lsd_meet_mat(track, config=dict(), layer_to_show=None):
+def lsd_meet_mat(track, config=dict(), beat_sync=False, layer_to_show=None):
     lsd_config = ssdm.DEFAULT_LSD_CONFIG.copy()
     lsd_config.update(config)
-    lsd_seg = track.lsd(lsd_config)
+    lsd_seg = track.lsd(lsd_config, beat_sync=beat_sync)
     lsd_meet_mat = ssdm.anno_to_meet(lsd_seg, track.ts(), num_layers=layer_to_show)
     fig, ax = plt.subplots(figsize=(5, 4))
     quadmesh = librosa.display.specshow(lsd_meet_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
@@ -52,10 +52,11 @@ def rec_mat(track, blocky=False, rec_diag=None, **ssm_config):
     recompute: bool = False,
     """
     rec_mat = track.ssm(**ssm_config)
+    config=ssdm.DEFAULT_LSD_CONFIG
     if blocky:
         # REFACTOR THE FOLLOWING CODE TODO
-        combined_graph = sc.combine_ssms(rec_mat, rec_diag)
-        _, evecs = sc.embed_ssms(combined_graph, evec_smooth=13)
+        combined_graph = sc.combine_ssms(rec_mat, rec_diag, rec_smooth=config['rec_smooth'])
+        _, evecs = sc.embed_ssms(combined_graph, evec_smooth=config['evec_smooth'])
         first_evecs = evecs[:, :10]
         rec_mat = ssdm.quantize(np.matmul(first_evecs, first_evecs.T), quant_bins=7)
     fig, ax = plt.subplots(figsize=(5, 4))

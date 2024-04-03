@@ -315,10 +315,11 @@ def quantize(data, quantize_method='percentile', quant_bins=8):
 def run_lsd(
     track,
     config: dict,
+    beat_sync: bool = False,
     recompute_ssm: bool = False,
     loc_sigma: float = 95
 ) -> jams.Annotation:
-    def mask_diag(sq_mat, width=13):
+    def mask_diag(sq_mat, width=2):
         # carve out width from the full ssm
         sq_mat_lil = sparse.lil_matrix(sq_mat)
         for diag in range(-width + 1, width):
@@ -331,6 +332,7 @@ def run_lsd(
                         width=config['rec_width'],
                         full=bool(config['rec_full']),
                         recompute=recompute_ssm,
+                        beat_sync=beat_sync,
                         **ssdm.REP_FEAT_CONFIG[config['rep_ftype']]
                         )
     
@@ -342,12 +344,17 @@ def run_lsd(
                               distance=config['loc_metric'],
                               sigma_percentile=loc_sigma,
                               recompute=True,
+                              beat_sync=beat_sync,
                               **ssdm.LOC_FEAT_CONFIG[config['loc_ftype']]
                              )
 
     # Spectral Clustering with Config
     est_bdry_idxs, est_sgmt_labels = sc.do_segmentation_ssm(rep_ssm, path_sim, config)
-    est_bdry_itvls = [sc.times_to_intervals(track.ts()[lvl]) for lvl in est_bdry_idxs]
+    if beat_sync:
+        ts = track.ts(mode='beat')
+    else:
+        ts = track.ts(mode='frame')
+    est_bdry_itvls = [sc.times_to_intervals(ts[lvl]) for lvl in est_bdry_idxs]
     return mireval2multi(est_bdry_itvls, est_sgmt_labels)
 
 
@@ -462,7 +469,7 @@ def dataset_performance(score_da, tau_hat_rep, tau_hat_loc, heir=False):
     return full_score
 
 
-def full_performance(ds, rep_model='RepNet20240303_epoch28', loc_model='LocNet20240303_epoch17'):
+def full_performance(ds, rep_model='RepNet20240303_epoch28', loc_model='LocNet20240303_epoch17', multi_model='', both=False):
     # Performance with flat and heir scores
     ds_str = str(ds).replace('loc', 'rep')
     tau_hat_rep = xr.open_dataarray(f'/vast/qx244/salami/tau_hat_{ds_str}-{rep_model}.nc')
@@ -532,6 +539,7 @@ def dev_deploy_perf(
     return deploy_naive_perf, deploy_tau_perf, (dev_rep_pick, dev_loc_pick)
 
 
+# Create test train val splits on the fly, but with random seed.
 def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
     dev_set, test_set = train_test_split(arr, test_size = test_ratio, random_state = random_state)
     train_set, val_set = train_test_split(dev_set, test_size = val_ratio / (1 - test_ratio), random_state = random_state)
@@ -541,6 +549,7 @@ def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
     return dict(train=train_set, val=val_set, test=test_set)
 
 
+# Sample selection functions
 def select_samples_using_tau_percentile(ds, low=25, high=75):
     taus_train = ssdm.get_taus(type(ds)(split='train', infer=True, mode=ds.mode, lap_norm=ds.lap_norm,
         sample_select_fn=ds.sample_select_fn), shuffle=True)

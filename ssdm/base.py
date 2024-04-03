@@ -14,7 +14,7 @@ from torch.utils.data import Dataset
 import numpy as np
 import xarray as xr
 from scipy import spatial, stats
-from scipy.linalg import eig
+from scipy.linalg import eig, eigh
 from sklearn.metrics import roc_auc_score
 
 from librosa.segment import recurrence_matrix
@@ -495,7 +495,93 @@ class Track(object):
             return tau.sel(**anno_id_kwarg, **tau_sel_dict)
         except KeyError:
             return tau.sel(**tau_sel_dict)
+
+
+    def tau_both(
+        self,
+        anno_mode: str = 'expand',
+        recompute: bool = False,
+        lap_norm: str = 'random_walk', # symmetrical or random_walk
+        quantize: str = 'percentile', # None, 'kmeans' or 'percentile'
+        quant_bins: int = 7, # used for loc tau quant schemes
+        verbose: bool = False,
+        **anno_id_kwarg
+    ) -> xr.DataArray:
+        # test if record_path exist, if no, set recompute to true.
+        quantize_suffix = f'_{quantize}{quant_bins}' if quantize is not None else ''
+        record_path = os.path.join(self.output_dir, f'taus/{self.tid}_{anno_mode}{quantize_suffix}{lap_norm}.nc')
         
+        if not recompute:
+            try:
+                with xr.open_dataarray(record_path) as tau:
+                    return tau.load().sel(**anno_id_kwarg)
+            except:
+                recompute = True
+
+        grid_coords = dict(
+            anno_id=list(range(self.num_annos())), 
+            rep_ftype=ssdm.AVAL_FEAT_TYPES, 
+            loc_ftype=ssdm.AVAL_FEAT_TYPES
+        )
+        tau = xr.DataArray(np.nan, coords=grid_coords, dims=grid_coords.keys())
+        
+        for anno_id, rep_ftype, loc_ftype in tau.coords.to_index():
+            if verbose:
+                print(anno_id, rep_ftype, loc_ftype)
+            # Compute the combined rec mat
+            feat_combo = dict(rep_ftype=rep_ftype, loc_ftype=loc_ftype)
+            # Combined rec -> evecs function function (with caching, and normalization param lap_norm)
+            evecs = self.embedded_rec_mat(feat_combo=feat_combo, lap_norm=lap_norm, recompute=False)
+            # Calculate the LRA of the normalized laplacian, and use that to compute corr with anno_meet_mat
+            lap_low_rank_approx = evecs[:, :quant_bins] @ evecs[:, :quant_bins].T
+            if quantize:
+                lap_low_rank_approx = ssdm.quantize(lap_low_rank_approx, quant_bins=quant_bins)
+            
+            meet_mat = ssdm.anno_to_meet(self.ref(mode=anno_mode, anno_id=anno_id), self.ts())
+            tau.loc[anno_id, rep_ftype, loc_ftype] = stats.kendalltau(
+                lap_low_rank_approx.flatten(), meet_mat.flatten()
+                )[0]
+        try:
+            tau.to_netcdf(record_path)
+        except:
+            pass
+        return tau.sel(**anno_id_kwarg)
+
+
+    def embedded_rec_mat(self, feat_combo=dict(), lap_norm='random_walk', recompute=False):
+        save_path = os.path.join(self.output_dir, f'evecs/{self.tid}_rep_{feat_combo["rep_ftype"]}_loc_{feat_combo["loc_ftype"]}_{lap_norm}.npy')
+        if not recompute:
+            try:
+                return np.load(save_path)
+            except:
+                recompute = True
+        
+        rec_mat = self.combined_rec_mat(config_update=feat_combo)
+        degree_matrix = np.diag(np.sum(rec_mat, axis=1))
+        unnormalized_laplacian = degree_matrix - rec_mat
+        # Compute the Random Walk normalized Laplacian matrix
+        if lap_norm == 'random_walk':
+            degree_inv = np.linalg.inv(degree_matrix)
+            normalized_laplacian = degree_inv @ unnormalized_laplacian
+            evals, evecs = eig(normalized_laplacian)
+            sort_indices = np.argsort(evals.real)
+            # Reorder the eigenvectors matrix columns using the sort indices of evals
+            sorted_eigenvectors = evecs[:, sort_indices]
+            first_evecs = sorted_eigenvectors.real[:, :20]
+        elif lap_norm == 'symmetrical':
+            sqrt_degree_inv = np.linalg.inv(np.sqrt(degree_matrix))
+            normalized_laplacian = sqrt_degree_inv @ unnormalized_laplacian @ sqrt_degree_inv
+            evals, evecs = eigh(normalized_laplacian)
+            sort_indices = np.argsort(evals)
+            # Reorder the eigenvectors matrix columns using the sort indices of evals
+            sorted_eigenvectors = evecs[:, sort_indices]
+            first_evecs = sorted_eigenvectors[:, :20]
+        else:
+            print('lap_norm can only be random_walk or symmetrical')
+
+        np.save(save_path, first_evecs)
+        return first_evecs
+      
     def num_dist_segs(self):
         num_seg_per_anno = []
         for aid in range(self.num_annos()):
@@ -536,6 +622,7 @@ class DS(Dataset):
         mode='rep',
         infer=True,
         transform=None,
+        lap_norm = 'random_walk',
         sample_select_fn=None
     ):
         if torch.cuda.is_available():
@@ -548,6 +635,7 @@ class DS(Dataset):
         self.mode = mode
         self.infer = infer
         self.sample_select_fn = sample_select_fn
+        self.lap_norm = lap_norm
 
         # sample building
         if self.infer:
@@ -561,7 +649,7 @@ class DS(Dataset):
         self.samples.sort()
         self.transform=transform
         self.output_dir = self.track_obj().output_dir
-
+        
 
     def __len__(self):
         return len(self.samples)
@@ -574,14 +662,9 @@ class DS(Dataset):
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
-
         tid, *feats = self.samples[idx]
-        # track = self.track_obj(tid=tid)
-
         config = ssdm.DEFAULT_LSD_CONFIG.copy()
-
         s_info = (tid, *feats, self.mode)
-
         if self.mode == 'rep':
             track = self.track_obj(tid=tid)
             data = track.ssm(
@@ -601,27 +684,15 @@ class DS(Dataset):
             data = torch.tensor(data, dtype=torch.float32, device=self.device)
 
         elif self.mode == 'both':
-            save_path = os.path.join(self.output_dir, 'evecs/'+'_'.join(s_info)+'.npy')
-            try:
-                first_evecs = np.load(save_path)
-            except:
-                track = self.track_obj(tid=tid)
-                lsd_config = dict(rep_ftype=feats[0], loc_ftype=feats[1])
-                rec_mat = track.combined_rec_mat(config_update=lsd_config)
-
-                degree_matrix = np.diag(np.sum(rec_mat, axis=1))
-                unnormalized_laplacian = degree_matrix - rec_mat
-                # Compute the Random Walk normalized Laplacian matrix
-                degree_inv = np.linalg.inv(degree_matrix)
-                normalized_laplacian = degree_inv @ unnormalized_laplacian
-                evals, evecs = eig(normalized_laplacian)
-                first_evecs = evecs.real[:, :20]
-                np.save(save_path, first_evecs)
+            first_evecs = self.track_obj(tid=tid).embedded_rec_mat(
+                feat_combo=dict(rep_ftype=feats[0], loc_ftype=feats[1]), 
+                lap_norm=self.lap_norm, 
+                recompute=False
+            )
             data = torch.tensor(first_evecs, dtype=torch.float32, device=self.device)
         else:
             assert KeyError('bad mode: can onpy be rep or loc or both')
         
-        # best_nlvl = min(track.num_dist_segs() - 1, 10)
         nlvl_save_path = os.path.join(self.output_dir, 'evecs/'+s_info[0]+'_nlvl.npy')
         try:
             best_nlvl = np.load(nlvl_save_path)

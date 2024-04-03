@@ -1,17 +1,19 @@
-from sklearn.model_selection import train_test_split
+
 import xarray as xr
 import pandas as pd
 import numpy as np
+import torch
 from sklearn import preprocessing, cluster
+from sklearn.model_selection import train_test_split
 from scipy import sparse
 from tqdm import tqdm
 import random, os
-
-import jams
-import mir_eval
-
+import jams, mir_eval
 import ssdm
 import ssdm.scluster as sc
+import ssdm.scanner as scn
+
+import scipy
 
 def anno_to_meet(
     anno: jams.Annotation,  # multi-layer
@@ -67,10 +69,15 @@ def meet_mat_no_diag(track, rec_mode='expand', diag_mode='refine', anno_id=0):
 def compute_l(
     proposal: jams.Annotation, 
     annotation: jams.Annotation,
-    l_frame_size: float = 0.1
+    l_frame_size: float = 0.1,
+    nlvl = None,
 ) -> np.array:
     anno_interval, anno_label = multi2mireval(annotation)
     proposal_interval, proposal_label = multi2mireval(proposal)
+    if nlvl:
+        assert nlvl > 0
+        proposal_interval = proposal_interval[:nlvl]
+        proposal_label = proposal_label[:nlvl]
 
     # make last segment for estimation end at the same time as annotation
     end = max(anno_interval[-1][-1, 1], proposal_interval[-1][-1, 1])
@@ -235,6 +242,49 @@ def pick_by_taus(
     return out
 
 
+def pick_by_net(ds, model_path='', return_raw_result=False):
+    assert ds.mode == 'both' and ds.infer == True
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    #extract info from model_path
+    model_basename = os.path.basename(model_path)
+    # Check for cached inference results:
+    infer_result_fp = os.path.join(ds.output_dir, f'tauhats/{model_basename}_{ds}.nc')
+    try:
+        inference_result = xr.load_dataarray(infer_result_fp)
+    except:
+        print('could not load cache, doing inference')
+        
+        # check all the available models in scanner.py to see if anyone fits
+        net = None
+        for model_id in scn.AVAL_MODELS:
+            if model_basename.find(model_id + '_') >= 0:
+                print(model_basename)
+                print(model_id)
+                # returns the first model found in the file base name
+                net = scn.AVAL_MODELS[model_id]()
+                continue
+        if net == None:
+            raise IndexError('could not figure out which model architecutre to initialize.')      
+        # load model and do inference
+        state_dict = torch.load(model_path, map_location=device)
+        net.load_state_dict(state_dict=state_dict)
+        inference_result = scn.net_infer_multi_loss(ds, net=net, device=device)
+    try:
+        inference_result.to_netcdf(infer_result_fp)
+    except:
+        print('failed to cache result...')
+
+    # Return either the raw inference result or the best choosen scores
+    if return_raw_result:
+        return inference_result
+    else:
+        # collection
+        util_score = inference_result.loc[:, :, :, 'util']
+        # nlvl_score = inference_result.loc[:, :, :, 'nlvl']
+        best_chocie_idx = util_score.argmax(dim=['rep_ftype', 'loc_ftype'])
+        return util_score.isel(best_chocie_idx)
+
+
 def quantize(data, quantize_method='percentile', quant_bins=8):
     # method can me 'percentile' 'kmeans'. Everything else will be no quantize
     data_shape = data.shape
@@ -352,9 +402,22 @@ def get_taus(
     recollect=False,
     **tau_kwargs,
 ):
+    if ds.infer:
+        infer_flag = 'infer'
+    else:
+        infer_flag = 'train'
     ds_str = str(ds).replace('rep', '').replace('loc', '')
-    save_path = f'/vast/qx244/{ds_str}_blocky_taus.nc'
-    if recollect or not os.path.exists(save_path):
+    if ds.mode == 'both':
+        save_path = os.path.join(ds.track_obj().output_dir, f'{ds_str}_{infer_flag}_{ds.lap_norm}_blocky_taus.nc')
+    else:
+        save_path = os.path.join(ds.track_obj().output_dir, f'{ds_str}_{infer_flag}_blocky_taus.nc')
+    
+    try:
+        out = xr.load_dataarray(save_path)
+    except:
+        recollect = True
+
+    if recollect:
         tau_per_track = []
         tids = ds.tids
         if shuffle:
@@ -363,11 +426,20 @@ def get_taus(
             track = ds.track_obj(tid=tid)
             tau_per_anno = []
             for anno_id in range(track.num_annos()):
-                tau_per_anno.append(track.tau(anno_id=anno_id, **tau_kwargs))
+                if ds.mode == 'both':
+                    tau_per_anno.append(track.tau_both(anno_id=anno_id, lap_norm=ds.lap_norm, **tau_kwargs))
+                else:
+                    tau_per_anno.append(track.tau(anno_id=anno_id, **tau_kwargs))
             anno_stack = xr.concat(tau_per_anno, pd.Index(range(len(tau_per_anno)), name='anno_id'))
             tau_per_track.append(anno_col_fn(anno_stack))
-        xr.concat(tau_per_track, pd.Index(tids, name='tid'), coords='minimal').rename().to_netcdf(save_path)
-    return xr.load_dataarray(save_path).sortby('tid')
+        out = xr.concat(tau_per_track, pd.Index(tids, name='tid'), coords='minimal')
+        out.rename().sortby('tid')
+        try: 
+            out.to_netcdf(save_path)
+        except:
+            pass
+    
+    return out.sortby('tid')
 
 
 def dataset_performance(score_da, tau_hat_rep, tau_hat_loc, heir=False):
@@ -470,17 +542,26 @@ def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
 
 
 def select_samples_using_tau_percentile(ds, low=25, high=75):
-    taus_full = ssdm.get_taus(type(ds)(split='train', infer=True))
+    taus_train = ssdm.get_taus(type(ds)(split='train', infer=True, mode=ds.mode, lap_norm=ds.lap_norm,
+        sample_select_fn=ds.sample_select_fn), shuffle=True)
+    
+    if ds.split:
+        taus_full = ssdm.get_taus(type(ds)(split=ds.split, infer=True, mode=ds.mode, lap_norm=ds.lap_norm,
+            sample_select_fn=ds.sample_select_fn), shuffle=True)
+    else:
+        taus_full = ssdm.get_taus(type(ds)(tids=ds.tids, infer=True, mode=ds.mode, lap_norm=ds.lap_norm,
+            sample_select_fn=ds.sample_select_fn), shuffle=True)
     if ds.mode == 'both':
-        print('not implemented yet! Do the low rank biz')
-        raise NotImplementedError
+        tau_flat = taus_full.stack(sid=['tid', 'rep_ftype', 'loc_ftype'])
     else:
         tau_flat = taus_full.sel(tau_type=ds.mode).stack(sid=['tid', 'f_type'])
-        neg_sids = tau_flat.where(tau_flat < np.percentile(tau_flat, low), drop=True).indexes['sid']
-        pos_sids = tau_flat.where(tau_flat > np.percentile(tau_flat, high), drop=True).indexes['sid']
-        neg_samples = {sid: 0 for sid in neg_sids if sid[0] in ds.tids}
-        pos_samples = {sid: 1 for sid in pos_sids if sid[0] in ds.tids}
-        return {**neg_samples, **pos_samples}
+    neg_sids = tau_flat.where(tau_flat < np.percentile(taus_train, low), drop=True).indexes['sid']
+    pos_sids = tau_flat.where(tau_flat > np.percentile(taus_train, high), drop=True).indexes['sid']
+    neg_samples = {sid: 0 for sid in neg_sids if sid[0] in ds.tids}
+    pos_samples = {sid: 1 for sid in pos_sids if sid[0] in ds.tids}
+
+    print(f'{ds} has \n \t {len(pos_samples)} pos samples; {len(neg_samples)} neg samples.')
+    return {**neg_samples, **pos_samples}
 
 
 def select_samples_using_outstanding_l_score(ds, neg_eps_pct=50, l_type='lr'):

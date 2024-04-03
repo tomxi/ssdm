@@ -3,7 +3,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from tqdm import tqdm
-import json, argparse
+import json, argparse, itertools
 
 import ssdm
 import ssdm.scanner as scn
@@ -13,9 +13,16 @@ from ssdm import harmonix as hmx
 # BACKUP, not using this anymore
 # DROP_FEATURES=[]
 
-def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='hmx', LS='score'):
-    """DS can be slm and hmx for now, LS can be tau or score"""
-    print(MODEL_ID, EPOCH, DATE, LOSS_TYPE, DS, LS)
+def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='hmx', WDM='1e-5', LS='score', LAPNORM='random_walk'):
+    """
+    MODEL_ID
+    DS can be slm and hmx for now
+    LOSS_TYPE: mutil, util, nlvl
+    WDM: weight decay multiplyer
+    
+    """
+    experiment_id_str = f'{DATE}{MODEL_ID}_{DS}{WDM}{LOSS_TYPE}{LS}{LAPNORM}{EPOCH}'
+    print(experiment_id_str)
 
     # setup device
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -28,9 +35,9 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='hmx', LS='score'):
     num_layer_loss = torch.nn.CrossEntropyLoss()
     optimizer = optim.AdamW([
         {'params': [param for name, param in net.named_parameters() if 'head' not in name], 
-         'weight_decay': 1e-6},
+         'weight_decay': 1 * float(WDM)},
         {'params': [param for name, param in net.named_parameters() if 'head' in name], 
-         'weight_decay': 1e-4}  # Only weight decay for the specified layer
+         'weight_decay': 10 * float(WDM)}  # Only weight decay for the specified layer
     ])
 
     lr_scheduler = optim.lr_scheduler.CyclicLR(
@@ -40,13 +47,21 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='hmx', LS='score'):
     # setup dataloaders   
     # augmentor = lambda x: scn.time_mask(x, T=100, num_masks=4, replace_with_zero=False, tau=TAU_TYPE)
     augmentor = None
-    sample_selector = ssdm.select_samples_using_outstanding_l_score
+    if LS == 'score':
+        sample_selector = ssdm.select_samples_using_outstanding_l_score
+    elif LS == 'tau':
+        sample_selector = ssdm.select_samples_using_tau_percentile
+    else:
+        print('bad learning signal: score or tau')
+
     if DS == 'slm':
-        train_dataset = slm.NewDS(split='train', infer=False, mode='both', transform=augmentor, sample_select_fn=sample_selector)
-        val_dataset = slm.NewDS(split='val', infer=False, mode='both', sample_select_fn=sample_selector)
+        train_dataset = slm.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, sample_select_fn=sample_selector)
+        val_dataset = slm.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, sample_select_fn=sample_selector)
     elif DS == 'hmx':
-        train_dataset = hmx.NewDS(split='train', infer=False, mode='both', transform=augmentor, sample_select_fn=sample_selector)
-        val_dataset = hmx.NewDS(split='val', infer=False, mode='both', sample_select_fn=sample_selector)
+        train_dataset = hmx.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, sample_select_fn=sample_selector)
+        val_dataset = hmx.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, sample_select_fn=sample_selector)
+    else:
+        print('bad DS')
 
     train_loader = DataLoader(train_dataset, batch_size=None, shuffle=True)
 
@@ -74,29 +89,47 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='hmx', LS='score'):
             # update best_loss and save model
             best_u_loss = u_loss
             best_state = net.state_dict()
-            torch.save(best_state, f'{DATE}{MODEL_ID}_{DS}{LS}{LOSS_TYPE}_best_util_epoch{epoch}in{EPOCH}')
+            torch.save(best_state, f'{experiment_id_str}_best_util')
 
         if lvl_loss < best_lvl_loss:
             # update best_loss and save model
             best_lvl_loss = lvl_loss
             best_state = net.state_dict()
-            torch.save(best_state, f'{DATE}{MODEL_ID}_{DS}{LS}{LOSS_TYPE}_best_nlvl_epoch{epoch}in{EPOCH}')
+            torch.save(best_state, f'{experiment_id_str}_best_nlvl')
         
         # save simple log as json
         trainning_info = {'train_loss': train_losses,
                           'val_loss': val_losses}
-        with open(f'{DATE}{MODEL_ID}_{DS}{LS}{LOSS_TYPE}_{EPOCH}epoch.json', 'w') as file:
+        with open(f'{experiment_id_str}epoch.json', 'w') as file:
             json.dump(trainning_info, file)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Training Tau hats')
-    parser.add_argument('model_id', help='see scanner.AVAL_MODELS')
-    parser.add_argument('total_epoch', help='total number of epochs to train')
-    parser.add_argument('date', help='just a marker really, can be any text but mmdd is the intension')
-    parser.add_argument('loss_type', help='what loss? util, nlvl or multi')
-    parser.add_argument('dataset', help='Which dataset? slm or hmx')
+    # parser.add_argument('model_id', help='see scanner.AVAL_MODELS')
+    # parser.add_argument('total_epoch', help='total number of epochs to train')
+    # parser.add_argument('date', help='just a marker really, can be any text but mmdd is the intension')
+    # parser.add_argument('loss_type', help='what loss? util, nlvl or multi')
+    # parser.add_argument('dataset', help='Which dataset? slm or hmx')
+    # parser.add_argument('wd', help='multiplier for weight decay parameter for optimizer')
+    # parser.add_argument('ls', help='learning signal, tau or score?')
+    # parser.add_argument('lap_norm', help='how to normalize laplacian, symmetrical or random_walk?')
+    
+    parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
+    
+    config_list = list(itertools.product(
+        # ['EvecNetMulti2', 'EvecSQNet', 'EvecSQNet2'],
+        ['EvecSQNet3'],
+        ['slm', 'hmx'],
+    ))
 
-    kwargs = parser.parse_args()
-    train(kwargs.model_id, kwargs.total_epoch, kwargs.date, kwargs.loss_type, kwargs.dataset, 'score')
+    model_id, dataset = config_list[int(parser.parse_args().config_idx)]
+    total_epoch = 40
+    date = 20240402
+    loss_type = 'multi'
+    wd = 1e-2
+    ls = 'tau'
+    lap_norm = 'random_walk'
+
+    train(model_id, total_epoch, date, loss_type, dataset, wd, ls, lap_norm)
     print('done without failure!')

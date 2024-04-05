@@ -1,18 +1,9 @@
 import numpy as np
-import os, json, itertools, pkg_resources
+import os, json, pkg_resources
 from glob import glob
 
 from . import base
 import ssdm
-from ssdm import scluster
-
-import torch
-from torch.utils.data import Dataset
-
-import xarray as xr
-from tqdm import tqdm
-import pandas as pd
-# import jams
 
 HMX_TITLE_DICT = dict()
 title_dict_dir = '/scratch/qx244/data/audio_features_crema_mfcc_openl3_tempogram_yamnet/crema_mfcc_openl3_tempogram_yamnet_features/'
@@ -34,6 +25,17 @@ class Track(base.Track):
     def audio(self, **kwargs): 
         print('Audio not Available')
         raise NotImplementedError
+    
+    def _madmom_beats(self, **kwargs):
+        save_path = os.path.join(self.dataset_dir.replace('dataset', 'results'), f'beats/Korzeniowski/{self.title}.txt')
+        with open(save_path, 'r') as file:
+            beat_times_str = file.readlines()
+        beat_times = np.array([float(beat_time.strip()) for beat_time in beat_times_str])
+        if beat_times[0] > 0:
+            beat_times = np.insert(beat_times, 0, 0)
+        if beat_times[-1] < self.ts(mode='frame')[-1]:
+            beat_times = np.append(beat_times, self.ts(mode='frame')[-1])
+        return beat_times
 
 
 def get_ids(
@@ -61,10 +63,11 @@ def get_ids(
         print('invalid out_type')
         return None
 
+
 class NewDS(base.DS):
     def __init__(self, mode='rep', infer=False, 
                  split='train', tids=None, transform=None, lap_norm='random_walk',
-                 sample_select_fn=ssdm.select_samples_using_tau_percentile):
+                 sample_select_fn=ssdm.select_samples_using_tau_percentile, **kwargs):
         self.name = 'hmx'
 
         if tids is None:
@@ -74,15 +77,8 @@ class NewDS(base.DS):
             self.tids = tids
             self.split = f'custom{len(tids)}'
         
-        super().__init__(mode=mode, infer=infer, lap_norm=lap_norm, sample_select_fn=sample_select_fn, transform=transform)
+        super().__init__(mode=mode, infer=infer, lap_norm=lap_norm, sample_select_fn=sample_select_fn, transform=transform, **kwargs)
+    
+    
     def track_obj(self, **track_kwargs):
         return Track(**track_kwargs)
-    
-
-class DS(NewDS):
-    def __init__(self, mode='rep', infer=False, 
-                 split='train', tids=None, transform=None, lap_norm='random_walk',
-                 sample_select_fn=ssdm.select_samples_using_tau_percentile):
-        super().__init__(self, mode=mode, infer=infer, 
-                 split=split, tids=tids, transform=transform, lap_norm=lap_norm,
-                 sample_select_fn=sample_select_fn)

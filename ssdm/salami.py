@@ -182,7 +182,7 @@ def update_split_json(split_name='', split_idx=[]):
 class NewDS(base.DS):
     def __init__(self, mode='rep', infer=False, 
                  split='train', tids=None, transform=None, lap_norm='random_walk',
-                 sample_select_fn=ssdm.select_samples_using_tau_percentile):
+                 sample_select_fn=ssdm.select_samples_using_tau_percentile, **kwargs):
         self.name = 'slm'
 
         if tids is None:
@@ -192,7 +192,7 @@ class NewDS(base.DS):
             self.tids = tids
             self.split = f'custom{len(tids)}'
         
-        super().__init__(mode=mode, infer=infer, lap_norm=lap_norm, sample_select_fn=sample_select_fn, transform=transform)
+        super().__init__(mode=mode, infer=infer, lap_norm=lap_norm, sample_select_fn=sample_select_fn, transform=transform, **kwargs)
     def track_obj(self, **track_kwargs):
         return Track(**track_kwargs)
     

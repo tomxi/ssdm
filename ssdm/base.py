@@ -16,7 +16,6 @@ import numpy as np
 import xarray as xr
 from scipy import spatial, stats
 from scipy.linalg import eig, eigh
-from sklearn.metrics import roc_auc_score
 
 from librosa.segment import recurrence_matrix
 from librosa.feature import stack_memory
@@ -371,209 +370,188 @@ class Track(object):
         return lsd_anno
     
 
-    def lsd_score(
-        self,
-        lsd_sel_dict: dict = dict(),
-        recompute: bool = False,
-        l_frame_size: float = 0.1,
-        beat_sync: bool = False,
-        path_sim_sigma_percent: float = 95,
-        anno_id: int = 0,
-    ) -> xr.DataArray:
-        #initialize file if doesn't exist or load the xarray nc file
-        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{l_frame_size}p{path_sim_sigma_percent}{"_bsync2" if beat_sync else ""}.nc')
-        if not os.path.exists(nc_path):
-            init_grid = ssdm.LSD_SEARCH_GRID.copy()
-            init_grid.update(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm'])
-            lsd_score_da = xr.DataArray(np.nan, dims=init_grid.keys(), coords=init_grid, name=str(self.tid))
-            lsd_score_da.to_netcdf(nc_path)
-        else:
-            with xr.open_dataarray(nc_path) as lsd_score_da:
-                lsd_score_da.load()
-        
-        # build lsd_configs from lsd_sel_dict
-        configs = []
-        config_midx = lsd_score_da.sel(**lsd_sel_dict).coords.to_index()
-        for option_values in config_midx:
-            exp_config = ssdm.DEFAULT_LSD_CONFIG.copy()
-            if beat_sync:
-                exp_config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
-            for opt in lsd_sel_dict:
-                if opt in ssdm.DEFAULT_LSD_CONFIG:
-                    exp_config[opt] = lsd_sel_dict[opt]
-            try:
-                for opt, value in zip(config_midx.names, option_values):
-                    if opt in ssdm.DEFAULT_LSD_CONFIG:
-                        exp_config[opt] = value
-            except TypeError:
-                pass
-            if exp_config not in configs:
-                configs.append(exp_config)
-
-        # run through the configs list and populate / readout scores
-        for lsd_conf in configs:
-            # first build the index dict
-            coord_idx = lsd_conf.copy()
-            coord_idx.update(l_type=['lp', 'lr', 'lm'])
-            for k in coord_idx.copy():
-                if k not in lsd_score_da.coords:
-                    del coord_idx[k]
-            
-            exp_slice = lsd_score_da.sel(coord_idx)
-            if recompute or exp_slice.isnull().any():
-                # Only compute if value doesn't exist:
-                ###
-                # print('recomputing l score')
-                proposal = self.lsd(lsd_conf, print_config=False, beat_sync=beat_sync, path_sim_sigma_percentile=path_sim_sigma_percent, recompute=False)
-                annotation = self.ref(anno_id=anno_id)
-                # search l_score from old places first?
-                l_score = ssdm.compute_l(proposal, annotation, l_frame_size=l_frame_size)
-                with xr.open_dataarray(nc_path) as lsd_score_da:
-                    lsd_score_da.load()
-                lsd_score_da.loc[coord_idx] = list(l_score)
-                try:
-                    lsd_score_da.to_netcdf(nc_path)
-                except PermissionError:
-                    os.system(f'rm {nc_path}')
-                    # Sometimes saving can fail due to multiple workers
-                    pass
-        # return lsd_score_da
-        out = lsd_score_da.sel(**lsd_sel_dict)
-        try:
-            out = out.sel(anno_id=anno_id)
-        except:
-            pass
-        return out
-
-
-    def lsd_score_flat(self, anno_id=0, beat_sync=False, recompute=False) -> xr.DataArray:
+    def new_lsd_score(self, anno_id=0, l_frame_size=0.5, beat_sync=True, path_sim_bw=95, recompute=False):
         # save 
         if anno_id != 0:
             anno_flag = f'a{anno_id}'
         else:
             anno_flag = ''
-        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{anno_flag}flat{"_bsync2" if beat_sync else ""}.nc')
+        nc_path = os.path.join(
+            self.output_dir, 
+            f'ells/{self.tid}_{anno_flag}_{l_frame_size}p{path_sim_bw}{"_bsync" if beat_sync else ""}.nc'
+        )
 
-        if not os.path.exists(nc_path):
-            # build da to store
-            score_dims = dict(
-                rep_ftype=ssdm.AVAL_FEAT_TYPES,
-                loc_ftype=ssdm.AVAL_FEAT_TYPES,
-                m_type=['p', 'r', 'f'],
-                metric=['hr', 'hr3', 'pfc', 'nce'],
-                layer=[x+1 for x in range(16)],
-            )
-
-            score_da = xr.DataArray(
-                data=np.nan,  # Initialize the data with NaNs
-                coords=score_dims,
-                dims=list(score_dims.keys()),
-                name=str(self.tid)
-            )
-
+        if not recompute:
             try:
-                score_da.to_netcdf(nc_path)
-            except PermissionError:
-                os.system(f'rm {nc_path}')
-            recompute = True
-        else:
-            with xr.open_dataarray(nc_path) as score_da:
-                score_da.load()
+                return xr.open_dataarray(nc_path)
+            except:
+                recompute = True
+        
+        # build da to store
+        score_dims = dict(
+            rep_ftype=ssdm.AVAL_FEAT_TYPES,
+            loc_ftype=ssdm.AVAL_FEAT_TYPES,
+            layer=[x+1 for x in range(16)],
+            m_type=['p', 'r', 'f'],
+        )
 
-        if recompute:
-            # build all the lsd configs:
-            for rep_ftype in ssdm.AVAL_FEAT_TYPES:
-                for loc_ftype in ssdm.AVAL_FEAT_TYPES:
-                    feature_pair = dict(rep_ftype=rep_ftype, loc_ftype=loc_ftype)
-                    lsd_config = ssdm.DEFAULT_LSD_CONFIG.copy()
-                    if beat_sync:
-                        lsd_config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
-                    lsd_config.update(feature_pair)
-                    score_da.loc[feature_pair] = ssdm.compute_flat(self.lsd(lsd_config, beat_sync=beat_sync, recompute=False), self.ref(mode='normal', anno_id=anno_id))
-            
-            try:
-                score_da.to_netcdf(nc_path)
-            except PermissionError:
-                os.system(f'rm {nc_path}')
+        score_da = xr.DataArray(
+            data=np.nan,  # Initialize the data with NaNs
+            coords=score_dims,
+            dims=list(score_dims.keys()),
+            name=str(self.tid)
+        )
 
+        # build all the lsd configs:
+        indexer = itertools.product(score_dims['rep_ftype'], score_dims['loc_ftype'])
+
+        for rep_ftype, loc_ftype in indexer:
+            feature_pair = dict(rep_ftype=rep_ftype, loc_ftype=loc_ftype)
+            lsd_config = ssdm.DEFAULT_LSD_CONFIG.copy()
+            lsd_config.update(feature_pair)
+            if beat_sync:
+                lsd_config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
+
+            for layer in score_dims['layer']:
+                score_da.loc[feature_pair].loc[layer] = list(ssdm.compute_l(
+                    self.lsd(lsd_config, beat_sync=beat_sync, recompute=False), 
+                    self.ref(mode='normal', anno_id=anno_id),
+                    l_frame_size=l_frame_size, nlvl=layer
+                ))
+        
+        try:
+            score_da.to_netcdf(nc_path)
+        except PermissionError:
+            os.system(f'rm {nc_path}')
+            score_da.to_netcdf(nc_path)
         return score_da
 
 
-    # DEPREE
-    def tau(
-        self,
-        tau_sel_dict: dict = dict(),
-        anno_mode: str = 'expand',
-        recompute: bool = False,
-        quantize: str = 'percentile', # None, 'kmeans' or 'percentile'
-        quant_bins: int = 7, # used for loc tau quant schemes
-        rec_width: int = 30,
-        beat_sync: bool = False,
-        eigen_block: bool = True,
-        **anno_id_kwarg
-    ) -> xr.DataArray:
-        if beat_sync:
-            raise NotImplementedError('use tau_both')
-        # test if record_path exist, if no, set recompute to true.
-        suffix = f'_{quantize}{quant_bins}' if quantize is not None else ''
-        am_str = f'{anno_mode}' if anno_mode != 'expand' else ''
-        eigen_block_txt = f'blocky' if eigen_block else ''
-        record_path = os.path.join(self.output_dir, f'taus/{self.tid}_rw{rec_width}{suffix}{am_str}{eigen_block_txt}.nc')
-        try:
-            with xr.open_dataarray(record_path) as tau:
-                tau.load()
-        except:
-            grid_coords = dict(f_type=ssdm.AVAL_FEAT_TYPES, 
-                               tau_type=['rep', 'loc'], 
-                               )
-            tau = xr.DataArray(np.nan, coords=grid_coords, dims=grid_coords.keys())
-            tau.to_netcdf(record_path)
+    # def lsd_score(
+    #     self,
+    #     lsd_sel_dict: dict = dict(),
+    #     recompute: bool = False,
+    #     l_frame_size: float = 0.1,
+    #     beat_sync: bool = False,
+    #     path_sim_sigma_percent: float = 95,
+    #     anno_id: int = 0,
+    # ) -> xr.DataArray:
+    #     #initialize file if doesn't exist or load the xarray nc file
+    #     nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{l_frame_size}p{path_sim_sigma_percent}{"_bsync2" if beat_sync else ""}.nc')
+    #     if not os.path.exists(nc_path):
+    #         init_grid = ssdm.LSD_SEARCH_GRID.copy()
+    #         init_grid.update(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm'])
+    #         lsd_score_da = xr.DataArray(np.nan, dims=init_grid.keys(), coords=init_grid, name=str(self.tid))
+    #         lsd_score_da.to_netcdf(nc_path)
+    #     else:
+    #         with xr.open_dataarray(nc_path) as lsd_score_da:
+    #             lsd_score_da.load()
+        
+    #     # build lsd_configs from lsd_sel_dict
+    #     configs = []
+    #     config_midx = lsd_score_da.sel(**lsd_sel_dict).coords.to_index()
+    #     for option_values in config_midx:
+    #         exp_config = ssdm.DEFAULT_LSD_CONFIG.copy()
+    #         if beat_sync:
+    #             exp_config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
+    #         for opt in lsd_sel_dict:
+    #             if opt in ssdm.DEFAULT_LSD_CONFIG:
+    #                 exp_config[opt] = lsd_sel_dict[opt]
+    #         try:
+    #             for opt, value in zip(config_midx.names, option_values):
+    #                 if opt in ssdm.DEFAULT_LSD_CONFIG:
+    #                     exp_config[opt] = value
+    #         except TypeError:
+    #             pass
+    #         if exp_config not in configs:
+    #             configs.append(exp_config)
 
-        if recompute or tau.sel(**tau_sel_dict).isnull().any():
-            # build lsd_configs from tau_sel_dict
-            config_midx = tau.sel(**tau_sel_dict).coords.to_index()
-            meet_mat = ssdm.anno_to_meet(self.ref(mode=anno_mode, **anno_id_kwarg), self.ts())
-            meet_mat_diag = np.diag(meet_mat, k=1)
-            # print(config_midx)
-            for f_type, tau_type in config_midx:
-                if tau_type == 'rep':
-                    ssm = self.ssm(
-                        feature=f_type, 
-                        distance='cosine', 
-                        width=rec_width,
-                        recompute=recompute,
-                        add_noise=True,
-                        n_steps=3,
-                        delay=1
-                    )
-                    if eigen_block:
-                        combined_graph = ssdm.scluster.combine_ssms(ssm, meet_mat_diag)
-                        _, evecs = ssdm.scluster.embed_ssms(combined_graph, evec_smooth=ssdm.DEFAULT_LSD_CONFIG['evec_smooth'])
-                        first_evecs = evecs[:, :10]
-                        quant_block = ssdm.quantize(np.matmul(first_evecs, first_evecs.T), quant_bins=quant_bins)
-                        tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
-                            quant_block.flatten(), meet_mat.flatten()
-                        )[0]
-                    else:
-                        quant_sim = ssdm.quantize(ssm, quantize_method=quantize, quant_bins=quant_bins)
-                        tau.loc[dict(f_type=f_type, tau_type=tau_type)] = stats.kendalltau(
-                            quant_sim.flatten(), meet_mat.flatten()
-                        )[0]
+    #     # run through the configs list and populate / readout scores
+    #     for lsd_conf in configs:
+    #         # first build the index dict
+    #         coord_idx = lsd_conf.copy()
+    #         coord_idx.update(l_type=['lp', 'lr', 'lm'])
+    #         for k in coord_idx.copy():
+    #             if k not in lsd_score_da.coords:
+    #                 del coord_idx[k]
+            
+    #         exp_slice = lsd_score_da.sel(coord_idx)
+    #         if recompute or exp_slice.isnull().any():
+    #             # Only compute if value doesn't exist:
+    #             # print('recomputing l score')
+    #             proposal = self.lsd(lsd_conf, print_config=False, beat_sync=beat_sync, path_sim_sigma_percentile=path_sim_sigma_percent, recompute=False)
+    #             annotation = self.ref(anno_id=anno_id)
+    #             # search l_score from old places first?
+    #             l_score = ssdm.compute_l(proposal, annotation, l_frame_size=l_frame_size)
+    #             with xr.open_dataarray(nc_path) as lsd_score_da:
+    #                 lsd_score_da.load()
+    #             lsd_score_da.loc[coord_idx] = list(l_score)
+    #             try:
+    #                 lsd_score_da.to_netcdf(nc_path)
+    #             except PermissionError:
+    #                 os.system(f'rm {nc_path}')
+    #                 # Sometimes saving can fail due to multiple workers
+    #                 pass
+    #     # return lsd_score_da
+    #     out = lsd_score_da.sel(**lsd_sel_dict)
+    #     try:
+    #         out = out.sel(anno_id=anno_id)
+    #     except:
+    #         pass
+    #     return out
 
-                else: #path_sim AUC
-                    path_sim = self.path_sim(feature=f_type, 
-                                             distance='sqeuclidean',
-                                             recompute=recompute,
-                                             add_noise=True,
-                                             n_steps=3,
-                                             delay=1)
-                    
-                    tau.loc[dict(f_type=f_type, tau_type=tau_type)] = roc_auc_score(self.path_ref(**anno_id_kwarg), path_sim)        
-                tau.to_netcdf(record_path)
-        try:
-            return tau.sel(**anno_id_kwarg, **tau_sel_dict)
-        except KeyError:
-            return tau.sel(**tau_sel_dict)
+
+    # def lsd_score_flat(self, anno_id=0, beat_sync=False, recompute=False) -> xr.DataArray:
+    #     # save 
+    #     if anno_id != 0:
+    #         anno_flag = f'a{anno_id}'
+    #     else:
+    #         anno_flag = ''
+    #     nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{anno_flag}flat{"_bsync2" if beat_sync else ""}.nc')
+
+    #     if not os.path.exists(nc_path):
+    #         # build da to store
+    #         score_dims = dict(
+    #             rep_ftype=ssdm.AVAL_FEAT_TYPES,
+    #             loc_ftype=ssdm.AVAL_FEAT_TYPES,
+    #             m_type=['p', 'r', 'f'],
+    #             metric=['hr', 'hr3', 'pfc', 'nce'],
+    #             layer=[x+1 for x in range(16)],
+    #         )
+
+    #         score_da = xr.DataArray(
+    #             data=np.nan,  # Initialize the data with NaNs
+    #             coords=score_dims,
+    #             dims=list(score_dims.keys()),
+    #             name=str(self.tid)
+    #         )
+
+    #         try:
+    #             score_da.to_netcdf(nc_path)
+    #         except PermissionError:
+    #             os.system(f'rm {nc_path}')
+    #         recompute = True
+    #     else:
+    #         with xr.open_dataarray(nc_path) as score_da:
+    #             score_da.load()
+
+    #     if recompute:
+    #         # build all the lsd configs:
+    #         for rep_ftype in ssdm.AVAL_FEAT_TYPES:
+    #             for loc_ftype in ssdm.AVAL_FEAT_TYPES:
+    #                 feature_pair = dict(rep_ftype=rep_ftype, loc_ftype=loc_ftype)
+    #                 lsd_config = ssdm.DEFAULT_LSD_CONFIG.copy()
+    #                 if beat_sync:
+    #                     lsd_config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
+    #                 lsd_config.update(feature_pair)
+    #                 score_da.loc[feature_pair] = ssdm.compute_flat(self.lsd(lsd_config, beat_sync=beat_sync, recompute=False), self.ref(mode='normal', anno_id=anno_id))
+            
+    #         try:
+    #             score_da.to_netcdf(nc_path)
+    #         except PermissionError:
+    #             os.system(f'rm {nc_path}')
+
+    #     return score_da
 
 
     def tau_both(
@@ -672,7 +650,8 @@ class Track(object):
 
         np.save(save_path, first_evecs)
         return first_evecs
-      
+
+
     def num_dist_segs(self):
         num_seg_per_anno = []
         for aid in range(self.num_annos()):
@@ -785,7 +764,7 @@ class DS(Dataset):
         elif self.mode == 'both':
             first_evecs = self.track_obj(tid=tid).embedded_rec_mat(
                 feat_combo=dict(rep_ftype=feats[0], loc_ftype=feats[1]), 
-                lap_norm=self.lap_norm, 
+                lap_norm=self.lap_norm, beat_sync=self.beat_sync,
                 recompute=False
             )
             data = torch.tensor(first_evecs, dtype=torch.float32, device=self.device)

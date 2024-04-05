@@ -390,14 +390,14 @@ def get_lsd_scores(
             track = ds.track_obj(tid=tid)
             if track.num_annos() == 1:
                 if heir:
-                    score_per_track.append(track.lsd_score(beat_sync=beat_sync, **lsd_score_kwargs))
+                    score_per_track.append(track.new_lsd_score(beat_sync=beat_sync, **lsd_score_kwargs))
                 else:
                     score_per_track.append(track.lsd_score_flat(beat_sync=beat_sync, **lsd_score_kwargs))
             else:
                 score_per_anno = []
                 for anno_id in range(track.num_annos()):
                     if heir:
-                        score_per_anno.append(track.lsd_score(anno_id=anno_id, beat_sync=beat_sync, **lsd_score_kwargs))
+                        score_per_anno.append(track.new_lsd_score(anno_id=anno_id, beat_sync=beat_sync, **lsd_score_kwargs))
                     else:
                         score_per_anno.append(track.lsd_score_flat(anno_id=anno_id, beat_sync=beat_sync, **lsd_score_kwargs))
                 # print(score_per_anno)
@@ -409,7 +409,8 @@ def get_lsd_scores(
             out.to_netcdf(save_path)
         except:
             os.system(f'rm {save_path}')
-            return out.sortby('tid')
+            out.to_netcdf(save_path)
+
     return xr.load_dataarray(save_path).sortby('tid')
 
 
@@ -587,14 +588,16 @@ def select_samples_using_tau_percentile(ds, low=25, high=75):
     return {**neg_samples, **pos_samples}
 
 
-def select_samples_using_outstanding_l_score(ds, neg_eps_pct=50, l_type='lr'):
-    scores_full = ssdm.get_lsd_scores(type(ds)(split='train', infer=True), heir=True).sel(l_type=l_type)
+def select_samples_using_outstanding_l_score(ds, neg_eps_pct=50, m_type='f'):
+    scores_full = ssdm.get_lsd_scores(type(ds)(split='train', infer=True), heir=True).sel(m_type=m_type).max(dim='layer')
     best_on_avg_rep_feat = scores_full.mean(dim='tid').max(dim='loc_ftype').idxmax(dim='rep_ftype').item()
     best_on_avg_loc_feat = scores_full.mean(dim='tid').max(dim='rep_ftype').idxmax(dim='loc_ftype').item()
-    try:
-        ds_score = ssdm.get_lsd_scores(type(ds)(split=ds.split, infer=True), heir=True).sel(l_type=l_type)
-    except:
-        ds_score = ssdm.get_lsd_scores(type(ds)(tids=ds.tids, infer=True), heir=True).sel(l_type=l_type)
+
+    if ds.split and ds.split.find('custom') == -1:
+        ds_score = ssdm.get_lsd_scores(type(ds)(split=ds.split, infer=True), heir=True).sel(m_type=m_type)
+    else:
+        ds_score = ssdm.get_lsd_scores(type(ds)(tids=ds.tids, infer=True), heir=True).sel(m_type=m_type)
+
     diff_from_boa = ds_score - ds_score.sel(rep_ftype=best_on_avg_rep_feat, loc_ftype=best_on_avg_loc_feat)
 
     # Different ds.modes requires different treatment

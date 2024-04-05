@@ -125,7 +125,7 @@ def get_taus(
 
 
 class NewDS(base.DS):
-    def __init__(self, mode='rep', tids=None):
+    def __init__(self, mode='rep', tids=None, **kwargs):
         self.name = 'jsd'
         if not tids:
             self.tids=get_ids(out_type='list')
@@ -134,7 +134,7 @@ class NewDS(base.DS):
             self.tids=tids
             self.split=f'custom{len(tids)}'
         
-        super().__init__(mode=mode, infer=True)
+        super().__init__(mode=mode, infer=True, **kwargs)
 
     def track_obj(self, **track_kwargs):
         return Track(**track_kwargs)

@@ -82,65 +82,6 @@ def get_taus(
     return xr.concat(tau_per_track, pd.Index(tids, name='tid')).rename()
 
 
-class DS(Dataset):
-    """ 
-    mode='rep', # {'rep', 'loc'}
-    """
-    def __init__(self, mode='rep'):
-        if mode not in ('rep', 'loc'):
-            raise AssertionError('bad dataset mode, can only be rep or loc')
-        self.mode = mode
-        self.tids = get_ids()
-        if torch.cuda.is_available():
-            self.device = torch.device("cuda")
-        else:
-            self.device = torch.device("cpu")
-        self.samples = list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES))
-        self.samples.sort()
-
-    def track_obj(self, **track_kwargs):
-        return Track(**track_kwargs)
-
-    def __len__(self):
-        return len(self.samples)
-    
-    def __repr__(self):
-        return 'btl' + self.mode
-    
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-
-        tid, feat = self.samples[idx]
-        track = Track(tid)
-
-        config = ssdm.DEFAULT_LSD_CONFIG.copy()
-
-        if self.mode == 'rep':
-            rep_ssm = track.ssm(feature=feat, 
-                                distance=config['rep_metric'],
-                                width=config['rec_width'],
-                                full=config['rec_full'],
-                                **ssdm.REP_FEAT_CONFIG[feat]
-                                )
-
-            return {'data': torch.tensor(rep_ssm[None, None, :], dtype=torch.float32, device=self.device),
-                    'info': (tid, feat, self.mode),
-                    }
-        
-        elif self.mode == 'loc':
-            path_sim = track.path_sim(feature=feat, 
-                                      distance=config['loc_metric'],
-                                      **ssdm.LOC_FEAT_CONFIG[feat])
-
-            return {'data': torch.tensor(path_sim[None, None, :], dtype=torch.float32, device=self.device),
-                    'info': (tid, feat, self.mode),
-                    }
-       
-        else:
-            assert KeyError
-
-
 class NewDS(base.DS):
     def __init__(self, mode='rep', tids=None):
         self.name = 'btl'

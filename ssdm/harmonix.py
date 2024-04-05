@@ -31,9 +31,9 @@ class Track(base.Track):
         super().__init__(tid=tid, feature_dir=feature_dir, output_dir=output_dir, dataset_dir=dataset_dir)
         self.title = self.tid + '_' + HMX_TITLE_DICT[self.tid]
 
-    def audio(self, **kwargs):
+    def audio(self, **kwargs): 
         print('Audio not Available')
-        return None
+        raise NotImplementedError
 
 
 def get_ids(
@@ -60,125 +60,6 @@ def get_ids(
     else:
         print('invalid out_type')
         return None
-
-
-# class DS(Dataset):
-#     """ 
-#     mode='rep', # {'rep', 'loc', 'both'}
-#     """
-#     def __init__(self, mode='rep', infer=True, tids=None, split=None, transform=None, sample_select_fn=ssdm.utils.select_samples_using_outstanding_l_score):
-#         if mode not in ('rep', 'loc', 'both'):
-#             raise AssertionError('bad dataset mode, can only be rep or loc both')
-#         self.mode = mode
-
-#         # Save the following
-#         if tids is None:
-#             self.tids = get_ids(split=split, out_type='list')
-#             self.split = split
-#         else:
-#             self.tids = tids
-#             self.split = f'custom{len(tids)}'
-#         # Save the above
-            
-#         if torch.cuda.is_available():
-#             self.device = torch.device("cuda")
-#         else:
-#             self.device = torch.device("cpu")
-#         self.infer=infer
-
-#         # sample building
-#         if self.infer:
-#             if self.mode == 'both':
-#                 self.samples = list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES))
-#             else:
-#                 self.samples = list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES))
-#         else:
-#             self.labels = sample_select_fn(self)
-#             self.samples = list(self.labels.keys())
-#         self.samples.sort()
-#         self.transform=transform
-
-
-#     def track_obj(self, **track_kwargs):
-#         return Track(**track_kwargs)
-
-
-#     def __len__(self):
-#         return len(self.samples)
-
-
-#     def __repr__(self):
-#         if self.split:
-#             return f'hmx{self.mode}{self.split}'
-#         else:
-#             return f'hmx{self.mode}{len(self.tids)}'
-
-
-#     def __getitem__(self, idx):
-#         if torch.is_tensor(idx):
-#             idx = idx.tolist()
-
-#         tid, *feats = self.samples[idx]
-#         track = Track(tid)
-
-#         config = ssdm.DEFAULT_LSD_CONFIG.copy()
-
-#         s_info = (tid, *feats, self.mode)
-
-#         if self.mode == 'rep':
-#             data = track.ssm(feature=feats[0], 
-#                                 distance=config['rep_metric'],
-#                                 width=config['rec_width'],
-#                                 full=config['rec_full'],
-#                                 **ssdm.REP_FEAT_CONFIG[feats[0]]
-#                                 )
-#             data = torch.tensor(data, dtype=torch.float32, device=self.device)
-    
-#         elif self.mode == 'loc':
-#             data = track.path_sim(feature=feats[0], 
-#                                   distance=config['loc_metric'],
-#                                   **ssdm.LOC_FEAT_CONFIG[feats[0]])
-#             data = torch.tensor(data, dtype=torch.float32, device=self.device)
-
-#         elif self.mode == 'both':
-#             save_path = os.path.join(self.track_obj().output_dir, 'evecs/'+'_'.join(s_info)+'.pt')
-#             # Try to see if it's already calculated. if so load:
-#             try:
-#                 first_evecs = torch.load(save_path, map_location=self.device) # load
-#             # else: calculate
-#             except:
-#                 # print(save_path)
-#                 lsd_config = dict(rep_ftype=feats[0], loc_ftype=feats[1])
-#                 rec_mat = torch.tensor(track.combined_rec_mat(config_update=lsd_config), dtype=torch.float32, device=self.device)
-#                 # compute normalized laplacian
-#                 with torch.no_grad():
-#                     rec_mat += 1e-30 # make inverses nice...
-#                     # Compute the degree matrix
-#                     degree_matrix = torch.diag(torch.sum(rec_mat, dim=1))
-#                     unnormalized_laplacian = degree_matrix - rec_mat
-#                     # Compute the normalized Laplacian matrix
-#                     degree_inv = torch.inverse(degree_matrix)
-#                     normalized_laplacian = degree_inv @ unnormalized_laplacian
-
-#                     evals, evecs = torch.linalg.eig(normalized_laplacian)
-#                     first_evecs = evecs.real[:, :20]
-#                     torch.save(first_evecs, save_path)
-#             data = first_evecs.to(torch.float32).to(self.device)
-#         else:
-#             assert KeyError('bad mode: can onpy be rep or loc or both')
-#         best_nlvl = min(track.num_dist_segs() - 1, 10)
-
-#         datum = {'data': data[None, None, :],
-#                  'info': s_info,
-#                  'uniq_segs': torch.tensor([best_nlvl], dtype=torch.long, device=self.device)}
-
-#         if not self.infer:
-#             datum['label'] = torch.tensor([self.labels[self.samples[idx]]], dtype=torch.float32, device=self.device)[None, :]
-        
-#         if self.transform:
-#             datum = self.transform(datum)
-        
-#         return datum   
 
 class NewDS(base.DS):
     def __init__(self, mode='rep', infer=False, 

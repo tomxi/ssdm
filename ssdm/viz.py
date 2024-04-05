@@ -29,6 +29,8 @@ def anno_meet_mats(track, mode='expand'):
 
 def lsd_meet_mat(track, config=dict(), beat_sync=False, layer_to_show=None):
     lsd_config = ssdm.DEFAULT_LSD_CONFIG.copy()
+    if beat_sync:
+        lsd_config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
     lsd_config.update(config)
     lsd_seg = track.lsd(lsd_config, beat_sync=beat_sync)
     lsd_meet_mat = ssdm.anno_to_meet(lsd_seg, track.ts(), num_layers=layer_to_show)

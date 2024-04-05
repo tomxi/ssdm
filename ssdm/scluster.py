@@ -50,6 +50,7 @@ def combine_ssms(rep_ssm, loc_path_sim, rec_smooth=7):
     deg_path = np.sum(R_path, axis=1)
     deg_rec = np.sum(Rf, axis=1)
 
+
     mu = deg_path.dot(deg_path + deg_rec) / np.sum((deg_path + deg_rec)**2)
 
     aff_mat = mu * Rf + (1 - mu) * R_path
@@ -213,6 +214,8 @@ def do_segmentation_ssm(rep_ssm, loc_path_sim, config, in_bound_idxs=None):
         est_idxs = []
         est_labels = []
         for k in range(1, config["num_layers"] + 1):
+            if k >= embedding.shape[0]:
+                k = embedding.shape[0] - 1
             est_idx, est_label = cluster(embedding, Cnorm, k)
             est_idx, est_label = remove_empty_segments(est_idx, est_label)
             est_idxs.append(est_idx)

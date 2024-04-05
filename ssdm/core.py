@@ -14,16 +14,29 @@ DEFAULT_LSD_CONFIG = {
     'loc_metric': 'sqeuclidean',
     'bandwidth': 'med_k_scalar',
     'hier': True,
-    'num_layers': 10
+    'num_layers': 10,
+    'add_noise': True, 
+    'n_steps': 3, 
+    'delay': 2,
+}
+
+BEAT_SYNC_CONFIG_PATCH = {
+    "evec_smooth": 8,
+    "rec_smooth" : 8,
+    "rec_width"  : 2, 
+    "num_layers" : 16,
+    'add_noise': True, 
+    'n_steps': 3, 
+    'delay': 1,
 }
 
 REP_FEAT_CONFIG = {
-    'chroma': {'add_noise': True, 'n_steps': 6, 'delay': 2},
-    'crema': {'add_noise': True, 'n_steps': 6, 'delay': 2},
-    'tempogram': {'add_noise': True, 'n_steps': 6, 'delay': 2},
-    'mfcc': {'add_noise': True, 'n_steps': 6, 'delay': 2},
-    'yamnet': {'add_noise': True, 'n_steps': 6, 'delay': 2},
-    'openl3': {'add_noise': True, 'n_steps': 6, 'delay': 2},
+    'chroma': {'add_noise': True, 'n_steps': 3, 'delay': 1},
+    'crema': {'add_noise': True, 'n_steps': 3, 'delay': 1},
+    'tempogram': {'add_noise': True, 'n_steps': 3, 'delay': 1},
+    'mfcc': {'add_noise': True, 'n_steps': 3, 'delay': 1},
+    'yamnet': {'add_noise': True, 'n_steps': 3, 'delay': 1},
+    'openl3': {'add_noise': True, 'n_steps': 3, 'delay': 1},
 }
 
 LOC_FEAT_CONFIG = {

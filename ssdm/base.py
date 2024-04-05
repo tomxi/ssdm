@@ -112,18 +112,19 @@ class Track(object):
         except KeyError:
             fmat = npz['pitch']
 
-        if use_track_ts:
+        if not beat_sync and use_track_ts:
             fmat = fmat[:, :len(self.ts())]
 
         if beat_sync:
-            assert self.ts()[0] == 0
-            beat_frames = librosa.time_to_frames(self.ts(mode='beat'), sr=1 / self.ts(mode='frame')[1], hop_length=1)
+            beat_frames = librosa.time_to_frames(self.ts(mode='beat', pad=True), sr=1 / self.ts(mode='frame')[1], hop_length=1)
             fmat = librosa.util.sync(fmat, beat_frames, aggregate=np.mean)
+            if use_track_ts:
+                fmat = fmat[:, :len(self.ts('beat'))]
 
         return delay_embed(fmat, **delay_emb_config)
 
 
-    def ts(self, mode='frame') -> np.array: # mode can also be beat
+    def ts(self, mode='frame', pad=False) -> np.array: # mode can also be beat
         if self._track_ts is None:
             num_frames = np.asarray(
                 [self.representation(feat, use_track_ts=False, beat_sync=False).shape[-1] for feat in ssdm.AVAL_FEAT_TYPES]
@@ -136,7 +137,12 @@ class Track(object):
         if mode == 'frame':
             return self._track_ts
         elif mode == 'beat':
-            return self._madmom_beats()
+            beats = self._madmom_beats()
+            beats = np.array([b for b in beats if b <= self.ts()[-1]])
+            if pad:
+                return beats
+            else:
+                return beats[:-1]
 
 
     def ref(self, mode='expand', ts_mode='frame', **anno_id_kwarg):
@@ -186,7 +192,7 @@ class Track(object):
         # save
         # npy path
         ssm_info_str = f'n{feature}_{distance}{f"_fw{width}"}_s'
-        feat_info_str = f's{n_steps}xd{delay}{"_n" if add_noise else ""}{"_sync" if beat_sync else ""}'
+        feat_info_str = f's{n_steps}xd{delay}{"_n" if add_noise else ""}{"_bsync" if beat_sync else ""}'
         ssm_path = os.path.join(
             self.output_dir, 
             f'ssms/{self.tid}_{ssm_info_str}_{feat_info_str}.npy'
@@ -208,7 +214,7 @@ class Track(object):
             # prepare feature matrix
             feat_mat = self.representation(feature, beat_sync=beat_sync, add_noise=add_noise, n_steps=n_steps, delay=delay)
             # fix width with short tracks
-            feat_max_width = ((feat_mat.shape[-1] - 1) // 2) - 5
+            feat_max_width = ((feat_mat.shape[-1] - 1) // 2) - 2
             if width >= feat_max_width:
                 width=feat_max_width    
             # sometimes sym=True will give an error related to empty rows or something...
@@ -230,7 +236,7 @@ class Track(object):
     
     def path_sim(self, feature='mfcc', distance='sqeuclidean', add_noise=True, n_steps=6, delay=2, sigma_percentile=95, recompute=False, beat_sync=False): 
         path_sim_info_str = f'pathsim_{feature}_{distance}'
-        feat_info_str = f'ns{n_steps}xd{delay}xap{sigma_percentile}{"_n" if add_noise else ""}{"_sync" if beat_sync else ""}'
+        feat_info_str = f'ns{n_steps}xd{delay}xap{sigma_percentile}{"_n" if add_noise else ""}{"_bsync" if beat_sync else ""}'
         pathsim_path = os.path.join(
             self.output_dir, 
             f'ssms/{self.tid}_{path_sim_info_str}_{feat_info_str}.npy'
@@ -266,13 +272,14 @@ class Track(object):
 
     def combined_rec_mat(
         self, 
+        config_update: dict = dict(),
         recompute: bool = False,
         beat_sync: bool = False,
-        config_update: dict = dict(),
     ):
         config = ssdm.DEFAULT_LSD_CONFIG.copy()
+        if beat_sync:
+            config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
         config.update(config_update)
-        # record_path = os.path.join(self.output_dir, f'lsd/{self.tid}_{config["rep_ftype"]}_{config["loc_ftype"]}_{path_sim_sigma_percentile}.npy')
         # calculated combined rec mat
         rep_ssm = self.ssm(feature=config['rep_ftype'], 
                             distance=config['rep_metric'],
@@ -280,12 +287,19 @@ class Track(object):
                             full=config['rec_full'],
                             recompute=recompute,
                             beat_sync=beat_sync,
-                            **ssdm.REP_FEAT_CONFIG[config['rep_ftype']]
+                            add_noise=config['add_noise'],
+                            n_steps = config['n_steps'],
+                            delay=config['delay']
                             )
         path_sim = self.path_sim(feature=config['loc_ftype'], 
                                  distance=config['loc_metric'],
                                  beat_sync=beat_sync,
-                                 **ssdm.LOC_FEAT_CONFIG[config['loc_ftype']])
+                                 add_noise=config['add_noise'],
+                                 n_steps = config['n_steps'],
+                                 delay=config['delay'])
+        
+        if path_sim.shape[0] != rep_ssm.shape[0] - 1:
+            path_sim = path_sim[:rep_ssm.shape[0] - 1]
         return scluster.combine_ssms(rep_ssm, path_sim, rec_smooth=config['rec_smooth'])
 
     
@@ -298,17 +312,17 @@ class Track(object):
         path_sim_sigma_percentile: float = 95,
     ) -> jams.Annotation:
         # load lsd jams and file/log handeling...
-
         config = ssdm.DEFAULT_LSD_CONFIG.copy()
+        if beat_sync:
+            config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
         config.update(config_update)
 
         if print_config:
             print(config)
 
         record_path = os.path.join(self.output_dir, 
-                                f'lsd/{self.tid}_{config["rep_ftype"]}_{config["loc_metric"]}_{config["rec_width"]}_{path_sim_sigma_percentile}{"_sync" if beat_sync else ""}.jams'
+                                f'lsd/{self.tid}_{config["rep_ftype"]}_{config["loc_metric"]}_{config["rec_width"]}_{path_sim_sigma_percentile}{"_bsync" if beat_sync else ""}.jams'
                                 )
-        
         if not os.path.exists(record_path):
             # create and save jams file
             print('creating new jams file')
@@ -367,7 +381,7 @@ class Track(object):
         anno_id: int = 0,
     ) -> xr.DataArray:
         #initialize file if doesn't exist or load the xarray nc file
-        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{l_frame_size}p{path_sim_sigma_percent}{"_sync" if beat_sync else ""}.nc')
+        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{l_frame_size}p{path_sim_sigma_percent}{"_bsync2" if beat_sync else ""}.nc')
         if not os.path.exists(nc_path):
             init_grid = ssdm.LSD_SEARCH_GRID.copy()
             init_grid.update(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm'])
@@ -382,6 +396,8 @@ class Track(object):
         config_midx = lsd_score_da.sel(**lsd_sel_dict).coords.to_index()
         for option_values in config_midx:
             exp_config = ssdm.DEFAULT_LSD_CONFIG.copy()
+            if beat_sync:
+                exp_config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
             for opt in lsd_sel_dict:
                 if opt in ssdm.DEFAULT_LSD_CONFIG:
                     exp_config[opt] = lsd_sel_dict[opt]
@@ -408,14 +424,19 @@ class Track(object):
                 # Only compute if value doesn't exist:
                 ###
                 # print('recomputing l score')
-                proposal = self.lsd(lsd_conf, print_config=False, beat_sync=beat_sync, path_sim_sigma_percentile=path_sim_sigma_percent, recompute=recompute)
+                proposal = self.lsd(lsd_conf, print_config=False, beat_sync=beat_sync, path_sim_sigma_percentile=path_sim_sigma_percent, recompute=False)
                 annotation = self.ref(anno_id=anno_id)
                 # search l_score from old places first?
                 l_score = ssdm.compute_l(proposal, annotation, l_frame_size=l_frame_size)
                 with xr.open_dataarray(nc_path) as lsd_score_da:
                     lsd_score_da.load()
                 lsd_score_da.loc[coord_idx] = list(l_score)
-                lsd_score_da.to_netcdf(nc_path)
+                try:
+                    lsd_score_da.to_netcdf(nc_path)
+                except PermissionError:
+                    os.system(f'rm {nc_path}')
+                    # Sometimes saving can fail due to multiple workers
+                    pass
         # return lsd_score_da
         out = lsd_score_da.sel(**lsd_sel_dict)
         try:
@@ -431,7 +452,7 @@ class Track(object):
             anno_flag = f'a{anno_id}'
         else:
             anno_flag = ''
-        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{anno_flag}flat{"_sync" if beat_sync else ""}.nc')
+        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{anno_flag}flat{"_bsync2" if beat_sync else ""}.nc')
 
         if not os.path.exists(nc_path):
             # build da to store
@@ -440,7 +461,7 @@ class Track(object):
                 loc_ftype=ssdm.AVAL_FEAT_TYPES,
                 m_type=['p', 'r', 'f'],
                 metric=['hr', 'hr3', 'pfc', 'nce'],
-                layer=[x+1 for x in range(10)],
+                layer=[x+1 for x in range(16)],
             )
 
             score_da = xr.DataArray(
@@ -450,7 +471,10 @@ class Track(object):
                 name=str(self.tid)
             )
 
-            score_da.to_netcdf(nc_path)
+            try:
+                score_da.to_netcdf(nc_path)
+            except PermissionError:
+                os.system(f'rm {nc_path}')
             recompute = True
         else:
             with xr.open_dataarray(nc_path) as score_da:
@@ -462,10 +486,15 @@ class Track(object):
                 for loc_ftype in ssdm.AVAL_FEAT_TYPES:
                     feature_pair = dict(rep_ftype=rep_ftype, loc_ftype=loc_ftype)
                     lsd_config = ssdm.DEFAULT_LSD_CONFIG.copy()
+                    if beat_sync:
+                        lsd_config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
                     lsd_config.update(feature_pair)
-                    score_da.loc[feature_pair] = ssdm.compute_flat(self.lsd(lsd_config, beat_sync=beat_sync), self.ref(mode='normal', anno_id=anno_id))
+                    score_da.loc[feature_pair] = ssdm.compute_flat(self.lsd(lsd_config, beat_sync=beat_sync, recompute=False), self.ref(mode='normal', anno_id=anno_id))
             
-            score_da.to_netcdf(nc_path)
+            try:
+                score_da.to_netcdf(nc_path)
+            except PermissionError:
+                os.system(f'rm {nc_path}')
 
         return score_da
 
@@ -513,7 +542,9 @@ class Track(object):
                         distance='cosine', 
                         width=rec_width,
                         recompute=recompute,
-                        **ssdm.REP_FEAT_CONFIG[f_type]
+                        add_noise=True,
+                        n_steps=3,
+                        delay=1
                     )
                     if eigen_block:
                         combined_graph = ssdm.scluster.combine_ssms(ssm, meet_mat_diag)
@@ -533,7 +564,9 @@ class Track(object):
                     path_sim = self.path_sim(feature=f_type, 
                                              distance='sqeuclidean',
                                              recompute=recompute,
-                                             **ssdm.LOC_FEAT_CONFIG[f_type])
+                                             add_noise=True,
+                                             n_steps=3,
+                                             delay=1)
                     
                     tau.loc[dict(f_type=f_type, tau_type=tau_type)] = roc_auc_score(self.path_ref(**anno_id_kwarg), path_sim)        
                 tau.to_netcdf(record_path)
@@ -556,7 +589,7 @@ class Track(object):
     ) -> xr.DataArray:
         # test if record_path exist, if no, set recompute to true.
         quantize_suffix = f'_{quantize}{quant_bins}' if quantize is not None else ''
-        beat_suffix = "_sync" if beat_sync else ""
+        beat_suffix = "_bsync2" if beat_sync else ""
         record_path = os.path.join(self.output_dir, f'taus/{self.tid}_{anno_mode}{quantize_suffix}{lap_norm}{beat_suffix}.nc')
         
         if not recompute:
@@ -579,13 +612,22 @@ class Track(object):
             # Compute the combined rec mat
             feat_combo = dict(rep_ftype=rep_ftype, loc_ftype=loc_ftype)
             # Combined rec -> evecs function function (with caching, and normalization param lap_norm)
-            evecs = self.embedded_rec_mat(feat_combo=feat_combo, beat_sync=beat_sync, lap_norm=lap_norm, recompute=False)
+            evecs = self.embedded_rec_mat(feat_combo=feat_combo, beat_sync=beat_sync, lap_norm=lap_norm, recompute=recompute)
+            # print(evecs.shape, beat_sync)
             # Calculate the LRA of the normalized laplacian, and use that to compute corr with anno_meet_mat
             lap_low_rank_approx = evecs[:, :quant_bins] @ evecs[:, :quant_bins].T
+            
             if quantize:
                 lap_low_rank_approx = ssdm.quantize(lap_low_rank_approx, quant_bins=quant_bins)
             
-            meet_mat = ssdm.anno_to_meet(self.ref(mode=anno_mode, anno_id=anno_id), self.ts(mode='beat'))
+            if beat_sync:
+                ts_mode = 'beat'
+            else:
+                ts_mode = 'frame'
+            meet_mat = ssdm.anno_to_meet(self.ref(mode=anno_mode, anno_id=anno_id), self.ts(mode=ts_mode))
+            least_beats = min(lap_low_rank_approx.shape[0], meet_mat.shape[0])
+            lap_low_rank_approx = lap_low_rank_approx[:least_beats, :least_beats]
+            meet_mat = meet_mat[:least_beats, :least_beats]
             tau.loc[anno_id, rep_ftype, loc_ftype] = stats.kendalltau(
                 lap_low_rank_approx.flatten(), meet_mat.flatten()
                 )[0]
@@ -597,8 +639,8 @@ class Track(object):
 
 
     def embedded_rec_mat(self, feat_combo=dict(), lap_norm='random_walk', beat_sync=False, recompute=False):
-        beat_suffix = {"_sync" if beat_sync else ""}
-        save_path = os.path.join(self.output_dir, f'evecs/{self.tid}_rep_{feat_combo["rep_ftype"]}_loc_{feat_combo["loc_ftype"]}_{lap_norm}{beat_suffix}.npy')
+        beat_suffix = {"_bsync" if beat_sync else ""}
+        save_path = os.path.join(self.output_dir, f'evecs/{self.tid}_rep{feat_combo["rep_ftype"]}_loc{feat_combo["loc_ftype"]}_{lap_norm}{beat_suffix}.npy')
         if not recompute:
             try:
                 return np.load(save_path)
@@ -672,6 +714,7 @@ class DS(Dataset):
         infer=True,
         transform=None,
         lap_norm = 'random_walk',
+        beat_sync = False,
         sample_select_fn=None
     ):
         if torch.cuda.is_available():
@@ -685,6 +728,7 @@ class DS(Dataset):
         self.infer = infer
         self.sample_select_fn = sample_select_fn
         self.lap_norm = lap_norm
+        self.beat_sync = beat_sync
 
         # sample building
         if self.infer:
@@ -713,6 +757,8 @@ class DS(Dataset):
             idx = idx.tolist()
         tid, *feats = self.samples[idx]
         config = ssdm.DEFAULT_LSD_CONFIG.copy()
+        if self.beat_sync:
+            config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
         s_info = (tid, *feats, self.mode)
         if self.mode == 'rep':
             track = self.track_obj(tid=tid)
@@ -721,7 +767,9 @@ class DS(Dataset):
                 distance=config['rep_metric'],
                 width=config['rec_width'],
                 full=config['rec_full'],
-                **ssdm.REP_FEAT_CONFIG[feats[0]]
+                add_noise=config['add_noise'],
+                n_steps=config['n_steps'],
+                delay=config['delay']
             )
             data = torch.tensor(data, dtype=torch.float32, device=self.device)
     
@@ -729,7 +777,9 @@ class DS(Dataset):
             track = self.track_obj(tid=tid)
             data = track.path_sim(feature=feats[0], 
                                   distance=config['loc_metric'],
-                                  **ssdm.LOC_FEAT_CONFIG[feats[0]])
+                                  add_noise=config['add_noise'],
+                                  n_steps = config['n_steps'],
+                                  delay = config['delay'])
             data = torch.tensor(data, dtype=torch.float32, device=self.device)
 
         elif self.mode == 'both':

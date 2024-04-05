@@ -150,7 +150,7 @@ def follow_along(track):
                 quant_method=qm_sel,
                 quant_bins=qb_slider)
     def update_ssm(feature, tau_width, quant_method, quant_bins):
-        ssm = track.ssm(feature=feature, width=tau_width, **ssdm.REP_FEAT_CONFIG[feature])
+        ssm = track.ssm(feature=feature, width=tau_width, add_noise=True, n_steps=3, delay=1)
         quant_ssm = ssdm.quantize(ssm, quantize_method=quant_method, quant_bins=quant_bins)
         return hv.Image((track.ts(), track.ts(), quant_ssm)).opts(*options)
     

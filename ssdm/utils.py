@@ -107,7 +107,7 @@ def compute_flat(
     results_dim = dict(
         m_type=['p', 'r', 'f'],
         metric=['hr', 'hr3', 'pfc', 'nce'],
-        layer=[x+1 for x in range(10)]
+        layer=[x+1 for x in range(16)]
     )
     results = xr.DataArray(data=None, coords=results_dim, dims=list(results_dim.keys()))
     for p_layer in range(num_prop_layers):
@@ -333,7 +333,9 @@ def run_lsd(
                         full=bool(config['rec_full']),
                         recompute=recompute_ssm,
                         beat_sync=beat_sync,
-                        **ssdm.REP_FEAT_CONFIG[config['rep_ftype']]
+                        add_noise=config['add_noise'],
+                        n_steps = config['n_steps'],
+                        delay = config['delay']
                         )
     
     if config['rec_full']:
@@ -345,13 +347,15 @@ def run_lsd(
                               sigma_percentile=loc_sigma,
                               recompute=True,
                               beat_sync=beat_sync,
-                              **ssdm.LOC_FEAT_CONFIG[config['loc_ftype']]
-                             )
+                              add_noise=config['add_noise'],
+                              n_steps = config['n_steps'],
+                              delay = config['delay'])
 
     # Spectral Clustering with Config
     est_bdry_idxs, est_sgmt_labels = sc.do_segmentation_ssm(rep_ssm, path_sim, config)
+    # print(est_bdry_idxs, est_sgmt_labels)
     if beat_sync:
-        ts = track.ts(mode='beat')
+        ts = track.ts(mode='beat', pad=True)
     else:
         ts = track.ts(mode='frame')
     est_bdry_itvls = [sc.times_to_intervals(ts[lvl]) for lvl in est_bdry_idxs]
@@ -363,14 +367,16 @@ def get_lsd_scores(
     shuffle=False,
     anno_col_fn=lambda stack: stack.max(dim='anno_id'), # activated when there are more than 1 annotation for a track
     heir=False,
+    beat_sync=False,
     recollect=False,
-    **lsd_kwargs,
+    **lsd_score_kwargs,
 ) -> xr.DataArray:
     ds_str = str(ds).replace('rep', '').replace('loc', '')
+    sync_str = "_bsync" if beat_sync else ""
     if heir:
-        save_path = f'/vast/qx244/{ds_str}_{len(ds)}_heir_lsd_scores.nc'
+        save_path = f'/vast/qx244/{ds_str}_{len(ds)}_heir{sync_str}_lsd_scores.nc'
     else:
-        save_path = f'/vast/qx244/{ds_str}_{len(ds)}_flat_lsd_scores.nc'
+        save_path = f'/vast/qx244/{ds_str}_{len(ds)}_flat{sync_str}_lsd_scores.nc'
 
     if 'custom' in str(ds):
         recollect = True
@@ -384,21 +390,26 @@ def get_lsd_scores(
             track = ds.track_obj(tid=tid)
             if track.num_annos() == 1:
                 if heir:
-                    score_per_track.append(track.lsd_score(**lsd_kwargs))
+                    score_per_track.append(track.lsd_score(beat_sync=beat_sync, **lsd_score_kwargs))
                 else:
-                    score_per_track.append(track.lsd_score_flat(**lsd_kwargs))
+                    score_per_track.append(track.lsd_score_flat(beat_sync=beat_sync, **lsd_score_kwargs))
             else:
                 score_per_anno = []
                 for anno_id in range(track.num_annos()):
                     if heir:
-                        score_per_anno.append(track.lsd_score(anno_id=anno_id, **lsd_kwargs))
+                        score_per_anno.append(track.lsd_score(anno_id=anno_id, beat_sync=beat_sync, **lsd_score_kwargs))
                     else:
-                        score_per_anno.append(track.lsd_score_flat(anno_id=anno_id, **lsd_kwargs))
+                        score_per_anno.append(track.lsd_score_flat(anno_id=anno_id, beat_sync=beat_sync, **lsd_score_kwargs))
                 # print(score_per_anno)
                 anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
                 score_per_track.append(anno_col_fn(anno_stack))
 
-        xr.concat(score_per_track, pd.Index(tids, name='tid'), coords='minimal').rename().to_netcdf(save_path)
+        out = xr.concat(score_per_track, pd.Index(tids, name='tid'), coords='minimal').rename()
+        try:
+            out.to_netcdf(save_path)
+        except:
+            os.system(f'rm {save_path}')
+            return out.sortby('tid')
     return xr.load_dataarray(save_path).sortby('tid')
 
 
@@ -407,6 +418,7 @@ def get_taus(
     shuffle=False,
     anno_col_fn=lambda stack: stack.max(dim='anno_id'), # activated when there are more than 1 annotation for a track
     recollect=False,
+    beat_sync=False,
     **tau_kwargs,
 ):
     if ds.infer:
@@ -414,10 +426,11 @@ def get_taus(
     else:
         infer_flag = 'train'
     ds_str = str(ds).replace('rep', '').replace('loc', '')
+    sync_str = "_bsync" if beat_sync else ""
     if ds.mode == 'both':
-        save_path = os.path.join(ds.track_obj().output_dir, f'{ds_str}_{infer_flag}_{ds.lap_norm}_blocky_taus.nc')
+        save_path = os.path.join(ds.track_obj().output_dir, f'{ds_str}_{infer_flag}_{ds.lap_norm}{sync_str}_blocky_taus.nc')
     else:
-        save_path = os.path.join(ds.track_obj().output_dir, f'{ds_str}_{infer_flag}_blocky_taus.nc')
+        save_path = os.path.join(ds.track_obj().output_dir, f'{ds_str}_{infer_flag}{sync_str}_blocky_taus.nc')
     
     try:
         out = xr.load_dataarray(save_path)
@@ -434,11 +447,12 @@ def get_taus(
             tau_per_anno = []
             for anno_id in range(track.num_annos()):
                 if ds.mode == 'both':
-                    tau_per_anno.append(track.tau_both(anno_id=anno_id, lap_norm=ds.lap_norm, **tau_kwargs))
+                    tau_per_anno.append(track.tau_both(anno_id=anno_id, lap_norm=ds.lap_norm, beat_sync=beat_sync, **tau_kwargs))
                 else:
-                    tau_per_anno.append(track.tau(anno_id=anno_id, **tau_kwargs))
+                    tau_per_anno.append(track.tau(anno_id=anno_id, beat_sync=beat_sync, **tau_kwargs))
             anno_stack = xr.concat(tau_per_anno, pd.Index(range(len(tau_per_anno)), name='anno_id'))
             tau_per_track.append(anno_col_fn(anno_stack))
+
         out = xr.concat(tau_per_track, pd.Index(tids, name='tid'), coords='minimal')
         out.rename().sortby('tid')
         try: 
@@ -554,7 +568,7 @@ def select_samples_using_tau_percentile(ds, low=25, high=75):
     taus_train = ssdm.get_taus(type(ds)(split='train', infer=True, mode=ds.mode, lap_norm=ds.lap_norm,
         sample_select_fn=ds.sample_select_fn), shuffle=True)
     
-    if ds.split:
+    if ds.split and ds.split.find('custom') == -1:
         taus_full = ssdm.get_taus(type(ds)(split=ds.split, infer=True, mode=ds.mode, lap_norm=ds.lap_norm,
             sample_select_fn=ds.sample_select_fn), shuffle=True)
     else:

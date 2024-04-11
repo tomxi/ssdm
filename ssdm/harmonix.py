@@ -3,19 +3,15 @@ import os, json, pkg_resources
 from glob import glob
 
 from . import base
-import ssdm
-
-with open('/Users/xi/hmx_titles.json', 'r') as fp:
-    HMX_TITLE_DICT = json.load(fp)
 
 
 class Track(base.Track):
     def __init__(
             self,
             tid='0077', 
-            dataset_dir: str = '/Users/xi/data/harmonix', 
-            output_dir: str = '/Users/xi/data/harmonix',
-            feature_dir: str = '/Users/xi/data/harmonix'
+            dataset_dir: str = '/Users/tomxi/data/harmonix', 
+            output_dir: str = '/Users/tomxi/data/harmonix',
+            feature_dir: str = '/Users/tomxi/data/harmonix'
                 ):
         super().__init__(tid=tid, feature_dir=feature_dir, output_dir=output_dir, dataset_dir=dataset_dir)
         self.title = self.tid + '_'
@@ -40,7 +36,7 @@ def get_ids(
     split: str = None,
     out_type: str = 'list' # one of {'set', 'list'}
 ) -> list:
-    id_path = '/Users/xi/splits.json'
+    id_path = '/Users/tomxi/ssdm/ssdm/splits.json'
     with open(id_path, 'r') as f:
         id_json = json.load(f)
     ids = id_json[f'hmx_{split}']
@@ -48,7 +44,7 @@ def get_ids(
     return ids
 
 def get_samps(split):
-    with open('/Users/xi/labels.json', 'r') as f:
+    with open('/Users/tomxi/ssdm/ssdm/labels.json', 'r') as f:
         labels = json.load(f)
 
     for k in labels:

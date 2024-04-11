@@ -8,7 +8,7 @@ from torch.utils.data import Dataset
 import os, jams, itertools
 import pandas as pd
 import librosa
-import dataset
+# import dataset
 from tqdm import tqdm
 
 class Track(base.Track):
@@ -38,6 +38,7 @@ class Track(base.Track):
 
 
     def solo_start_time(self):
+        raise NotImplementedError
         if self._solo_start == None:
             db = dataset.connect("sqlite:////home/qx244/jsd/data/wjazzd.db")
             transcription_info = db['transcription_info'].find_one(melid=self.tid)

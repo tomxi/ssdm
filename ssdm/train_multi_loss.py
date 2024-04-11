@@ -25,7 +25,13 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-5', LS='sc
     print(experiment_id_str)
 
     # setup device
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device("cpu")
+
     print(device)
 
     # Initialize network based on model_id:

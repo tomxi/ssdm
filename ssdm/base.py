@@ -1,11 +1,11 @@
 import ssdm
 import ssdm.utils
-from ssdm import scluster
+# from ssdm import scluster
 from . import feature
-from .expand_hier import expand_hierarchy
-import librosa
+# from .expand_hier import expand_hierarchy
+# import librosa
 
-import jams
+# import jams
 import json, itertools, os
 
 import torch
@@ -13,10 +13,10 @@ from torch.utils.data import Dataset
 
 import numpy as np
 import xarray as xr
-from scipy import spatial, stats
+# from scipy import spatial, stats
 from scipy.linalg import eig, eigh
 
-from librosa.segment import recurrence_matrix
+# from librosa.segment import recurrence_matrix
 from librosa.feature import stack_memory
 from librosa import frames_to_time
 
@@ -162,6 +162,8 @@ class DS(Dataset):
     ):
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            self.device = torch.device('mps')
         else:
             self.device = torch.device("cpu")
 

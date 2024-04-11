@@ -9,16 +9,15 @@ from tqdm import tqdm
 
 from scipy import stats
 
-from ssdm.expand_hier import expand_hierarchy
 
 
 class Track(base.Track):
     def __init__(
             self, 
             tid: str = '384', 
-            dataset_dir: str = '~/data/salami', 
-            output_dir: str = '~/data/salami',
-            feature_dir: str = '~/data/salami'
+            dataset_dir: str = '/Users/tomxi/data/salami', 
+            output_dir: str = '/Users/tomxi/data/salami',
+            feature_dir: str = '/Users/tomxi/data/salami'
         ):
         super().__init__(tid, dataset_dir=dataset_dir, output_dir=output_dir, feature_dir=feature_dir)
         self.audio_path = os.path.join(dataset_dir, f'audio/{tid}/audio.mp3')
@@ -110,7 +109,7 @@ def get_ids(
     split: str = None,
     out_type: str = 'list' # one of {'set', 'list'}
 ) -> list:
-    id_path = '/Users/xi/splits.json'
+    id_path = '/Users/tomxi/ssdm/ssdm/splits.json'
     with open(id_path, 'r') as f:
         id_json = json.load(f)
     ids = id_json[f'slm_{split}']
@@ -120,7 +119,7 @@ def get_ids(
 
 
 def get_samps(split):
-    with open('/Users/xi/labels.json', 'r') as f:
+    with open('/Users/tomxi/ssdm/ssdm/labels.json', 'r') as f:
         labels = json.load(f)
 
     for k in labels:

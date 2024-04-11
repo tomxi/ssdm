@@ -13,4 +13,4 @@ from .utils import *
 # from . import salami
 # from . import beatles
 
-from .expand_hier import expand_hierarchy
+# from .expand_hier import expand_hierarchy

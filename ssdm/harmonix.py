@@ -5,22 +5,20 @@ from glob import glob
 from . import base
 import ssdm
 
-HMX_TITLE_DICT = dict()
-title_dict_dir = '/scratch/qx244/data/audio_features_crema_mfcc_openl3_tempogram_yamnet/crema_mfcc_openl3_tempogram_yamnet_features/'
-for path in glob(os.path.join(title_dict_dir, f'*mfcc.npz')):
-    tid, title, feat = os.path.basename(os.path.basename(path).replace('_24', '')).split('_')
-    HMX_TITLE_DICT[tid] = title
+with open('/Users/xi/hmx_titles.json', 'r') as fp:
+    HMX_TITLE_DICT = json.load(fp)
+
 
 class Track(base.Track):
     def __init__(
             self,
             tid='0077', 
-            feature_dir='/scratch/qx244/data/audio_features_crema_mfcc_openl3_tempogram_yamnet/crema_mfcc_openl3_tempogram_yamnet_features/',
-            dataset_dir='/home/qx244/harmonixset/dataset/',
-            output_dir='/vast/qx244/harmonix2/',
+            dataset_dir: str = '/Users/xi/data/harmonix', 
+            output_dir: str = '/Users/xi/data/harmonix',
+            feature_dir: str = '/Users/xi/data/harmonix'
                 ):
         super().__init__(tid=tid, feature_dir=feature_dir, output_dir=output_dir, dataset_dir=dataset_dir)
-        self.title = self.tid + '_' + HMX_TITLE_DICT[self.tid]
+        self.title = self.tid + '_'
 
     def audio(self, **kwargs): 
         print('Audio not Available')
@@ -42,31 +40,28 @@ def get_ids(
     split: str = None,
     out_type: str = 'list' # one of {'set', 'list'}
 ) -> list:
-    id_path = pkg_resources.resource_filename('ssdm', 'split_ids.json')
+    id_path = '/Users/xi/splits.json'
     with open(id_path, 'r') as f:
         id_json = json.load(f)
-    all_ids = id_json['harmonix']
-    
-    if split:
-    # Get different splits: can be train test val
-        split_dict = ssdm.create_splits(all_ids, val_ratio=0.15, test_ratio=0.15, random_state=20230327)
-        ids = split_dict[split]
-    else:
-        ids = all_ids
+    ids = id_json[f'hmx_{split}']
+    ids.sort()
+    return ids
 
-    if out_type == 'set':
-        return set(ids)
-    elif out_type == 'list':
-        ids.sort()
-        return ids
-    else:
-        print('invalid out_type')
-        return None
+def get_samps(split):
+    with open('/Users/xi/labels.json', 'r') as f:
+        labels = json.load(f)
+
+    for k in labels:
+        labels[k] = {
+            tuple(k.replace('(', '').replace(')', '').replace("'", '').split(', ')): value for k, value in labels[k].items()
+        }
+
+    return labels[f'hmx_{split}_labels']
 
 
 class NewDS(base.DS):
     def __init__(self, split='train', tids=None, infer=True, 
-                 sample_select_fn=ssdm.sel_samp_l, **kwargs):
+                 sample_select_fn=get_samps, **kwargs):
         self.name = 'hmx'
 
         if tids is None:
@@ -81,3 +76,4 @@ class NewDS(base.DS):
     
     def track_obj(self, **track_kwargs):
         return Track(**track_kwargs)
+    

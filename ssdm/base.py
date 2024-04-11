@@ -616,7 +616,7 @@ class Track(object):
         return tau.sel(**anno_id_kwarg)
 
 
-    def embedded_rec_mat(self, feat_combo=dict(), lap_norm='random_walk', beat_sync=False, recompute=False):
+    def embedded_rec_mat(self, feat_combo=dict(), lap_norm='random_walk', beat_sync=True, recompute=False):
         beat_suffix = {"_bsync" if beat_sync else ""}
         save_path = os.path.join(self.output_dir, f'evecs/{self.tid}_rep{feat_combo["rep_ftype"]}_loc{feat_combo["loc_ftype"]}_{lap_norm}{beat_suffix}.npy')
         if not recompute:
@@ -748,7 +748,7 @@ class DS(Dataset):
         )
         data = torch.tensor(first_evecs, dtype=torch.float32, device=self.device)
         if self.mode != 'both':
-            assert KeyError('bad mode: can onpy be both')
+            assert KeyError('bad mode: can only be both')
         
         nlvl_save_path = os.path.join(self.output_dir, 'evecs/'+s_info[0]+'_nlvl.npy')
         try:

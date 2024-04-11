@@ -243,7 +243,7 @@ def pick_by_taus(
     return out
 
 
-def pick_by_net(ds, model_path='', return_raw_result=False):
+def pick_by_net(ds, model_path='', return_raw_result=False, recollect=False):
     assert ds.mode == 'both'
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     #extract info from model_path
@@ -251,6 +251,8 @@ def pick_by_net(ds, model_path='', return_raw_result=False):
     # Check for cached inference results:
     infer_result_fp = os.path.join(ds.output_dir, f'tauhats/{model_basename}_{ds}.nc')
     try:
+        if recollect:
+            raise NotImplementedError
         inference_result = xr.load_dataarray(infer_result_fp)
     except:
         print('could not load cache, doing inference')
@@ -286,7 +288,8 @@ def pick_by_net(ds, model_path='', return_raw_result=False):
         util_score = inference_result.loc[:, :, :, 'util']
         nlvl_score = inference_result.loc[:, :, :, 'nlvl']
         best_chocie_idx = util_score.argmax(dim=['rep_ftype', 'loc_ftype'])
-        return nlvl_score.isel(best_chocie_idx)
+        best_chocie_idx
+        return nlvl_score.isel(best_chocie_idx).clip(max=16, min=2) # from index to layer
 
 
 def quantize(data, quantize_method='percentile', quant_bins=8):

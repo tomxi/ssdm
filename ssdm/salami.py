@@ -107,81 +107,33 @@ class Track(base.Track):
 
 
 def get_ids(
-    split: str = 'working',
+    split: str = None,
     out_type: str = 'list' # one of {'set', 'list'}
 ) -> list:
-    """ split can be ['audio', 'jams', 'excluded', 'new_val', 'new_test', 'new_train']
-        Dicts sotred in id_path json file.
-    """
-    id_path = pkg_resources.resource_filename('ssdm', 'split_ids.json')
-    try:
-        with open(id_path, 'r') as f:
-            id_json = json.load(f)
-    except FileNotFoundError:
-        id_json = dict()
-        id_json[split] = []
-        with open(id_path, 'w') as f:
-            json.dump(id_json, f)
-    ids = id_json[split]
-        
-    if out_type == 'set':
-        return set(ids)
-    elif out_type == 'list':
-        ids.sort()
-        return ids
-    else:
-        print('invalid out_type')
-        return None
-
-def get_adobe_scores(
-    tids=[],
-    anno_col_fn=lambda stack: stack.max(dim='anno_id'),
-    l_frame_size=0.1
-) -> xr.DataArray:
-    score_per_track = []
-    for tid in tqdm(tids):
-        track = Track(tid)
-        score_per_anno = []
-        for anno_id in range(track.num_annos()):
-            score_per_anno.append(track.adobe_l(anno_id=anno_id, l_frame_size=l_frame_size))
-
-        anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
-        track_flat = anno_col_fn(anno_stack)
-        score_per_track.append(track_flat)
-
-    return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
+    id_path = '/Users/xi/splits.json'
+    with open(id_path, 'r') as f:
+        id_json = json.load(f)
+    ids = id_json[f'slm_{split}']
+    ids.sort()
+    return ids
 
 
-# MOVE TO SALAMI
-# add new splits to split_ids.json
-def update_split_json(split_name='', split_idx=[]):
-    # add new splits to split_id.json file at json_path
-    # read from json and get dict
-    json_path = pkg_resources.resource_filename('ssdm', 'split_ids.json')
-    try:
-        with open(json_path, 'r') as f:
-            split_dict = json.load(f)
-    except FileNotFoundError:
-        split_dict = dict()
-        split_dict[split_name] = split_idx
-        with open(json_path, 'w') as f:
-            json.dump(split_dict, f)
-        return split_dict
 
-    # add new split to dict
-    split_dict[split_name] = split_idx
+def get_samps(split):
+    with open('/Users/xi/labels.json', 'r') as f:
+        labels = json.load(f)
 
-    # save json again
-    with open(json_path, 'w') as f:
-        json.dump(split_dict, f)
+    for k in labels:
+        labels[k] = {
+            tuple(k.replace('(', '').replace(')', '').replace("'", '').split(', ')): value for k, value in labels[k].items()
+        }
 
-    with open(json_path, 'r') as f:
-        return json.load(f)
+    return labels[f'hmx_{split}_labels']
 
 
 class NewDS(base.DS):
     def __init__(self, split='train', tids=None, infer=True, 
-                 sample_select_fn=ssdm.sel_samp_l, 
+                 sample_select_fn=get_samps, 
                  **kwargs):
         self.name = 'slm'
 

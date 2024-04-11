@@ -67,76 +67,12 @@ class Track(object):
             else:
                 return beats[:-1]
 
-
-    def combined_rec_mat(
-        self, 
-        config_update: dict = dict(),
-        recompute: bool = False,
-        beat_sync: bool = False,
-    ):
-        config = ssdm.DEFAULT_LSD_CONFIG.copy()
-        if beat_sync:
-            config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
-        config.update(config_update)
-        # calculated combined rec mat
-        rep_ssm = self.ssm(feature=config['rep_ftype'], 
-                            distance=config['rep_metric'],
-                            width=config['rec_width'],
-                            full=config['rec_full'],
-                            recompute=recompute,
-                            beat_sync=beat_sync,
-                            add_noise=config['add_noise'],
-                            n_steps = config['n_steps'],
-                            delay=config['delay']
-                            )
-        path_sim = self.path_sim(feature=config['loc_ftype'], 
-                                 distance=config['loc_metric'],
-                                 beat_sync=beat_sync,
-                                 add_noise=config['add_noise'],
-                                 n_steps = config['n_steps'],
-                                 delay=config['delay'])
-        
-        if path_sim.shape[0] != rep_ssm.shape[0] - 1:
-            path_sim = path_sim[:rep_ssm.shape[0] - 1]
-        return scluster.combine_ssms(rep_ssm, path_sim, rec_smooth=config['rec_smooth'])
-
     
     def embedded_rec_mat(self, feat_combo=dict(), lap_norm='random_walk', beat_sync=False, recompute=False):
         beat_suffix = {"_bsync" if beat_sync else ""}
         save_path = os.path.join(self.output_dir, f'evecs/{self.tid}_rep{feat_combo["rep_ftype"]}_loc{feat_combo["loc_ftype"]}_{lap_norm}{beat_suffix}.npy')
-        if not recompute:
-            try:
-                return np.load(save_path)
-            except:
-                print(save_path)
-                raise NotImplementedError
-                recompute = True
-        
-        rec_mat = self.combined_rec_mat(config_update=feat_combo, beat_sync=beat_sync)
-        degree_matrix = np.diag(np.sum(rec_mat, axis=1))
-        unnormalized_laplacian = degree_matrix - rec_mat
-        # Compute the Random Walk normalized Laplacian matrix
-        if lap_norm == 'random_walk':
-            degree_inv = np.linalg.inv(degree_matrix)
-            normalized_laplacian = degree_inv @ unnormalized_laplacian
-            evals, evecs = eig(normalized_laplacian)
-            sort_indices = np.argsort(evals.real)
-            # Reorder the eigenvectors matrix columns using the sort indices of evals
-            sorted_eigenvectors = evecs[:, sort_indices]
-            first_evecs = sorted_eigenvectors.real[:, :20]
-        elif lap_norm == 'symmetrical':
-            sqrt_degree_inv = np.linalg.inv(np.sqrt(degree_matrix))
-            normalized_laplacian = sqrt_degree_inv @ unnormalized_laplacian @ sqrt_degree_inv
-            evals, evecs = eigh(normalized_laplacian)
-            sort_indices = np.argsort(evals)
-            # Reorder the eigenvectors matrix columns using the sort indices of evals
-            sorted_eigenvectors = evecs[:, sort_indices]
-            first_evecs = sorted_eigenvectors[:, :20]
-        else:
-            print('lap_norm can only be random_walk or symmetrical')
-
-        np.save(save_path, first_evecs)
-        return first_evecs
+        return np.load(save_path)
+    
 
 
     def num_dist_segs(self):

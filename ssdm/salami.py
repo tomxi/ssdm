@@ -127,7 +127,7 @@ def get_samps(split):
             tuple(k.replace('(', '').replace(')', '').replace("'", '').split(', ')): value for k, value in labels[k].items()
         }
 
-    return labels[f'hmx_{split}_labels']
+    return labels[f'slm_{split}_labels']
 
 
 class NewDS(base.DS):

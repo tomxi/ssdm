@@ -58,11 +58,11 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-5', LS='sc
     
 
     if DS == 'slm':
-        train_dataset = slm.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, sample_select_fn=sample_selector, beat_sync=True)
-        val_dataset = slm.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, sample_select_fn=sample_selector, beat_sync=True)
+        train_dataset = slm.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, beat_sync=True)
+        val_dataset = slm.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, beat_sync=True)
     elif DS == 'hmx':
-        train_dataset = hmx.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, sample_select_fn=sample_selector, beat_sync=True)
-        val_dataset = hmx.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, sample_select_fn=sample_selector, beat_sync=True)
+        train_dataset = hmx.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, beat_sync=True)
+        val_dataset = hmx.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, beat_sync=True)
     else:
         print('bad DS')
 

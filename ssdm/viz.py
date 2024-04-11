@@ -39,7 +39,7 @@ def lsd_meet_mat(track, config=dict(), beat_sync=False, layer_to_show=None):
     fig.colorbar(quadmesh, ax=ax)      
     return fig, ax
 
-def rec_mat(track, blocky=False, rec_diag=None, **ssm_config):
+def rec_mat(track, blocky=False, rec_diag=None, ax=None, **ssm_config):
     """
     blocky: bool = False, # if true, use low rank appoximation,
     rec_diag: np.ndarray = None, # used when blocky is True, to combine with SSM to form the Laplacian
@@ -61,10 +61,14 @@ def rec_mat(track, blocky=False, rec_diag=None, **ssm_config):
         _, evecs = sc.embed_ssms(combined_graph, evec_smooth=config['evec_smooth'])
         first_evecs = evecs[:, :10]
         rec_mat = ssdm.quantize(np.matmul(first_evecs, first_evecs.T), quant_bins=7)
-    fig, ax = plt.subplots(figsize=(5, 4))
-    quadmesh = librosa.display.specshow(rec_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
-    fig.colorbar(quadmesh, ax=ax)      
-    return fig, ax
+
+    if ax == None:
+        fig, ax = plt.subplots(figsize=(5, 4))
+        quadmesh = librosa.display.specshow(rec_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
+        fig.colorbar(quadmesh, ax=ax)
+        return fig, ax
+    else:
+        return librosa.display.specshow(rec_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
 
 def path_sim(track, quant_bins=None, **path_sim_config):
     path_sim = track.path_sim(**path_sim_config)
@@ -90,7 +94,7 @@ def path_ref(track, **path_ref_args):
 
 
 # Visualize a multi level segmentation jams.Annotation
-def multi_seg(multi_seg):
+def multi_seg(multi_seg, hier_depth=-1):
     ## From ADOBE musicsection
     def plot_levels(inters, labels, figsize):
         """Plots the given hierarchy."""
@@ -106,7 +110,7 @@ def multi_seg(multi_seg):
         
         return fig, axs
 
-    def plot_segmentation(seg, figsize=(13, 3)):
+    def plot_segmentation(seg, figsize=(10, 3)):
         inters = []
         labels = []
         for level in seg[::-1]:
@@ -117,13 +121,13 @@ def multi_seg(multi_seg):
         fig.text(0.08, 0.47, 'Segmentation Levels', va='center', rotation='vertical')
         return fig, axs
 
-    hier = ssdm.multi2hier(multi_seg)
+    hier = ssdm.multi2hier(multi_seg)[:hier_depth]
     return plot_segmentation(hier)
 
 
-def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True):   
+def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True, no_deci=False):   
     if ax is None:
-        _, ax = plt.subplots(figsize=(5,5))
+        fig, ax = plt.subplots(figsize=(5,5))
 
     da = da.squeeze()
     if len(da.shape) == 1:
@@ -149,8 +153,12 @@ def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True):
     
     for i in range(len(yticks)):
         for j in range(len(xticks)):
-            ax.text(j, i, f"{da.values[i, j]:.3f}",
-                    ha="center", va="center", color="k")
+            if no_deci:
+                ax.text(j, i, f"{da.values[i, j]}",
+                        ha="center", va="center", color="k")
+            else:
+                ax.text(j, i, f"{da.values[i, j]:.3f}",
+                        ha="center", va="center", color="k")
 
     ax.set_title(title)
     if colorbar:

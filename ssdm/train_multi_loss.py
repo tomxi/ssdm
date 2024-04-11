@@ -13,7 +13,7 @@ from ssdm import harmonix as hmx
 # BACKUP, not using this anymore
 # DROP_FEATURES=[]
 
-def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='hmx', WDM='1e-5', LS='score', LAPNORM='random_walk'):
+def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-5', LS='score', LAPNORM='random_walk'):
     """
     MODEL_ID
     DS can be slm and hmx for now
@@ -32,34 +32,31 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='hmx', WDM='1e-5', LS='sc
     net = scn.AVAL_MODELS[MODEL_ID]().to(device)
 
     utility_loss = torch.nn.BCELoss()
-    num_layer_loss = torch.nn.CrossEntropyLoss()
-    optimizer = optim.AdamW([
-        {'params': [param for name, param in net.named_parameters() if 'head' not in name], 
-         'weight_decay': 1 * float(WDM)},
-        {'params': [param for name, param in net.named_parameters() if 'head' in name], 
-         'weight_decay': 10 * float(WDM)}  # Only weight decay for the specified layer
-    ])
+    num_layer_loss = torch.nn.MSELoss()
+    optimizer = optim.AdamW(net.parameters(), weight_decay=float(WDM))
 
     lr_scheduler = optim.lr_scheduler.CyclicLR(
-        optimizer, base_lr=1e-9, max_lr=1e-4, cycle_momentum=False, mode='triangular', step_size_up=2000
+        optimizer, base_lr=1e-9, max_lr=1e-4, cycle_momentum=False, mode='triangular', step_size_up=1000
     )
 
     # setup dataloaders   
     # augmentor = lambda x: scn.time_mask(x, T=100, num_masks=4, replace_with_zero=False, tau=TAU_TYPE)
     augmentor = None
     if LS == 'score':
-        sample_selector = ssdm.select_samples_using_outstanding_l_score
+    #     sample_selector = ssdm.select_samples_using_outstanding_l_score
+        sample_selector = ssdm.sel_samp_l
     elif LS == 'tau':
         sample_selector = ssdm.select_samples_using_tau_percentile
     else:
         print('bad learning signal: score or tau')
+    
 
     if DS == 'slm':
-        train_dataset = slm.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, sample_select_fn=sample_selector)
-        val_dataset = slm.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, sample_select_fn=sample_selector)
+        train_dataset = slm.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, sample_select_fn=sample_selector, beat_sync=True)
+        val_dataset = slm.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, sample_select_fn=sample_selector, beat_sync=True)
     elif DS == 'hmx':
-        train_dataset = hmx.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, sample_select_fn=sample_selector)
-        val_dataset = hmx.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, sample_select_fn=sample_selector)
+        train_dataset = hmx.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, sample_select_fn=sample_selector, beat_sync=True)
+        val_dataset = hmx.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, sample_select_fn=sample_selector, beat_sync=True)
     else:
         print('bad DS')
 
@@ -68,7 +65,7 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='hmx', WDM='1e-5', LS='sc
     # pretrain check-up
     net_eval_val = scn.net_eval_multi_loss(val_dataset, net, utility_loss, num_layer_loss, device, verbose=True)
     best_u_loss = net_eval_val.u_loss.mean()
-    best_lvl_loss = net_eval_val.lvl_loss.mean()
+    best_lvl_loss = net_eval_val.loc[net_eval_val.label == 1].lvl_loss.mean()
 
     # simple logging
     val_losses = []
@@ -78,7 +75,7 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='hmx', WDM='1e-5', LS='sc
         training_loss = scn.train_multi_loss(train_loader, net, utility_loss, num_layer_loss, optimizer, lr_scheduler=lr_scheduler, device=device, loss_type=LOSS_TYPE)
         net_eval_val = scn.net_eval_multi_loss(val_dataset, net, utility_loss, num_layer_loss, device)
         u_loss = net_eval_val.u_loss.mean()
-        lvl_loss = net_eval_val.lvl_loss.mean()
+        lvl_loss = net_eval_val.loc[net_eval_val.label == 1].lvl_loss.mean()
         val_loss = (u_loss, lvl_loss)
         
         print(epoch, training_loss, val_loss)
@@ -118,17 +115,17 @@ if __name__ == '__main__':
     parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
     
     config_list = list(itertools.product(
-        # ['EvecNetMulti2', 'EvecSQNet', 'EvecSQNet2'],
-        ['EvecSQNet3'],
+        ['EvecSQNet'],
         ['slm', 'hmx'],
+        ['score'],
     ))
 
-    model_id, dataset = config_list[int(parser.parse_args().config_idx)]
-    total_epoch = 40
-    date = 20240402
+    model_id, dataset, ls = config_list[int(parser.parse_args().config_idx)]
+    total_epoch = 101
+    date = 20240408
     loss_type = 'multi'
-    wd = 1e-2
-    ls = 'tau'
+    wd = 2e-3
+    # ls = 'score'
     lap_norm = 'random_walk'
 
     train(model_id, total_epoch, date, loss_type, dataset, wd, ls, lap_norm)

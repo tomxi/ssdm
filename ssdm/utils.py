@@ -12,6 +12,7 @@ import jams, mir_eval
 import ssdm
 import ssdm.scluster as sc
 import ssdm.scanner as scn
+from torch import nn
 
 import scipy
 
@@ -243,7 +244,7 @@ def pick_by_taus(
 
 
 def pick_by_net(ds, model_path='', return_raw_result=False):
-    assert ds.mode == 'both' and ds.infer == True
+    assert ds.mode == 'both'
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     #extract info from model_path
     model_basename = os.path.basename(model_path)
@@ -268,7 +269,10 @@ def pick_by_net(ds, model_path='', return_raw_result=False):
         # load model and do inference
         state_dict = torch.load(model_path, map_location=device)
         net.load_state_dict(state_dict=state_dict)
-        inference_result = scn.net_infer_multi_loss(ds, net=net, device=device)
+        if not ds.infer:
+            return scn.net_eval_multi_loss(ds, net, nn.BCELoss(), nn.MSELoss(), device=device)
+        else:
+            inference_result = scn.net_infer_multi_loss(ds, net=net, device=device)
     try:
         inference_result.to_netcdf(infer_result_fp)
     except:
@@ -280,9 +284,9 @@ def pick_by_net(ds, model_path='', return_raw_result=False):
     else:
         # collection
         util_score = inference_result.loc[:, :, :, 'util']
-        # nlvl_score = inference_result.loc[:, :, :, 'nlvl']
+        nlvl_score = inference_result.loc[:, :, :, 'nlvl']
         best_chocie_idx = util_score.argmax(dim=['rep_ftype', 'loc_ftype'])
-        return util_score.isel(best_chocie_idx)
+        return nlvl_score.isel(best_chocie_idx)
 
 
 def quantize(data, quantize_method='percentile', quant_bins=8):
@@ -366,17 +370,17 @@ def get_lsd_scores(
     ds,
     shuffle=False,
     anno_col_fn=lambda stack: stack.max(dim='anno_id'), # activated when there are more than 1 annotation for a track
-    heir=False,
-    beat_sync=False,
+    heir=True,
+    beat_sync=True,
     recollect=False,
     **lsd_score_kwargs,
 ) -> xr.DataArray:
     ds_str = str(ds).replace('rep', '').replace('loc', '')
     sync_str = "_bsync" if beat_sync else ""
     if heir:
-        save_path = f'/vast/qx244/{ds_str}_{len(ds)}_heir{sync_str}_lsd_scores.nc'
+        save_path = f'/vast/qx244/{ds_str}_{len(ds.tids)}_heir{sync_str}_lsd_scores.nc'
     else:
-        save_path = f'/vast/qx244/{ds_str}_{len(ds)}_flat{sync_str}_lsd_scores.nc'
+        save_path = f'/vast/qx244/{ds_str}_{len(ds.tids)}_flat{sync_str}_lsd_scores.nc'
 
     if 'custom' in str(ds):
         recollect = True
@@ -419,19 +423,19 @@ def get_taus(
     shuffle=False,
     anno_col_fn=lambda stack: stack.max(dim='anno_id'), # activated when there are more than 1 annotation for a track
     recollect=False,
-    beat_sync=False,
+    beat_sync=True,
     **tau_kwargs,
 ):
     if ds.infer:
         infer_flag = 'infer'
     else:
         infer_flag = 'train'
-    ds_str = str(ds).replace('rep', '').replace('loc', '')
+
     sync_str = "_bsync" if beat_sync else ""
     if ds.mode == 'both':
-        save_path = os.path.join(ds.track_obj().output_dir, f'{ds_str}_{infer_flag}_{ds.lap_norm}{sync_str}_blocky_taus.nc')
+        save_path = os.path.join(ds.track_obj().output_dir, f'{ds}_{infer_flag}_{ds.lap_norm}{sync_str}_blocky_taus.nc')
     else:
-        save_path = os.path.join(ds.track_obj().output_dir, f'{ds_str}_{infer_flag}{sync_str}_blocky_taus.nc')
+        save_path = os.path.join(ds.track_obj().output_dir, f'{ds}_{infer_flag}{sync_str}_blocky_taus.nc')
     
     try:
         out = xr.load_dataarray(save_path)
@@ -459,7 +463,8 @@ def get_taus(
         try: 
             out.to_netcdf(save_path)
         except:
-            pass
+            os.system(f'rm {save_path}')
+            out.to_netcdf(save_path)
     
     return out.sortby('tid')
 
@@ -564,28 +569,94 @@ def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
     return dict(train=train_set, val=val_set, test=test_set)
 
 
+def adjusted_best_layer(cube, tolerance=0):
+    max_score_over_layer = cube.max('layer')
+    # We can tolerate a bit of perforamcne, so let's take that off from the max
+    thresh = max_score_over_layer - tolerance
+    # The first layer over threshold
+    over_thresh = cube >= thresh
+    return over_thresh.idxmax('layer')
+
+
 # Sample selection functions
 def select_samples_using_tau_percentile(ds, low=25, high=75):
+    ds_scores_full = get_lsd_scores(ds, heir=True, beat_sync=ds.beat_sync).sel(m_type='f')
+    # best_layer_scores = ds_scores_full.max('layer')
+    best_layers = adjusted_best_layer(ds_scores_full, tolerance=0)
+
     taus_train = ssdm.get_taus(type(ds)(split='train', infer=True, mode=ds.mode, lap_norm=ds.lap_norm,
-        sample_select_fn=ds.sample_select_fn), shuffle=True)
+        sample_select_fn=ds.sample_select_fn, beat_sync=ds.beat_sync), shuffle=True)
     
     if ds.split and ds.split.find('custom') == -1:
         taus_full = ssdm.get_taus(type(ds)(split=ds.split, infer=True, mode=ds.mode, lap_norm=ds.lap_norm,
-            sample_select_fn=ds.sample_select_fn), shuffle=True)
+            sample_select_fn=ds.sample_select_fn), shuffle=True, beat_sync=ds.beat_sync)
     else:
         taus_full = ssdm.get_taus(type(ds)(tids=ds.tids, infer=True, mode=ds.mode, lap_norm=ds.lap_norm,
-            sample_select_fn=ds.sample_select_fn), shuffle=True)
+            sample_select_fn=ds.sample_select_fn), shuffle=True, beat_sync=ds.beat_sync, recollect=True)
     if ds.mode == 'both':
         tau_flat = taus_full.stack(sid=['tid', 'rep_ftype', 'loc_ftype'])
     else:
         tau_flat = taus_full.sel(tau_type=ds.mode).stack(sid=['tid', 'f_type'])
     neg_sids = tau_flat.where(tau_flat < np.percentile(taus_train, low), drop=True).indexes['sid']
     pos_sids = tau_flat.where(tau_flat > np.percentile(taus_train, high), drop=True).indexes['sid']
-    neg_samples = {sid: 0 for sid in neg_sids if sid[0] in ds.tids}
-    pos_samples = {sid: 1 for sid in pos_sids if sid[0] in ds.tids}
+    neg_samples = {sid: (0, best_layers.loc[sid].item())  for sid in neg_sids if sid[0] in ds.tids}
+    pos_samples = {sid: (1, best_layers.loc[sid].item()) for sid in pos_sids if sid[0] in ds.tids}
 
     print(f'{ds} has \n \t {len(pos_samples)} pos samples; {len(neg_samples)} neg samples.')
     return {**neg_samples, **pos_samples}
+
+
+def sel_samp_l(ds, m_type='f', recollect=False):
+    # It should be in the top 1/3 of all the scores in a track
+    # AND
+    # It should be in the top 1/3 of all l scores
+    ds_scores_full = get_lsd_scores(ds, heir=True, beat_sync=ds.beat_sync, recollect=recollect).sel(m_type=m_type)
+    best_layer_scores = ds_scores_full.max('layer')
+    best_layers = adjusted_best_layer(ds_scores_full, tolerance=0)
+    
+    train_ds = type(ds)(split='train', mode=ds.mode, infer=True, beat_sync=ds.beat_sync)
+    train_scores_full = get_lsd_scores(train_ds)
+    best_layer_scores_train = train_scores_full.max('layer')
+    train_ds_low_cut = np.percentile(best_layer_scores_train, 33)
+    train_ds_high_cut = np.percentile(best_layer_scores_train, 66)
+
+    per_track_hc=dict()
+    per_track_lc=dict()
+    for tr in best_layer_scores:
+        per_track_lc[tr.tid.item()] = np.percentile(tr, 33)
+        per_track_hc[tr.tid.item()] = np.percentile(tr, 66)
+    per_track_lc = xr.DataArray(
+        list(per_track_lc.values()), 
+        coords={'tid': list(per_track_lc.keys())}, 
+        dims='tid'
+    )
+    per_track_hc = xr.DataArray(
+        list(per_track_hc.values()), 
+        coords={'tid': list(per_track_hc.keys())}, 
+        dims='tid'
+    )
+    lc_loc = best_layer_scores <= per_track_lc
+    hc_loc = best_layer_scores >= per_track_hc
+    scores_flat = best_layer_scores.stack(sid=['tid', 'rep_ftype', 'loc_ftype'])
+    lc_loc_flat = lc_loc.stack(sid=['tid', 'rep_ftype', 'loc_ftype'])
+    hc_loc_flat = hc_loc.stack(sid=['tid', 'rep_ftype', 'loc_ftype'])
+
+    neg_sids = scores_flat.where(
+        (scores_flat <= train_ds_low_cut) * lc_loc_flat,
+        drop=True,
+    ).indexes['sid']
+    pos_sids = scores_flat.where(
+        (scores_flat >= train_ds_high_cut) * hc_loc_flat,
+        drop=True,
+    ).indexes['sid']
+    pos_samples = {s: (1, best_layers.loc[s].item()) for s in pos_sids}
+    neg_samples = {s: (0, best_layers.loc[s].item()) for s in neg_sids}
+
+    print(f'{ds} has \n \t {len(pos_samples)} pos samples; {len(neg_samples)} neg samples.')
+    return {**neg_samples, **pos_samples}
+
+
+
 
 
 def select_samples_using_outstanding_l_score(ds, neg_eps_pct=50, m_type='f'):

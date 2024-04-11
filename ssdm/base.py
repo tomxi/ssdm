@@ -556,18 +556,18 @@ class Track(object):
 
     def tau_both(
         self,
-        anno_mode: str = 'expand',
+        anno_mode: str = 'normal',
         recompute: bool = False,
         lap_norm: str = 'random_walk', # symmetrical or random_walk
         quantize: str = 'percentile', # None, 'kmeans' or 'percentile'
-        quant_bins: int = 7, # used for loc tau quant schemes
-        beat_sync: bool = False,
+        quant_bins: int = 8, # used for loc tau quant schemes
+        beat_sync: bool = True,
         verbose: bool = False,
         **anno_id_kwarg
     ) -> xr.DataArray:
         # test if record_path exist, if no, set recompute to true.
         quantize_suffix = f'_{quantize}{quant_bins}' if quantize is not None else ''
-        beat_suffix = "_bsync2" if beat_sync else ""
+        beat_suffix = "_bsync3" if beat_sync else ""
         record_path = os.path.join(self.output_dir, f'taus/{self.tid}_{anno_mode}{quantize_suffix}{lap_norm}{beat_suffix}.nc')
         
         if not recompute:
@@ -593,7 +593,7 @@ class Track(object):
             evecs = self.embedded_rec_mat(feat_combo=feat_combo, beat_sync=beat_sync, lap_norm=lap_norm, recompute=recompute)
             # print(evecs.shape, beat_sync)
             # Calculate the LRA of the normalized laplacian, and use that to compute corr with anno_meet_mat
-            lap_low_rank_approx = evecs[:, :quant_bins] @ evecs[:, :quant_bins].T
+            lap_low_rank_approx = evecs[:, :10] @ evecs[:, :10].T
             
             if quantize:
                 lap_low_rank_approx = ssdm.quantize(lap_low_rank_approx, quant_bins=quant_bins)
@@ -689,11 +689,11 @@ class MyTrack(Track):
 class DS(Dataset):
     def __init__(
         self, 
-        mode='rep',
-        infer=True,
-        transform=None,
+        mode='both',
+        infer = True,
+        transform = None,
         lap_norm = 'random_walk',
-        beat_sync = False,
+        beat_sync = True,
         sample_select_fn=None
     ):
         if torch.cuda.is_available():
@@ -739,37 +739,16 @@ class DS(Dataset):
         if self.beat_sync:
             config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
         s_info = (tid, *feats, self.mode)
-        if self.mode == 'rep':
-            track = self.track_obj(tid=tid)
-            data = track.ssm(
-                feature=feats[0], 
-                distance=config['rep_metric'],
-                width=config['rec_width'],
-                full=config['rec_full'],
-                add_noise=config['add_noise'],
-                n_steps=config['n_steps'],
-                delay=config['delay']
-            )
-            data = torch.tensor(data, dtype=torch.float32, device=self.device)
-    
-        elif self.mode == 'loc':
-            track = self.track_obj(tid=tid)
-            data = track.path_sim(feature=feats[0], 
-                                  distance=config['loc_metric'],
-                                  add_noise=config['add_noise'],
-                                  n_steps = config['n_steps'],
-                                  delay = config['delay'])
-            data = torch.tensor(data, dtype=torch.float32, device=self.device)
+        
 
-        elif self.mode == 'both':
-            first_evecs = self.track_obj(tid=tid).embedded_rec_mat(
-                feat_combo=dict(rep_ftype=feats[0], loc_ftype=feats[1]), 
-                lap_norm=self.lap_norm, beat_sync=self.beat_sync,
-                recompute=False
-            )
-            data = torch.tensor(first_evecs, dtype=torch.float32, device=self.device)
-        else:
-            assert KeyError('bad mode: can onpy be rep or loc or both')
+        first_evecs = self.track_obj(tid=tid).embedded_rec_mat(
+            feat_combo=dict(rep_ftype=feats[0], loc_ftype=feats[1]), 
+            lap_norm=self.lap_norm, beat_sync=self.beat_sync,
+            recompute=False
+        )
+        data = torch.tensor(first_evecs, dtype=torch.float32, device=self.device)
+        if self.mode != 'both':
+            assert KeyError('bad mode: can onpy be both')
         
         nlvl_save_path = os.path.join(self.output_dir, 'evecs/'+s_info[0]+'_nlvl.npy')
         try:
@@ -784,7 +763,9 @@ class DS(Dataset):
                  'uniq_segs': torch.tensor(best_nlvl, dtype=torch.long, device=self.device)}
 
         if not self.infer:
-            datum['label'] = torch.tensor([self.labels[self.samples[idx]]], dtype=torch.float32, device=self.device)[None, :]
+            label, nlvl = self.labels[self.samples[idx]]
+            datum['label'] = torch.tensor([label], dtype=torch.float32, device=self.device)[None, :]
+            datum['best_layer'] = torch.tensor([nlvl], dtype=torch.float32, device=self.device)[None, :]
         
         if self.transform:
             datum = self.transform(datum)

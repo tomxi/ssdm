@@ -10,3 +10,5 @@ salami_old.py
 
 __pycache__
 .ipynb*
+
+*.pdf

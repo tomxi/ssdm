@@ -88,7 +88,7 @@ def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size
             if s['label'] == 0:
                 loss = u_loss
             elif s['label'] == 1:
-                loss = u_loss + nl_loss
+                loss = u_loss + nl_loss/10
         elif loss_type == 'util':
             loss = u_loss
         elif loss_type == 'nlvl':
@@ -136,7 +136,7 @@ def net_eval(ds, net, criterion, device='cpu', verbose=False):
 def net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device='cpu', verbose=False):
     # ds_loader just need to be a iterable of samples
     # make result DF
-    result_df = pd.DataFrame(columns=('util', 'nlvl', 'u_loss', 'lvl_loss', 'loss', 'label', 'best_layer'))
+    result_df = pd.DataFrame(columns=('util', 'nlvl', 'u_loss', 'lvl_loss', 'weighted_total_loss', 'label', 'best_layer'))
     ds_loader = DataLoader(ds, batch_size=None, shuffle=False)
 
     net.to(device)
@@ -151,7 +151,7 @@ def net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device='cpu', verbose=Fal
             nl_loss = nlvl_loss(nlayer, s['best_layer'])
             best_nlvl = torch.floor(nlayer)
             result_df.loc['_'.join(s['info'])] = (util.item(), best_nlvl.item(), u_loss.item(), nl_loss.item(),
-                                                  u_loss.item() + nl_loss.item(), s['label'].item(), s['best_layer'].item())      
+                                                  u_loss.item() + nl_loss.item()/10, s['label'].item(), s['best_layer'].item())      
     return result_df.astype('float')
 
 
@@ -253,120 +253,130 @@ class MyMaxPool2d(nn.Module):
             return x
 
 
-
-
 class EvecSQNet_old(nn.Module):
     def __init__(self):
         super().__init__()
         self.activation = TempSwish
-        self.maxpool = nn.AdaptiveMaxPool2d((216, 216))
         self.dropout = nn.Dropout(0.15)
         self.expand_evecs = ExpandEvecs()
     
         self.convlayers1 = nn.Sequential(
-            nn.Conv2d(20, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), self.activation(),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(12, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), self.activation(),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(12, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), self.activation(), 
+            nn.Conv2d(16, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, eps=0.01), self.activation(),
+            MyMaxPool2d(pool_thresh=1024, kernel_size=2, stride=2),
+            nn.Conv2d(16, 12, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), self.activation(),
+            MyMaxPool2d(pool_thresh=512, kernel_size=2, stride=2),
+            nn.Conv2d(12, 12, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), self.activation(), 
+            MyMaxPool2d(pool_thresh=256, kernel_size=2, stride=2),
         )
 
         self.convlayers2 = nn.Sequential(
-            nn.Conv2d(12, 16, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), self.activation(),
-            nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(16, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
-            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(12, 16, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), self.activation(),
+            MyMaxPool2d(pool_thresh=128, kernel_size=2, stride=2),
+            nn.Conv2d(16, 24, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
+            MyMaxPool2d(pool_thresh=64, kernel_size=2, stride=2),
         )
 
         self.convlayers3 = nn.Sequential(
-            nn.Conv2d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(24, 36, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(36, eps=0.01), self.activation(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-        )
-
-
-        self.pre_predictor = nn.Sequential(
-            nn.Linear(36 * 6 * 6, 72),
-            nn.ReLU(inplace=True)
+            nn.Conv2d(24, 24, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
+            MyMaxPool2d(pool_thresh=32, kernel_size=2, stride=2),
+            nn.Conv2d(24, 24, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
+            MyMaxPool2d(pool_thresh=16, kernel_size=2, stride=2),
+            nn.Conv2d(24, 24, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
+            nn.AdaptiveMaxPool2d((6, 6)),
         )
 
         self.utility_head = nn.Sequential(
-            nn.Linear(72, 1), 
-            nn.Sigmoid()
-        ) 
-
-        self.num_layer_head = nn.Linear(72, 11)
-        
-    def forward(self, x):
-        x = self.expand_evecs(x)
-        x = self.convlayers1(x)
-        x = self.dropout(x)
-        x = self.maxpool(x)
-
-        x = self.convlayers2(x)
-        x = self.dropout(x)
-        x = self.convlayers3(x)
-        x = self.dropout(x)
-
-        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
-        x = self.pre_predictor(x)
-        x = self.dropout(x)
-        return self.utility_head(x), self.num_layer_head(x)
-
-
-class EvecSQNet(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.activation = nn.ReLU
-        self.dropout = nn.Dropout(0.15)
-        self.expand_evecs = ExpandEvecs()
-        self.adamaxpool = nn.AdaptiveMaxPool2d((128, 128))
-    
-        self.convlayers1 = nn.Sequential(
-            nn.Conv2d(16, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16), self.activation(),
-            nn.MaxPool2d(2, 2),
-            nn.Conv2d(16, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(),
-            nn.MaxPool2d(2, 2),
-            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(), 
-            nn.MaxPool2d(2, 2),
-        )
-
-        self.convlayers2 = nn.Sequential(
-            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(), 
-            nn.MaxPool2d(2, 2),
-            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(), 
-            nn.MaxPool2d(2, 2),
-            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(), 
-            nn.MaxPool2d(2, 2),
-        )
-
-        self.pre_util_conv = nn.Sequential(
-            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(),
-            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(),
-            nn.MaxPool2d(2, 2),
-            nn.Conv2d(25, 5, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(5), self.activation(),
-        )
-
-        self.utility_head = nn.Sequential(
-            nn.Linear(5 * 8 * 8, 36, bias=True),
+            nn.Linear(24 * 6 * 6, 36, bias=True),
             nn.ReLU(inplace=True),
             nn.Linear(36, 1, bias=True), 
             nn.Sigmoid()
         ) 
 
-        self.pre_nlvl_conv = nn.Sequential(
+        self.pre_num_layer_conv = nn.Sequential(
+            # Goes after convlayers2
+            nn.Conv2d(24, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
+            MyMaxPool2d(pool_thresh=16, kernel_size=2, stride=2),
+            nn.Conv2d(12, 6, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(6, eps=0.01), self.activation(),
+            nn.AdaptiveMaxPool2d((16, 16)),
+        )
+        
+        self.num_layer_head = nn.Sequential(
+            nn.Linear(6 * 16 * 16, 36, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Linear(36, 1, bias=True),
+            nn.Softplus()
+        )
+        
+    def forward(self, x):
+        x = self.expand_evecs(x)
+        x = self.convlayers1(x)
+        x = self.dropout(x)
+        x = self.convlayers2(x)
+        x = self.dropout(x)
+
+        x_nlvl = self.pre_num_layer_conv(x)
+        x_nlvl = torch.flatten(x_nlvl, 1)
+        x_nlvl = self.dropout(x_nlvl)
+        nlvl = self.num_layer_head(x_nlvl)
+
+        x = self.convlayers3(x)
+        x = torch.flatten(x, 1)
+        x = self.dropout(x)
+        util = self.utility_head(x)
+
+        return util, nlvl
+
+
+class EvecSQNetC(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.activation = nn.ReLU
+        self.dropout = nn.Dropout(0.15)
+        self.expand_evecs = ExpandEvecs()
+        self.adamaxpool = nn.AdaptiveMaxPool2d((96, 96))
+    
+        self.convlayers1 = nn.Sequential(
+            nn.Conv2d(16, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(16, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(), 
+            nn.MaxPool2d(kernel_size=2, stride=2),
+        )
+
+        self.convlayers2 = nn.Sequential(
             nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
             nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(),
-            nn.MaxPool2d(2, 2, padding='same'),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+        )
+
+        self.pre_util_conv = nn.Sequential(
+            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(25, 5, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(5), self.activation(),
+        )
+
+        self.utility_head = nn.Sequential(
+            nn.Linear(5 * 6 * 6, 16, bias=True),
+            self.activation(),
+            nn.Linear(16, 1, bias=True), 
+            nn.Sigmoid()
+        ) 
+
+        self.pre_num_layer_conv = nn.Sequential(
+            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
             nn.Conv2d(25, 5, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(5), self.activation(),
         )
         
         self.num_layer_head = nn.Sequential(
-            nn.Linear(5 * 8 * 8, 36, bias=True),
-            nn.ReLU(inplace=True),
-            nn.Linear(36, 1, bias=True),
-            nn.Softplus()
+            nn.Linear(5 * 6 * 6, 16, bias=True),
+            self.activation(),
+            nn.Linear(16, 1, bias=True),
+            nn.ReLU(inplace=True)
         )
         
     def forward(self, x):
@@ -377,17 +387,15 @@ class EvecSQNet(nn.Module):
         x = self.convlayers2(x)
         x = self.dropout(x)
 
-        x_nlvl = self.pre_nlvl_conv(x)
-        x_nlvl = torch.flatten(x_nlvl, 1)
-        x_nlvl = self.dropout(x_nlvl)
-        nlvl = self.num_layer_head(x_nlvl)
+        x_nlvl = self.pre_num_layer_conv(x)
+        x_nlvl = self.dropout(torch.flatten(x_nlvl, 1))
+        nlvl = self.num_layer_head(x_nlvl) + 1
 
-        x = self.pre_util_conv(x)
-        x = torch.flatten(x, 1)
-        x = self.dropout(x)
-        util = self.utility_head(x)
+        x_util = self.pre_util_conv(x)
+        x_util = self.dropout(torch.flatten(x_util, 1))
+        util = self.utility_head(x_util)
 
-        return util, nlvl + 1
+        return util, nlvl
 
 
 class EvecNetMulti3(nn.Module):
@@ -447,7 +455,7 @@ class EvecNetMulti3(nn.Module):
             nn.ReLU(inplace=True)
         )
 
-        self.num_layer_head = nn.Sequential(nn.Linear(20, 1), nn.Softplus())
+        self.num_layer_head = nn.Sequential(nn.Linear(20, 1), nn.ReLU(inplace=True))
         
     def forward(self, x):
         x = self.convlayers1(x)
@@ -525,7 +533,9 @@ class EvecNetMulti2(nn.Module):
             nn.ReLU(inplace=True)
         )
 
-        self.num_layer_head = nn.Linear(20, 17)
+        self.num_layer_head = nn.Sequential(
+            nn.Linear(20, 1, bias=True),
+        )
         
     def forward(self, x):
         x = self.convlayers1(x)
@@ -577,29 +587,30 @@ class EvecSQNet2(nn.Module):
         self.convlayers3 = nn.Sequential(
             nn.Conv2d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
             # nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(24, 36, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(36, eps=0.01), self.activation(),
-            # nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(24, 16, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
         )
 
         self.convlayers4 = nn.Sequential(
             nn.Conv2d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
             # nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(24, 36, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(36, eps=0.01), self.activation(),
-            # nn.MaxPool2d(kernel_size=2, stride=2),
-        )
-
-
-        self.pre_predictor = nn.Sequential(
-            nn.Linear(36 * 6 * 6, 72),
-            nn.ReLU(inplace=True)
+            nn.Conv2d(24, 16, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
         )
 
         self.utility_head = nn.Sequential(
-            nn.Linear(72, 1), 
+            nn.Linear(16 * 6 * 6, 36),
+            nn.ReLU(inplace=True),
+            nn.Linear(36, 1), 
             nn.Sigmoid()
         ) 
 
-        self.num_layer_head = nn.Linear(72, 17)
+        self.num_layer_head = nn.Sequential(
+            nn.Linear(16 * 6 * 6, 36),
+            nn.ReLU(inplace=True),
+            nn.Linear(36, 1), 
+            nn.Softplus()
+        ) 
         
     def forward(self, x):
         x = self.expand_evecs(x)
@@ -617,12 +628,7 @@ class EvecSQNet2(nn.Module):
         x = self.dropout(x)
 
         x = torch.flatten(x, 1)
-        x = self.pre_predictor(x)
-        x = self.dropout(x)
-
         y = torch.flatten(y, 1)
-        y = self.pre_predictor(y)
-        y = self.dropout(y)
         return self.utility_head(x), self.num_layer_head(y)
 
 
@@ -631,18 +637,18 @@ class EvecSQNet3(EvecSQNet2):
         super().__init__()
         self.dropout = nn.Dropout(0.2)
         self.convlayers1 = nn.Sequential(
-            nn.Conv2d(20, 20, kernel_size=5, padding='same', groups=20), nn.InstanceNorm2d(20, eps=0.01), self.activation(),
+            nn.Conv2d(16, 16, kernel_size=5, padding='same', groups=16), nn.InstanceNorm2d(16), self.activation(),
             nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(20, 6, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(6, eps=0.01), self.activation(),
+            nn.Conv2d(16, 6, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(6), self.activation(),
             nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(6, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), self.activation(), 
+            nn.Conv2d(6, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12), self.activation(), 
         )
 
 
 AVAL_MODELS = {
     'EvecNetMulti2': EvecNetMulti2,
     'EvecNetMulti3': EvecNetMulti3,
-    'EvecSQNet': EvecSQNet,
+    'EvecSQNetC': EvecSQNetC,
     'EvecSQNet2': EvecSQNet2,
     'EvecSQNet3': EvecSQNet3,
 }

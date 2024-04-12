@@ -12,3 +12,7 @@ __pycache__
 .ipynb*
 
 *.pdf
+
+202404*
+
+*.ipynb

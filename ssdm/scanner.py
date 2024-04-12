@@ -533,7 +533,9 @@ class EvecNetMulti2(nn.Module):
             nn.ReLU(inplace=True)
         )
 
-        self.num_layer_head = nn.Linear(20, 17)
+        self.num_layer_head = nn.Sequential(
+            nn.Linear(20, 1, bias=True),
+        )
         
     def forward(self, x):
         x = self.convlayers1(x)
@@ -585,34 +587,30 @@ class EvecSQNet2(nn.Module):
         self.convlayers3 = nn.Sequential(
             nn.Conv2d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
             # nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(24, 36, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(36, eps=0.01), self.activation(),
-            # nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(24, 16, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
         )
 
         self.convlayers4 = nn.Sequential(
             nn.Conv2d(24, 24, kernel_size=7, padding='same', bias=False), nn.InstanceNorm2d(24, eps=0.01), self.activation(),
             # nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(24, 36, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(36, eps=0.01), self.activation(),
-            # nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(24, 16, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(16, eps=0.01), self.activation(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
         )
 
-
-
         self.utility_head = nn.Sequential(
-            nn.Linear(36 * 6 * 6, 72),
+            nn.Linear(16 * 6 * 6, 36),
             nn.ReLU(inplace=True),
-            nn.Linear(72, 1), 
+            nn.Linear(36, 1), 
             nn.Sigmoid()
         ) 
 
-        self.num_layer_head = nn.Linear(72, 17)
-
         self.num_layer_head = nn.Sequential(
-            nn.Linear(72, 17, bias=True),
-            self.activation(),
-            nn.Linear(18, 1, bias=True),
+            nn.Linear(16 * 6 * 6, 36),
+            nn.ReLU(inplace=True),
+            nn.Linear(36, 1), 
             nn.Softplus()
-        )
+        ) 
         
     def forward(self, x):
         x = self.expand_evecs(x)
@@ -639,11 +637,11 @@ class EvecSQNet3(EvecSQNet2):
         super().__init__()
         self.dropout = nn.Dropout(0.2)
         self.convlayers1 = nn.Sequential(
-            nn.Conv2d(20, 20, kernel_size=5, padding='same', groups=20), nn.InstanceNorm2d(20, eps=0.01), self.activation(),
+            nn.Conv2d(16, 16, kernel_size=5, padding='same', groups=16), nn.InstanceNorm2d(16), self.activation(),
             nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(20, 6, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(6, eps=0.01), self.activation(),
+            nn.Conv2d(16, 6, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(6), self.activation(),
             nn.MaxPool2d(kernel_size=3, stride=3),
-            nn.Conv2d(6, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12, eps=0.01), self.activation(), 
+            nn.Conv2d(6, 12, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(12), self.activation(), 
         )
 
 

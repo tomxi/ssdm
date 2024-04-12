@@ -43,8 +43,20 @@ def get_ids(
     ids.sort()
     return ids
 
-def get_samps(split):
+def get_samps_tau(split):
     with open('/Users/tomxi/ssdm/ssdm/labels.json', 'r') as f:
+        labels = json.load(f)
+
+    for k in labels:
+        labels[k] = {
+            tuple(k.replace('(', '').replace(')', '').replace("'", '').split(', ')): value for k, value in labels[k].items()
+        }
+
+    return labels[f'hmx_{split}_labels']
+
+
+def get_samps_score(split):
+    with open('/Users/tomxi/ssdm/ssdm/score_based_labels.json', 'r') as f:
         labels = json.load(f)
 
     for k in labels:
@@ -57,7 +69,7 @@ def get_samps(split):
 
 class NewDS(base.DS):
     def __init__(self, split='train', tids=None, infer=True, 
-                 sample_select_fn=get_samps, **kwargs):
+                 sample_select_fn=get_samps_tau, **kwargs):
         self.name = 'hmx'
 
         if tids is None:

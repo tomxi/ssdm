@@ -25,7 +25,10 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-5', LS='sc
     print(experiment_id_str)
 
     # setup device
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    if torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(device)
 
     # Initialize network based on model_id:
@@ -36,27 +39,29 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-5', LS='sc
     optimizer = optim.AdamW(net.parameters(), weight_decay=float(WDM))
 
     lr_scheduler = optim.lr_scheduler.CyclicLR(
-        optimizer, base_lr=1e-9, max_lr=1e-4, cycle_momentum=False, mode='triangular', step_size_up=1000
+        optimizer, base_lr=1e-6, max_lr=1e-3, cycle_momentum=False, mode='triangular2', step_size_up=1000
     )
 
     # setup dataloaders   
     # augmentor = lambda x: scn.time_mask(x, T=100, num_masks=4, replace_with_zero=False, tau=TAU_TYPE)
     augmentor = None
-    # if LS == 'score':
-    # #     sample_selector = ssdm.select_samples_using_outstanding_l_score
-    #     sample_selector = ssdm.sel_samp_l
-    # elif LS == 'tau':
-    #     sample_selector = ssdm.select_samples_using_tau_percentile
-    # else:
-    #     print('bad learning signal: score or tau')
-    
+    if LS == 'score':
+        # sample_selector = ssdm.select_samples_using_outstanding_l_score
+        hmx_sample_selector = hmx.get_samps_score
+        slm_sample_selector = slm.get_samps_score
+    elif LS == 'tau':
+        hmx_sample_selector = hmx.get_samps_tau
+        slm_sample_selector = slm.get_samps_tau
+    else:
+        print('bad learning signal: score or tau')
+
 
     if DS == 'slm':
-        train_dataset = slm.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, beat_sync=True)
-        val_dataset = slm.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, beat_sync=True)
+        train_dataset = slm.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, beat_sync=True, sample_select_fn=slm_sample_selector)
+        val_dataset = slm.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, beat_sync=True,  sample_select_fn=slm_sample_selector)
     elif DS == 'hmx':
-        train_dataset = hmx.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, beat_sync=True)
-        val_dataset = hmx.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, beat_sync=True)
+        train_dataset = hmx.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, beat_sync=True,  sample_select_fn=hmx_sample_selector)
+        val_dataset = hmx.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, beat_sync=True, sample_select_fn=hmx_sample_selector)
     else:
         print('bad DS')
 
@@ -129,12 +134,12 @@ if __name__ == '__main__':
     config_list = list(itertools.product(
         ['EvecSQNetC'],
         ['slm', 'hmx'],
-        ['score', 'tau'],
+        ['tau'],
     ))
 
     model_id, dataset, ls = config_list[int(parser.parse_args().config_idx)]
-    total_epoch = 10
-    date = 20240411
+    total_epoch = 30
+    date = 20240412
     loss_type = 'multi'
     wd = 2e-3
     # ls = 'score'

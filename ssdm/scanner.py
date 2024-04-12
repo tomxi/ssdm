@@ -329,10 +329,17 @@ class EvecSQNet_old(nn.Module):
 class EvecSQNetC(nn.Module):
     def __init__(self):
         super().__init__()
+        if torch.cuda.is_available():
+            self.device=torch.device('cuda')
+        elif torch.backends.mps.is_available():
+            self.device=torch.device('mps')
+        else:
+            self.device='cpu'
+
         self.activation = nn.ReLU
         self.dropout = nn.Dropout(0.15)
         self.expand_evecs = ExpandEvecs()
-        self.adamaxpool = nn.AdaptiveMaxPool2d((96, 96))
+        
     
         self.convlayers1 = nn.Sequential(
             nn.Conv2d(16, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16), self.activation(),
@@ -377,13 +384,17 @@ class EvecSQNetC(nn.Module):
             nn.Linear(900, 1, bias=True),
             nn.Softplus()
         )
+
+        self.to(self.device)
+        self.adamaxpool = nn.AdaptiveMaxPool2d((96, 96)).to('cpu')
         
     def forward(self, x):
         x = self.expand_evecs(x)
         x = self.convlayers1(x)
         x = self.dropout(x)
-        x = self.adamaxpool(x)
-        x = self.convlayers2(x)
+
+        x = self.adamaxpool(x.to('cpu'))
+        x = self.convlayers2(x.to(self.device))
         x = self.dropout(x)
 
         x_nlvl = self.pre_num_layer_conv(x)

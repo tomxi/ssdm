@@ -127,9 +127,9 @@ if __name__ == '__main__':
     parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
     
     config_list = list(itertools.product(
-        ['EvecNetMulti2', 'EvecSQNet3'],
+        ['EvecSQNetC'],
         ['slm', 'hmx'],
-        ['score'],
+        ['score', 'tau'],
     ))
 
     model_id, dataset, ls = config_list[int(parser.parse_args().config_idx)]

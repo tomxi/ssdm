@@ -36,11 +36,13 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-5', LS='sc
 
     utility_loss = torch.nn.BCELoss()
     num_layer_loss = torch.nn.MSELoss()
-    optimizer = optim.AdamW(net.parameters(), weight_decay=float(WDM))
+    # optimizer = optim.AdamW(net.parameters(), weight_decay=float(WDM))
+    optimizer = optim.SGD(net.parameters(), weight_decay=float(WDM))
+    # lr_scheduler = optim.lr_scheduler.CyclicLR(
+    #     optimizer, base_lr=1e-6, max_lr=1e-3, cycle_momentum=False, mode='triangular2', step_size_up=4000
+    # )
+    lr_scheduler = None
 
-    lr_scheduler = optim.lr_scheduler.CyclicLR(
-        optimizer, base_lr=1e-6, max_lr=1e-3, cycle_momentum=False, mode='triangular2', step_size_up=1000
-    )
 
     # setup dataloaders   
     # augmentor = lambda x: scn.time_mask(x, T=100, num_masks=4, replace_with_zero=False, tau=TAU_TYPE)
@@ -134,7 +136,7 @@ if __name__ == '__main__':
     config_list = list(itertools.product(
         ['EvecSQNetC'],
         ['slm', 'hmx'],
-        ['tau'],
+        ['tau', 'score'],
     ))
 
     model_id, dataset, ls = config_list[int(parser.parse_args().config_idx)]

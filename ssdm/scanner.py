@@ -367,6 +367,7 @@ class EvecSQNetC(nn.Module):
 
         self.utility_head = nn.Sequential(
             nn.Linear(25 * 6 * 6, 900, bias=False),
+            self.dropout,
             self.activation(),
             nn.Linear(900, 1, bias=True), 
             nn.Sigmoid()
@@ -380,6 +381,7 @@ class EvecSQNetC(nn.Module):
         
         self.num_layer_head = nn.Sequential(
             nn.Linear(25 * 6 * 6, 900, bias=False),
+            self.dropout,
             self.activation(),
             nn.Linear(900, 1, bias=True),
             nn.Softplus()
@@ -391,20 +393,19 @@ class EvecSQNetC(nn.Module):
     def forward(self, x):
         x = self.expand_evecs(x)
         x = self.convlayers1(x)
-        x = self.dropout(x)
+        # x = self.dropout(x)
 
         x = self.adamaxpool(x.to('cpu'))
         x = self.convlayers2(x.to(self.device))
-        x = self.dropout(x)
+        # x = self.dropout(x)
 
         x_nlvl = self.pre_num_layer_conv(x)
-        x_nlvl = self.dropout(torch.flatten(x_nlvl, 1))
+        x_nlvl = torch.flatten(x_nlvl, 1)
         nlvl = self.num_layer_head(x_nlvl) + 1
 
         x_util = self.pre_util_conv(x)
-        x_util = self.dropout(torch.flatten(x_util, 1))
+        x_util = torch.flatten(x_util, 1)
         util = self.utility_head(x_util)
-
         return util, nlvl
 
 

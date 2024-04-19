@@ -32,7 +32,6 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-5', LS='sc
     net = scn.AVAL_MODELS[MODEL_ID]().to(device)
 
     utility_loss = torch.nn.BCELoss()
-    num_layer_loss = torch.nn.MSELoss()
     optimizer = optim.AdamW(net.parameters(), weight_decay=float(WDM))
 
     lr_scheduler = optim.lr_scheduler.CyclicLR(
@@ -52,66 +51,44 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-5', LS='sc
     
 
     if DS == 'slm':
-        train_dataset = slm.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM,
-                                  sample_select_fn=sample_selector, beat_sync=True)
-        val_dataset = slm.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, 
-                                sample_select_fn=sample_selector, beat_sync=True)
+        train_dataset = slm.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, sample_select_fn=sample_selector, beat_sync=True)
+        val_dataset = slm.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, sample_select_fn=sample_selector, beat_sync=True)
     elif DS == 'hmx':
-        train_dataset = hmx.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM,
-                                  sample_select_fn=sample_selector, beat_sync=True)
-        val_dataset = hmx.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, 
-                                sample_select_fn=sample_selector, beat_sync=True)
+        train_dataset = hmx.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM, sample_select_fn=sample_selector, beat_sync=True)
+        val_dataset = hmx.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, sample_select_fn=sample_selector, beat_sync=True)
     else:
         print('bad DS')
 
     train_loader = DataLoader(train_dataset, batch_size=None, shuffle=True)
 
     # pretrain check-up
-    net_eval_val = scn.net_eval_multi_loss(val_dataset, net, utility_loss, num_layer_loss, device, verbose=True)
-    best_u_loss = net_eval_val.u_loss.mean()
-    best_lvl_loss = net_eval_val.loc[net_eval_val.label == 1].lvl_loss.mean()
-    best_weighted_loss = best_u_loss + best_lvl_loss/10
+    net_eval_val = scn.net_eval(val_dataset, net, utility_loss, device, verbose=True)
+    best_loss = net_eval_val.loss.mean()
 
     # simple logging
     val_losses = []
     train_losses = []
-    weighted_losses = []
 
     for epoch in tqdm(range(int(EPOCH))):
-        training_loss = scn.train_multi_loss(train_loader, net, utility_loss, num_layer_loss, optimizer, lr_scheduler=lr_scheduler, device=device, loss_type=LOSS_TYPE)
-        net_eval_val = scn.net_eval_multi_loss(val_dataset, net, utility_loss, num_layer_loss, device)
-        u_loss = net_eval_val.u_loss.mean()
-        lvl_loss = net_eval_val.loc[net_eval_val.label == 1].lvl_loss.mean()
-        val_loss = (u_loss, lvl_loss)
-        weighted_val_loss = u_loss + lvl_loss/10
-        
-        print(epoch, training_loss, val_loss, weighted_val_loss)
-        val_losses.append(val_loss)
+        training_loss = scn.train_epoch(train_loader, net, utility_loss, optimizer, lr_scheduler=lr_scheduler, device=device)
+        net_eval_val = scn.net_eval(val_dataset, net, utility_loss, device)
+
+        loss = net_eval_val.loss.mean()
+        # accu = (net_eval_val.pred == net_eval_val.label).mean()
+        print(epoch, training_loss, loss)
+        val_losses.append(loss)
+        # val_accus.append(accu)
         train_losses.append(training_loss)
-        weighted_losses.append(weighted_val_loss)
         
-        if u_loss < best_u_loss:
+        if loss < best_loss:
             # update best_loss and save model
-            best_u_loss = u_loss
+            best_loss = loss
             best_state = net.state_dict()
-            torch.save(best_state, f'{experiment_id_str}_best_util')
+            torch.save(best_state, f'{experiment_id_str}')
 
-        if lvl_loss < best_lvl_loss:
-            # update best_loss and save model
-            best_lvl_loss = lvl_loss
-            best_state = net.state_dict()
-            torch.save(best_state, f'{experiment_id_str}_best_nlvl')
-
-        if weighted_val_loss < best_weighted_loss:
-            # update best_loss and save model
-            best_weighted_loss = weighted_val_loss
-            best_state = net.state_dict()
-            torch.save(best_state, f'{experiment_id_str}_best_weighted')
-        
         # save simple log as json
         trainning_info = {'train_loss': train_losses,
                           'val_loss': val_losses,
-                          'weighted_loss': weighted_losses,
                           }
         with open(f'{experiment_id_str}epoch.json', 'w') as file:
             json.dump(trainning_info, file)
@@ -131,15 +108,14 @@ if __name__ == '__main__':
     parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
     
     config_list = list(itertools.product(
-        ['EvecSQNetC'],
-        ['slm', 'hmx'],
-        ['score', 'tau'],
+        ['EvecNet'],
+        ['tau'],
     ))
 
     model_id, dataset, ls = config_list[int(parser.parse_args().config_idx)]
-    total_epoch = 10
-    date = 20240411
-    loss_type = 'multi'
+    total_epoch = 30
+    date = 202404011
+    loss_type = 'single'
     wd = 2e-3
     # ls = 'score'
     lap_norm = 'random_walk'

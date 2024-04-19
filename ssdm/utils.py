@@ -243,13 +243,14 @@ def pick_by_taus(
     return out
 
 
-def pick_by_net(ds, model_path='', return_raw_result=False, recollect=False):
+def pick_by_net(ds, model_path='', return_raw_result=False, recollect=False, multi_loss=False):
     assert ds.mode == 'both'
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     #extract info from model_path
     model_basename = os.path.basename(model_path)
     # Check for cached inference results:
-    infer_result_fp = os.path.join(ds.output_dir, f'tauhats/{model_basename}_{ds}.nc')
+    ml_str = 'multi_loss' if multi_loss else ''
+    infer_result_fp = os.path.join(ds.output_dir, f'tauhats/{model_basename}_{ds}{ml_str}.nc')
     try:
         if recollect:
             raise NotImplementedError
@@ -272,24 +273,35 @@ def pick_by_net(ds, model_path='', return_raw_result=False, recollect=False):
         state_dict = torch.load(model_path, map_location=device)
         net.load_state_dict(state_dict=state_dict)
         if not ds.infer:
-            return scn.net_eval_multi_loss(ds, net, nn.BCELoss(), nn.MSELoss(), device=device)
+            if multi_loss:
+                return scn.net_eval_multi_loss(ds, net, nn.BCELoss(), nn.MSELoss(), device=device)
+            else:
+                return scn.net_eval(ds, net, nn.BCELoss(), device=device)
         else:
-            inference_result = scn.net_infer_multi_loss(ds, net=net, device=device)
+            if multi_loss:
+                inference_result = scn.net_infer_multi_loss(ds, net=net, device=device)
+            else:
+                inference_result = scn.net_infer(ds, net=net, device=device)
     try:
         inference_result.to_netcdf(infer_result_fp)
     except:
         print('failed to cache result...')
 
+    # return inference_result
     # Return either the raw inference result or the best choosen scores
     if return_raw_result:
         return inference_result
     else:
         # collection
-        util_score = inference_result.loc[:, :, :, 'util']
-        nlvl_score = inference_result.loc[:, :, :, 'nlvl']
-        best_chocie_idx = util_score.argmax(dim=['rep_ftype', 'loc_ftype'])
-        best_chocie_idx
-        return nlvl_score.isel(best_chocie_idx).clip(max=16, min=2) # from index to layer
+        if multi_loss:
+            util_score = inference_result.loc[:, :, :, 'util']
+            nlvl_score = inference_result.loc[:, :, :, 'nlvl']
+            best_chocie_idx = util_score.argmax(dim=['rep_ftype', 'loc_ftype'])
+            best_chocie_idx
+            return nlvl_score.isel(best_chocie_idx).clip(max=16, min=2) # from index to layer
+        else:
+            best_chocie_idx = inference_result.argmax(dim=['rep_ftype', 'loc_ftype'])
+            return inference_result.isel(best_chocie_idx) # from index to layer
 
 
 def quantize(data, quantize_method='percentile', quant_bins=8):
@@ -582,7 +594,7 @@ def adjusted_best_layer(cube, tolerance=0):
 
 
 # Sample selection functions
-def select_samples_using_tau_percentile(ds, low=25, high=75):
+def select_samples_using_tau_percentile(ds, low=30, high=90):
     ds_scores_full = get_lsd_scores(ds, heir=True, beat_sync=ds.beat_sync).sel(m_type='f')
     # best_layer_scores = ds_scores_full.max('layer')
     best_layers = adjusted_best_layer(ds_scores_full, tolerance=0)
@@ -609,7 +621,7 @@ def select_samples_using_tau_percentile(ds, low=25, high=75):
     return {**neg_samples, **pos_samples}
 
 
-def sel_samp_l(ds, m_type='f', recollect=False):
+def sel_samp_l(ds, m_type='f', recollect=False, high=75, low=35):
     # It should be in the top 1/3 of all the scores in a track
     # AND
     # It should be in the top 1/3 of all l scores
@@ -620,14 +632,14 @@ def sel_samp_l(ds, m_type='f', recollect=False):
     train_ds = type(ds)(split='train', mode=ds.mode, infer=True, beat_sync=ds.beat_sync)
     train_scores_full = get_lsd_scores(train_ds)
     best_layer_scores_train = train_scores_full.max('layer')
-    train_ds_low_cut = np.percentile(best_layer_scores_train, 33)
-    train_ds_high_cut = np.percentile(best_layer_scores_train, 66)
+    train_ds_low_cut = np.percentile(best_layer_scores_train, low)
+    train_ds_high_cut = np.percentile(best_layer_scores_train, high)
 
     per_track_hc=dict()
     per_track_lc=dict()
     for tr in best_layer_scores:
-        per_track_lc[tr.tid.item()] = np.percentile(tr, 33)
-        per_track_hc[tr.tid.item()] = np.percentile(tr, 66)
+        per_track_lc[tr.tid.item()] = np.percentile(tr, low)
+        per_track_hc[tr.tid.item()] = np.percentile(tr, high)
     per_track_lc = xr.DataArray(
         list(per_track_lc.values()), 
         coords={'tid': list(per_track_lc.keys())}, 

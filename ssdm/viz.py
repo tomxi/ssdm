@@ -12,6 +12,33 @@ import json
 import xarray as xr
 
 
+def scatter_scores(
+    x_data: pd.Series, 
+    y_data: pd.Series,
+    title: str = 'L scores per track',
+    xlabel: str = 'x label',
+    ylabel: str = 'y label',
+    ax: any = None,
+) -> matplotlib.axes._axes.Axes:
+    if ax is None:
+        _, ax = plt.subplots()
+
+    ax.scatter(
+        x=x_data, 
+        y=y_data, 
+        alpha=0.5, 
+        s=3, 
+    )
+    ax.set_xlim((0,1))
+    ax.set_ylim((0,1))
+    ax.plot([0,1], [0,1], 'r:')
+    ax.set_aspect('equal', 'box')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    return ax
+
+
 def anno_meet_mats(track, mode='expand'):
     """
     mode can be one of {'normal', 'expand', 'refine', 'coarse'}

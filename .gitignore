@@ -2,6 +2,8 @@
 
 sbatch/
 notebooks/
+new_nbs/
+figs/
 *.out
 *.sbatch
 *_old.py

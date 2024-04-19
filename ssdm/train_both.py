@@ -59,7 +59,6 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE='both', DS='hmx', LS='score'):
 
     # simple logging
     val_losses = []
-    val_accus = []
     train_losses = []
 
     for epoch in tqdm(range(int(EPOCH))):
@@ -67,10 +66,10 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE='both', DS='hmx', LS='score'):
         net_eval_val = scn.net_eval(val_dataset, net, criterion, device)
 
         loss = net_eval_val.loss.mean()
-        accu = (net_eval_val.pred == net_eval_val.label).mean()
-        print(epoch, training_loss, loss, accu)
+        # accu = (net_eval_val.pred == net_eval_val.label).mean()
+        print(epoch, training_loss, loss)
         val_losses.append(loss)
-        val_accus.append(accu)
+        # val_accus.append(accu)
         train_losses.append(training_loss)
         
         if loss < best_loss:
@@ -81,8 +80,7 @@ def train(MODEL_ID, EPOCH, DATE, TAU_TYPE='both', DS='hmx', LS='score'):
         
         # save simple log as json
         trainning_info = {'train_loss': train_losses,
-                        'val_loss': val_losses,
-                        'val_accu': val_accus}
+                        'val_loss': val_losses,}
         with open(f'{DATE}{MODEL_ID}_{DS}{LS}{TAU_TYPE}_{EPOCH}epoch.json', 'w') as file:
             json.dump(trainning_info, file)
 

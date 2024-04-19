@@ -219,7 +219,6 @@ class TempSwish(nn.Module):
         x = x * nn.functional.sigmoid(self.beta * x)
         return x
 
-
 ## Evec Layer
 class ExpandEvecs(nn.Module):
     def __init__(self, max_lvl=16):
@@ -356,27 +355,27 @@ class EvecSQNetC(nn.Module):
         self.pre_util_conv = nn.Sequential(
             nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(25, 5, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(5), self.activation(),
+            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(),
         )
 
         self.utility_head = nn.Sequential(
-            nn.Linear(5 * 6 * 6, 16, bias=True),
+            nn.Linear(25 * 6 * 6, 900, bias=False),
             self.activation(),
-            nn.Linear(16, 1, bias=True), 
+            nn.Linear(900, 1, bias=True), 
             nn.Sigmoid()
         ) 
 
         self.pre_num_layer_conv = nn.Sequential(
             nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(25, 5, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(5), self.activation(),
+            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25), self.activation(),
         )
         
         self.num_layer_head = nn.Sequential(
-            nn.Linear(5 * 6 * 6, 16, bias=True),
+            nn.Linear(25 * 6 * 6, 900, bias=False),
             self.activation(),
-            nn.Linear(16, 1, bias=True),
-            nn.ReLU(inplace=True)
+            nn.Linear(900, 1, bias=True),
+            nn.Softplus()
         )
         
     def forward(self, x):

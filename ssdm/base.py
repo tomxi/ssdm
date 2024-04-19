@@ -1,4 +1,5 @@
 import ssdm
+import ssdm.formatting
 import ssdm.utils
 from ssdm import scluster
 from . import feature
@@ -164,9 +165,9 @@ class Track(object):
         
         anno = fill_out_anno(seg_anns[0], self.ts(mode=ts_mode))
         if mode == 'expand':
-            return ssdm.openseg2multi(expand_hierarchy(anno))
+            return ssdm.formatting.openseg2multi(expand_hierarchy(anno))
         elif mode == 'normal':
-            return ssdm.openseg2multi([anno])
+            return ssdm.formatting.openseg2multi([anno])
 
 
     def path_ref(
@@ -655,7 +656,7 @@ class Track(object):
     def num_dist_segs(self):
         num_seg_per_anno = []
         for aid in range(self.num_annos()):
-            ref_anno = ssdm.multi2openseg(self.ref(mode='normal'))
+            ref_anno = ssdm.formatting.multi2openseg(self.ref(mode='normal'))
             segs = []
             for obs in ref_anno:
                 segs.append(obs.value)

@@ -1,4 +1,3 @@
-
 import xarray as xr
 import pandas as pd
 import numpy as np
@@ -12,9 +11,9 @@ import jams, mir_eval
 import ssdm
 import ssdm.scluster as sc
 import ssdm.scanner as scn
+from ssdm.formatting import mireval2multi, multi2hier, multi2mireval
 from torch import nn
 
-import scipy
 
 def anno_to_meet(
     anno: jams.Annotation,  # multi-layer
@@ -100,7 +99,7 @@ def compute_flat(
     a_layer = -1
 ) -> np.array:
     # TODO change the following 2 lines
-    ref_inter, ref_labels = ssdm.multi2mirevalflat(annotation, layer=a_layer) # Which anno layer?
+    ref_inter, ref_labels = ssdm.formatting.multi2mirevalflat(annotation, layer=a_layer) # Which anno layer?
 
     num_prop_layers = len(multi2hier(proposal))
 
@@ -112,7 +111,7 @@ def compute_flat(
     )
     results = xr.DataArray(data=None, coords=results_dim, dims=list(results_dim.keys()))
     for p_layer in range(num_prop_layers):
-        est_inter, est_labels = ssdm.multi2mirevalflat(proposal, layer=p_layer)
+        est_inter, est_labels = ssdm.formatting.multi2mirevalflat(proposal, layer=p_layer)
         # make last segment for estimation end at the same time as annotation
         end_time = max(ref_inter[-1, 1], est_inter[-1, 1])
         ref_inter[-1, 1] = end_time
@@ -130,91 +129,6 @@ def compute_flat(
     return results
 
 
-### Formatting functions ###
-def multi2hier(anno)-> list:
-    n_lvl_list = [obs.value['level'] for obs in anno]
-    n_lvl = max(n_lvl_list) + 1
-    hier = [[[],[]] for i in range(n_lvl)]
-    for obs in anno:
-        lvl = obs.value['level']
-        label = obs.value['label']
-        interval = [obs.time, obs.time+obs.duration]
-        hier[lvl][0].append(interval)
-        hier[lvl][1].append(f'{label}')
-    return hier
-
-
-def hier2multi(hier) -> jams.Annotation:
-    anno = jams.Annotation(namespace='multi_segment')
-    for layer, (intervals, labels) in enumerate(hier):
-        for ival, label in zip(intervals, labels):
-            anno.append(time=ival[0], 
-                        duration=ival[1]-ival[0],
-                        value={'label': str(label), 'level': layer})
-    return anno
-
-
-def hier2mireval(hier) -> tuple:
-    intervals = []
-    labels = []
-    for itv, lbl in hier:
-        intervals.append(np.array(itv, dtype=float))
-        labels.append(lbl)
-
-    return intervals, labels
-
-
-def mireval2hier(itvls: np.ndarray, labels: list) -> list:
-    hier = []
-    n_lvl = len(labels)
-    for lvl in range(n_lvl):
-        lvl_anno = [itvls[lvl], labels[lvl]]
-        hier.append(lvl_anno)
-    return hier
-
-
-def multi2mireval(anno) -> tuple:
-    return hier2mireval(multi2hier(anno))
-
-
-def mireval2multi(itvls: np.ndarray, labels: list) -> jams.Annotation:
-    return hier2multi(mireval2hier(itvls, labels))
-
-
-def openseg2multi(
-    annos: list
-) -> jams.Annotation:
-    multi_anno = jams.Annotation(namespace='multi_segment')
-
-    for lvl, openseg in enumerate(annos):
-        for obs in openseg:
-            multi_anno.append(time=obs.time,
-                              duration=obs.duration,
-                              value={'label': obs.value, 'level': lvl},
-                             )  
-    return multi_anno
-
-
-def multi2mirevalflat(multi_anno, layer=-1):
-    all_itvls, all_labels = multi2mireval(multi_anno)
-    return all_itvls[layer], all_labels[layer]
-
-
-def multi2openseg(multi_anno, layer=-1):
-    itvls, labels = multi2mirevalflat(multi_anno, layer)
-    anno = jams.Annotation(namespace='segment_open')
-    for ival, label in zip(itvls, labels):
-        anno.append(time=ival[0], 
-                    duration=ival[1]-ival[0],
-                    value=str(label))
-    return anno
-
-
-def openseg2mirevalflat(openseg_anno):
-    return multi2mirevalflat(openseg2multi([openseg_anno]))
-
-
-### END OF FORMATTING FUNCTIONS###
 def pick_by_taus(
     scores_grid: xr.DataArray, # tids * num_feat * num_feat
     rep_taus: xr.DataArray, # tids * num_feat
@@ -328,6 +242,41 @@ def quantize(data, quantize_method='percentile', quant_bins=8):
         assert('bad quantize method')
 
     return quant_data_flat.reshape(data_shape)
+
+
+def laplacian(rec_mat, normalization='random_walk'):
+    degree_matrix = np.diag(np.sum(rec_mat, axis=1))
+    unnormalized_laplacian = degree_matrix - rec_mat
+    # Compute the Random Walk normalized Laplacian matrix
+    if normalization == 'random_walk':
+        degree_inv = np.linalg.inv(degree_matrix)
+        return degree_inv @ unnormalized_laplacian       
+    elif normalization == 'symmetrical':
+        sqrt_degree_inv = np.linalg.inv(np.sqrt(degree_matrix))
+        return sqrt_degree_inv @ unnormalized_laplacian @ sqrt_degree_inv
+    elif normalization == None:
+        return unnormalized_laplacian
+    else:
+        raise NotImplementedError(f'bad laplacian normalization mode: {normalization}')
+
+
+# Create test train val splits on the fly, but with random seed.
+def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
+    dev_set, test_set = train_test_split(arr, test_size = test_ratio, random_state = random_state)
+    train_set, val_set = train_test_split(dev_set, test_size = val_ratio / (1 - test_ratio), random_state = random_state)
+    train_set.sort()
+    val_set.sort()
+    test_set.sort()
+    return dict(train=train_set, val=val_set, test=test_set)
+
+
+def adjusted_best_layer(cube, tolerance=0):
+    max_score_over_layer = cube.max('layer')
+    # We can tolerate a bit of perforamcne, so let's take that off from the max
+    thresh = max_score_over_layer - tolerance
+    # The first layer over threshold
+    over_thresh = cube >= thresh
+    return over_thresh.idxmax('layer')
 
 
 # HELPER functin to run laplacean spectral decomposition TODO this is where the rescaling happens
@@ -574,25 +523,6 @@ def dev_deploy_perf(
     return deploy_naive_perf, deploy_tau_perf, (dev_rep_pick, dev_loc_pick)
 
 
-# Create test train val splits on the fly, but with random seed.
-def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
-    dev_set, test_set = train_test_split(arr, test_size = test_ratio, random_state = random_state)
-    train_set, val_set = train_test_split(dev_set, test_size = val_ratio / (1 - test_ratio), random_state = random_state)
-    train_set.sort()
-    val_set.sort()
-    test_set.sort()
-    return dict(train=train_set, val=val_set, test=test_set)
-
-
-def adjusted_best_layer(cube, tolerance=0):
-    max_score_over_layer = cube.max('layer')
-    # We can tolerate a bit of perforamcne, so let's take that off from the max
-    thresh = max_score_over_layer - tolerance
-    # The first layer over threshold
-    over_thresh = cube >= thresh
-    return over_thresh.idxmax('layer')
-
-
 # Sample selection functions
 def select_samples_using_tau_percentile(ds, low=30, high=90):
     ds_scores_full = get_lsd_scores(ds, heir=True, beat_sync=ds.beat_sync).sel(m_type='f')
@@ -669,9 +599,6 @@ def sel_samp_l(ds, m_type='f', recollect=False, high=75, low=35):
 
     print(f'{ds} has \n \t {len(pos_samples)} pos samples; {len(neg_samples)} neg samples.')
     return {**neg_samples, **pos_samples}
-
-
-
 
 
 def select_samples_using_outstanding_l_score(ds, neg_eps_pct=50, m_type='f'):

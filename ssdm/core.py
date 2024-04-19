@@ -1,5 +1,4 @@
-from ssdm.utils import *
-
+# from ssdm.utils import *
 AVAL_FEAT_TYPES = ['crema', 'tempogram', 'mfcc', 'yamnet', 'openl3']
 AVAL_DIST_TYPES = ['cosine', 'sqeuclidean']
 AVAL_BW_TYPES = ['med_k_scalar', 'gmean_k_avg']
@@ -16,7 +15,7 @@ DEFAULT_LSD_CONFIG = {
     'hier': True,
     'num_layers': 10,
     'add_noise': True, 
-    'n_steps': 3, 
+    'n_steps': 6, 
     'delay': 2,
 }
 

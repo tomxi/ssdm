@@ -5,6 +5,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from mir_eval import display
 import ssdm
+import ssdm.formatting
 import ssdm.scluster as sc
 import holoviews as hv
 import json
@@ -148,7 +149,7 @@ def multi_seg(multi_seg, hier_depth=-1):
         fig.text(0.08, 0.47, 'Segmentation Levels', va='center', rotation='vertical')
         return fig, axs
 
-    hier = ssdm.multi2hier(multi_seg)[:hier_depth]
+    hier = ssdm.formatting.multi2hier(multi_seg)[:hier_depth]
     return plot_segmentation(hier)
 
 

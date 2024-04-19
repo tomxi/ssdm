@@ -4,6 +4,7 @@ np.float = float
 
 from .core import *
 from .utils import *
+from .formatting import *
 
 # from . import feature
 # from . import scluster

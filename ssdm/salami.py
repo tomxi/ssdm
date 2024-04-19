@@ -43,22 +43,22 @@ class Track(base.Track):
         lower_annos = self.jam().search(namespace='segment_salami_lower')
         if mode == 'normal':
 
-            out_anno = ssdm.formatting.openseg2multi([upper_annos[anno_id], lower_annos[anno_id]])
+            out_anno = ssdm.openseg2multi([upper_annos[anno_id], lower_annos[anno_id]])
             # multi_anno = jams.Annotation(namespace='multi_segment')
         else:
             upper_expanded = expand_hierarchy(upper_annos[anno_id])
             lower_expanded = expand_hierarchy(lower_annos[anno_id])
             
             if mode == 'expand':
-                out_anno = ssdm.formatting.openseg2multi(upper_expanded + lower_expanded)
+                out_anno = ssdm.openseg2multi(upper_expanded + lower_expanded)
             elif mode == 'refine':
                 upper_refined = upper_expanded[-1]
                 lower_refined = lower_expanded[-1]
-                out_anno = ssdm.formatting.openseg2multi([upper_refined, lower_refined])
+                out_anno = ssdm.openseg2multi([upper_refined, lower_refined])
             elif mode == 'coarse':
                 upper_coarsened = upper_expanded[0]
                 lower_coarsened = lower_expanded[0]
-                out_anno = ssdm.formatting.openseg2multi([upper_coarsened, lower_coarsened])
+                out_anno = ssdm.openseg2multi([upper_coarsened, lower_coarsened])
             else:
                 raise librosa.ParameterError("mode can only be one of 'normal', 'expand', 'refine', or 'coarse'.")
         return out_anno
@@ -73,7 +73,7 @@ class Track(base.Track):
         with open(os.path.join(result_dir, filename), 'rb') as f:
             adobe_hier = json.load(f)
 
-        anno = ssdm.formatting.hier2multi(adobe_hier)
+        anno = ssdm.hier2multi(adobe_hier)
         anno.sandbox.update(mu=0.1, gamma=0.1)
         return anno
 

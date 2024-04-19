@@ -149,7 +149,7 @@ def multi_seg(multi_seg, hier_depth=-1):
         fig.text(0.08, 0.47, 'Segmentation Levels', va='center', rotation='vertical')
         return fig, axs
 
-    hier = ssdm.formatting.multi2hier(multi_seg)[:hier_depth]
+    hier = ssdm.multi2hier(multi_seg)[:hier_depth]
     return plot_segmentation(hier)
 
 

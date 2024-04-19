@@ -11,7 +11,7 @@ import jams, mir_eval
 import ssdm
 import ssdm.scluster as sc
 import ssdm.scanner as scn
-from ssdm.formatting import mireval2multi, multi2hier, multi2mireval
+from ssdm import mireval2multi, multi2hier, multi2mireval
 from torch import nn
 
 
@@ -99,7 +99,7 @@ def compute_flat(
     a_layer = -1
 ) -> np.array:
     # TODO change the following 2 lines
-    ref_inter, ref_labels = ssdm.formatting.multi2mirevalflat(annotation, layer=a_layer) # Which anno layer?
+    ref_inter, ref_labels = ssdm.multi2mirevalflat(annotation, layer=a_layer) # Which anno layer?
 
     num_prop_layers = len(multi2hier(proposal))
 
@@ -111,7 +111,7 @@ def compute_flat(
     )
     results = xr.DataArray(data=None, coords=results_dim, dims=list(results_dim.keys()))
     for p_layer in range(num_prop_layers):
-        est_inter, est_labels = ssdm.formatting.multi2mirevalflat(proposal, layer=p_layer)
+        est_inter, est_labels = ssdm.multi2mirevalflat(proposal, layer=p_layer)
         # make last segment for estimation end at the same time as annotation
         end_time = max(ref_inter[-1, 1], est_inter[-1, 1])
         ref_inter[-1, 1] = end_time

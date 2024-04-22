@@ -91,7 +91,7 @@ class Track(object):
 
 
 
-    def representation(self, feat_type='mfcc', use_track_ts=True, recompute=False, beat_sync=False, **delay_emb_kwargs):
+    def representation(self, feat_type='mfcc', use_track_ts=True, recompute=False, beat_sync=False, full=False, **delay_emb_kwargs):
         """delay_emb_kwargs: add_noise, n_steps, delay"""
         delay_emb_config = dict(add_noise=False, n_steps=1, delay=1)
         delay_emb_config.update(delay_emb_kwargs)
@@ -103,13 +103,15 @@ class Track(object):
                 feature.FEAT_MAP[feat_type](self.audio_path, feature_path)
             else:
                 raise LookupError("Track does not have audio!")
-        
         npz = np.load(feature_path)
 
-        try:
-            fmat = npz['feature']
-        except KeyError:
-            fmat = npz['pitch']
+        if feat_type == 'crema' and full:
+            fmat = np.concatenate((npz['pitch'], npz['root'], npz['bass']), axis=0)
+        else:
+            try:
+                fmat = npz['feature']
+            except KeyError:
+                fmat = npz['pitch']
 
         if not beat_sync and use_track_ts:
             fmat = fmat[:, :len(self.ts())]

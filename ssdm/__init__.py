@@ -3,6 +3,7 @@ np.int = int
 np.float = float
 
 from .core import *
+from .formatting import *
 from .utils import *
 from .formatting import *
 

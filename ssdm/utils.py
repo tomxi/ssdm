@@ -2,17 +2,20 @@ import xarray as xr
 import pandas as pd
 import numpy as np
 import torch
+from torch import nn
+
 from sklearn import preprocessing, cluster
 from sklearn.model_selection import train_test_split
 from scipy import sparse
 from tqdm import tqdm
+
 import random, os
 import jams, mir_eval
+
 import ssdm
 import ssdm.scluster as sc
 import ssdm.scanner as scn
-from ssdm import mireval2multi, multi2hier, multi2mireval
-from torch import nn
+
 
 
 def anno_to_meet(
@@ -72,8 +75,8 @@ def compute_l(
     l_frame_size: float = 0.1,
     nlvl = None,
 ) -> np.array:
-    anno_interval, anno_label = multi2mireval(annotation)
-    proposal_interval, proposal_label = multi2mireval(proposal)
+    anno_interval, anno_label = ssdm.multi2mireval(annotation)
+    proposal_interval, proposal_label = ssdm.multi2mireval(proposal)
     if nlvl:
         assert nlvl > 0
         proposal_interval = proposal_interval[:nlvl]
@@ -101,7 +104,7 @@ def compute_flat(
     # TODO change the following 2 lines
     ref_inter, ref_labels = ssdm.multi2mirevalflat(annotation, layer=a_layer) # Which anno layer?
 
-    num_prop_layers = len(multi2hier(proposal))
+    num_prop_layers = len(ssdm.multi2hier(proposal))
 
     # get empty dataarray for result
     results_dim = dict(
@@ -327,7 +330,7 @@ def run_lsd(
     else:
         ts = track.ts(mode='frame')
     est_bdry_itvls = [sc.times_to_intervals(ts[lvl]) for lvl in est_bdry_idxs]
-    return mireval2multi(est_bdry_itvls, est_sgmt_labels)
+    return ssdm.mireval2multi(est_bdry_itvls, est_sgmt_labels)
 
 
 def get_lsd_scores(
@@ -524,8 +527,8 @@ def dev_deploy_perf(
 
 
 # Sample selection functions
-def select_samples_using_tau_percentile(ds, low=30, high=90):
-    ds_scores_full = get_lsd_scores(ds, heir=True, beat_sync=ds.beat_sync).sel(m_type='f')
+def select_samples_using_tau_percentile(ds, low=30, high=85, m_type='f'):
+    ds_scores_full = get_lsd_scores(ds, heir=True, beat_sync=ds.beat_sync).sel(m_type=m_type)
     # best_layer_scores = ds_scores_full.max('layer')
     best_layers = adjusted_best_layer(ds_scores_full, tolerance=0)
 
@@ -551,25 +554,26 @@ def select_samples_using_tau_percentile(ds, low=30, high=90):
     return {**neg_samples, **pos_samples}
 
 
-def sel_samp_l(ds, m_type='f', recollect=False, high=75, low=35):
+def sel_samp_l(ds, m_type='f', recollect=False, tr_high=85, tr_low=30, corp_high=80, corp_low=20):
     # It should be in the top 1/3 of all the scores in a track
     # AND
     # It should be in the top 1/3 of all l scores
     ds_scores_full = get_lsd_scores(ds, heir=True, beat_sync=ds.beat_sync, recollect=recollect).sel(m_type=m_type)
     best_layer_scores = ds_scores_full.max('layer')
-    best_layers = adjusted_best_layer(ds_scores_full, tolerance=0)
+    best_layers = adjusted_best_layer(ds_scores_full)
     
     train_ds = type(ds)(split='train', mode=ds.mode, infer=True, beat_sync=ds.beat_sync)
-    train_scores_full = get_lsd_scores(train_ds)
+    train_scores_full = get_lsd_scores(train_ds, heir=True, beat_sync=ds.beat_sync, recollect=recollect).sel(m_type=m_type)
     best_layer_scores_train = train_scores_full.max('layer')
-    train_ds_low_cut = np.percentile(best_layer_scores_train, low)
-    train_ds_high_cut = np.percentile(best_layer_scores_train, high)
+    train_ds_low_cut = np.percentile(best_layer_scores_train, corp_low)
+    train_ds_high_cut = np.percentile(best_layer_scores_train, corp_high)
+    print(train_ds_low_cut, train_ds_high_cut)
 
     per_track_hc=dict()
     per_track_lc=dict()
     for tr in best_layer_scores:
-        per_track_lc[tr.tid.item()] = np.percentile(tr, low)
-        per_track_hc[tr.tid.item()] = np.percentile(tr, high)
+        per_track_lc[tr.tid.item()] = np.percentile(tr, tr_low)
+        per_track_hc[tr.tid.item()] = np.percentile(tr, tr_high)
     per_track_lc = xr.DataArray(
         list(per_track_lc.values()), 
         coords={'tid': list(per_track_lc.keys())}, 
@@ -594,6 +598,7 @@ def sel_samp_l(ds, m_type='f', recollect=False, high=75, low=35):
         (scores_flat >= train_ds_high_cut) * hc_loc_flat,
         drop=True,
     ).indexes['sid']
+    # return scores_flat, train_ds_high_cut
     pos_samples = {s: (1, best_layers.loc[s].item()) for s in pos_sids}
     neg_samples = {s: (0, best_layers.loc[s].item()) for s in neg_sids}
 

@@ -13,7 +13,7 @@ from ssdm import harmonix as hmx
 # BACKUP, not using this anymore
 # DROP_FEATURES=[]
 
-def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-5', LS='score', LAPNORM='random_walk'):
+def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-3', LS='score', LAPNORM='random_walk'):
     """
     MODEL_ID
     DS can be slm and hmx for now
@@ -36,7 +36,7 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-5', LS='sc
     optimizer = optim.AdamW(net.parameters(), weight_decay=float(WDM))
 
     lr_scheduler = optim.lr_scheduler.CyclicLR(
-        optimizer, base_lr=1e-9, max_lr=1e-4, cycle_momentum=False, mode='triangular', step_size_up=8000
+        optimizer, base_lr=1e-6, max_lr=5e-3, cycle_momentum=False, mode='triangular2', step_size_up=2000
     )
 
     # setup dataloaders   
@@ -137,11 +137,10 @@ if __name__ == '__main__':
     ))
 
     model_id, dataset, ls = config_list[int(parser.parse_args().config_idx)]
-    total_epoch = 10
-    date = 20240411
+    total_epoch = 200
+    date = 20240422
     loss_type = 'multi'
-    wd = 2e-3
-    # ls = 'score'
+    wd = 1e-2
     lap_norm = 'random_walk'
 
     train(model_id, total_epoch, date, loss_type, dataset, wd, ls, lap_norm)

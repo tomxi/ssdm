@@ -107,11 +107,49 @@ def crema(audio_path, output_path):
              ts=crema_ts)
 
 
+def crema_full(audio_path, output_path):
+    import crema
+    crema_model = crema.models.chord.ChordModel()
+
+    crema_out = crema_model.outputs(audio_path)  
+    crema_op = crema_model.pump.ops[2]
+    
+    resampled_crema_pitch = librosa.resample(
+        crema_out['chord_pitch'].T, 
+        orig_sr=crema_op.sr / crema_op.hop_length, 
+        target_sr=22050/4096
+    )
+    
+    resampled_crema_root = librosa.resample(
+        crema_out['chord_root'].T, 
+        orig_sr=crema_op.sr / crema_op.hop_length, 
+        target_sr=22050/4096
+    )
+    
+    resampled_crema_bass = librosa.resample(
+        crema_out['chord_bass'].T, 
+        orig_sr = crema_op.sr / crema_op.hop_length, 
+        target_sr = 22050/4096
+    )
+
+    crema_ts = librosa.frames_to_time(
+        np.arange(resampled_crema_pitch.shape[-1]), 
+        hop_length=4096, sr=22050)
+
+    np.savez(output_path, 
+             pitch=resampled_crema_pitch, 
+             root=resampled_crema_root,
+             bass=resampled_crema_bass,
+             feature=resampled_crema_pitch,
+             ts=crema_ts)
+
+
 FEAT_MAP = dict(
     yamnet = yamnet,
     crema = crema,
     mfcc = mfcc,
     tempogram = tempogram,
-    openl3 = openl3
+    openl3 = openl3,
+    crema_full = crema_full,
 )
 

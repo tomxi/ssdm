@@ -88,7 +88,7 @@ def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size
             if s['label'] == 0:
                 loss = u_loss
             elif s['label'] == 1:
-                loss = u_loss + nl_loss/10
+                loss = u_loss + nl_loss
         elif loss_type == 'util':
             loss = u_loss
         elif loss_type == 'nlvl':
@@ -329,7 +329,7 @@ class EvecSQNet_old(nn.Module):
 class EvecSQNetC(nn.Module):
     def __init__(self):
         super().__init__()
-        self.activation = nn.ReLU
+        self.activation = TempSwish
         self.dropout = nn.Dropout(0.2)
         self.expand_evecs = ExpandEvecs()
         self.adamaxpool = nn.AdaptiveMaxPool2d((96, 96))
@@ -359,10 +359,11 @@ class EvecSQNetC(nn.Module):
         )
 
         self.utility_head = nn.Sequential(
-            nn.Linear(25 * 6 * 6, 900, bias=False),
+            self.dropout,
+            nn.Linear(25 * 6 * 6, 100, bias=False),
             self.dropout,
             self.activation(),
-            nn.Linear(900, 1, bias=True), 
+            nn.Linear(100, 1, bias=True), 
             nn.Sigmoid()
         ) 
 
@@ -373,10 +374,11 @@ class EvecSQNetC(nn.Module):
         )
         
         self.num_layer_head = nn.Sequential(
-            nn.Linear(25 * 6 * 6, 900, bias=False),
+            self.dropout,
+            nn.Linear(25 * 6 * 6, 100, bias=False),
             self.dropout,
             self.activation(),
-            nn.Linear(900, 1, bias=True),
+            nn.Linear(100, 1, bias=True), 
             nn.Softplus()
         )
         

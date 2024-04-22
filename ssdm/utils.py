@@ -567,7 +567,7 @@ def sel_samp_l(ds, m_type='f', recollect=False, tr_high=85, tr_low=30, corp_high
     best_layer_scores_train = train_scores_full.max('layer')
     train_ds_low_cut = np.percentile(best_layer_scores_train, corp_low)
     train_ds_high_cut = np.percentile(best_layer_scores_train, corp_high)
-    print(train_ds_low_cut, train_ds_high_cut)
+    # print(train_ds_low_cut, train_ds_high_cut)
 
     per_track_hc=dict()
     per_track_lc=dict()

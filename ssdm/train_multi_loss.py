@@ -31,14 +31,7 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-3', LS='sc
     # Initialize network based on model_id:
     net = scn.AVAL_MODELS[MODEL_ID]().to(device)
 
-    utility_loss = torch.nn.BCELoss()
-    num_layer_loss = torch.nn.MSELoss()
-    optimizer = optim.AdamW(net.parameters(), weight_decay=float(WDM))
-
-    lr_scheduler = optim.lr_scheduler.CyclicLR(
-        optimizer, base_lr=1e-6, max_lr=5e-3, cycle_momentum=False, mode='triangular2', step_size_up=2000
-    )
-
+    
     # setup dataloaders   
     # augmentor = lambda x: scn.time_mask(x, T=100, num_masks=4, replace_with_zero=False, tau=TAU_TYPE)
     augmentor = None
@@ -66,6 +59,14 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-3', LS='sc
 
     train_loader = DataLoader(train_dataset, batch_size=None, shuffle=True)
 
+    # training details
+    utility_loss = torch.nn.BCELoss()
+    num_layer_loss = torch.nn.MSELoss()
+    optimizer = optim.AdamW(net.parameters(), weight_decay=float(WDM))
+    lr_scheduler = optim.lr_scheduler.CyclicLR(
+        optimizer, base_lr=1e-7, max_lr=5e-3, cycle_momentum=False, mode='triangular2', step_size_up=2000
+    )
+
     # pretrain check-up
     net_eval_val = scn.net_eval_multi_loss(val_dataset, net, utility_loss, num_layer_loss, device, verbose=True)
     best_u_loss = net_eval_val.u_loss.mean()
@@ -85,7 +86,10 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-3', LS='sc
         val_loss = (u_loss, lvl_loss)
         weighted_val_loss = u_loss + lvl_loss/10
         
-        print(epoch, training_loss, val_loss, weighted_val_loss)
+        print(f'\n Epoch {epoch} (wegithed val loss): {weighted_val_loss:.4f} '), 
+        print(f'\t Train: util BCE {training_loss[0]:.4f}, nlvl MSE {training_loss[1]:.4f}')
+        print(f'\t Valid: util BCE {val_loss[0]:.4f}, nlvl MSE {val_loss[1]:.4f}, on both pos and neg {net_eval_val.lvl_loss.mean():.4f}')
+        
         val_losses.append(val_loss)
         train_losses.append(training_loss)
         weighted_losses.append(weighted_val_loss)
@@ -120,8 +124,8 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-3', LS='sc
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Training Tau hats')
     # parser.add_argument('model_id', help='see scanner.AVAL_MODELS')
-    # parser.add_argument('total_epoch', help='total number of epochs to train')
-    # parser.add_argument('date', help='just a marker really, can be any text but mmdd is the intension')
+    parser.add_argument('total_epoch', help='total number of epochs to train')
+    parser.add_argument('date', help='just a marker really, can be any text but mmdd is the intension')
     # parser.add_argument('loss_type', help='what loss? util, nlvl or multi')
     # parser.add_argument('dataset', help='Which dataset? slm or hmx')
     # parser.add_argument('wd', help='multiplier for weight decay parameter for optimizer')
@@ -136,9 +140,10 @@ if __name__ == '__main__':
         ['score', 'tau'],
     ))
 
-    model_id, dataset, ls = config_list[int(parser.parse_args().config_idx)]
-    total_epoch = 200
-    date = 20240422
+    kwargs = parser.parse_args()
+    model_id, dataset, ls = config_list[int(kwargs.config_idx)]
+    total_epoch = int(kwargs.total_epoch)
+    date = kwargs.date
     loss_type = 'multi'
     wd = 1e-2
     lap_norm = 'random_walk'

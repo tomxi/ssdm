@@ -8,6 +8,7 @@ import ssdm
 import ssdm.formatting
 import ssdm.scluster as sc
 import holoviews as hv
+
 import json
 
 import xarray as xr
@@ -228,18 +229,26 @@ def cube(cube, **kwargs):
     return hv.Layout(channel_imgs)
 
 
-def train_curve(json_path):
+def train_curve(json_path, weighted_loss=False):
     with open(json_path) as f:
         train_curves = json.load(f)
 
-    train_loss = hv.Curve(train_curves['train_loss'], label='Train CE loss')
-    val_loss = hv.Curve(train_curves['val_loss'], label='Val CE loss')
+    if weighted_loss:
+        train_loss_list = [pair[0] + pair[1] * 0.1 for pair in train_curves['train_loss']]
+        val_loss_list = [pair[0] + pair[1] * 0.1 for pair in train_curves['val_loss']]
+    else:
+        train_loss_list = train_curves['train_loss']
+        val_loss_list = train_curves['val_loss']
 
-    best_epoch = np.asarray(train_curves['val_loss']).argmin()
-    best_val_loss = np.asarray(train_curves['val_loss']).min()
+    train_loss = hv.Curve(train_loss_list, label='Train loss')
+    val_loss = hv.Curve(val_loss_list, label='Val loss')
+
+
+    best_epoch = np.asarray(val_loss_list).argmin()
+    best_val_loss = np.asarray(val_loss_list).min()
     best_epoch_line = hv.VLine(x=best_epoch)
     best_val_text = hv.Text(
-        1, 0, f"Best epoch {best_epoch}: val loss: {best_val_loss:.3f}"
+        1, 1e-4, f"Best epoch {best_epoch}: val loss: {best_val_loss:.3f}"
     ).opts(text_align='left', text_baseline='bottom')
 
 
@@ -255,11 +264,11 @@ def train_curve_multi_loss(json_path):
     util_val_loss = [pair[0] for pair in train_curves['val_loss']]
     nlvl_val_loss = [pair[1] for pair in train_curves['val_loss']]
 
-    train_u_loss = hv.Curve(util_train_loss, label='Train util BCE loss')
-    val_u_loss = hv.Curve(util_val_loss, label='Val util BCE loss')
+    train_u_loss = hv.Curve(util_train_loss, label='train util')
+    val_u_loss = hv.Curve(util_val_loss, label='val util')
 
-    train_lvl_loss = hv.Curve(nlvl_train_loss, label='Train n_lvl CE loss')
-    val_lvl_loss = hv.Curve(nlvl_val_loss, label='Val n_lvl CE loss')
+    train_lvl_loss = hv.Curve(nlvl_train_loss, label='train n_lvl')
+    val_lvl_loss = hv.Curve(nlvl_val_loss, label='val n_lvl')
 
     best_u_epoch = np.asarray(util_val_loss).argmin()
     best_val_u_loss = np.asarray(util_val_loss).min()
@@ -269,7 +278,7 @@ def train_curve_multi_loss(json_path):
     best_val_nlvl_loss = np.asarray(nlvl_val_loss).min()
     best_nlvl_epoch_line = hv.VLine(x=best_nlvl_epoch)
     best_val_text = hv.Text(
-        1, 0, 
+        1, 1e-4, 
         f" Best util epoch {best_u_epoch}: val util loss: {best_val_u_loss:.3f} \n Best nlvl epoch {best_nlvl_epoch}: val nlvl loss: {best_val_nlvl_loss:.3f}"
     ).opts(text_align='left', text_baseline='bottom')
 

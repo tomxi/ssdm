@@ -10,7 +10,8 @@ from .formatting import *
 # from . import feature
 # from . import scluster
 # from . import scanner
-# from . import viz
+from . import viz
+viz.hv.extension('bokeh')
 # from . import harmonix
 # from . import salami
 # from . import beatles

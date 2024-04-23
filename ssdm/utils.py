@@ -533,11 +533,11 @@ def select_samples_using_tau_percentile(ds, low=30, high=85, m_type='f'):
     best_layers = adjusted_best_layer(ds_scores_full, tolerance=0)
 
     taus_train = ssdm.get_taus(type(ds)(split='train', infer=True, mode=ds.mode, lap_norm=ds.lap_norm,
-        sample_select_fn=ds.sample_select_fn, beat_sync=ds.beat_sync), shuffle=True)
+        beat_sync=ds.beat_sync), shuffle=True)
     
     if ds.split and ds.split.find('custom') == -1:
-        taus_full = ssdm.get_taus(type(ds)(split=ds.split, infer=True, mode=ds.mode, lap_norm=ds.lap_norm,
-            sample_select_fn=ds.sample_select_fn), shuffle=True, beat_sync=ds.beat_sync)
+        taus_full = ssdm.get_taus(type(ds)(split=ds.split, infer=True, mode=ds.mode, lap_norm=ds.lap_norm), 
+                                  shuffle=True, beat_sync=ds.beat_sync)
     else:
         taus_full = ssdm.get_taus(type(ds)(tids=ds.tids, infer=True, mode=ds.mode, lap_norm=ds.lap_norm,
             sample_select_fn=ds.sample_select_fn), shuffle=True, beat_sync=ds.beat_sync, recollect=True)

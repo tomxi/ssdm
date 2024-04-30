@@ -13,7 +13,7 @@ from ssdm import harmonix as hmx
 # BACKUP, not using this anymore
 # DROP_FEATURES=[]
 
-def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-3', LS='score', LAPNORM='random_walk'):
+def train(MODEL_ID='EvecSQNetC', EPOCH=7, DATE=None, LOSS_TYPE='multi', DS='slm', WDM='1e-3', LS='score', LAPNORM='random_walk', net=None):
     """
     MODEL_ID
     DS can be slm and hmx for now
@@ -23,13 +23,17 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-3', LS='sc
     """
     experiment_id_str = f'{DATE}{MODEL_ID}_{DS}{WDM}{LOSS_TYPE}{LS}{LAPNORM}{EPOCH}'
     print(experiment_id_str)
+    short_xid_str = f'{MODEL_ID}_{DS}{DATE}'
 
     # setup device
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(device)
 
-    # Initialize network based on model_id:
-    net = scn.AVAL_MODELS[MODEL_ID]().to(device)
+    
+    if net is None:
+        # Initialize network based on model_id:
+        net = scn.AVAL_MODELS[MODEL_ID]()
+    net.to(device)
 
     
     # setup dataloaders   
@@ -54,6 +58,9 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-3', LS='sc
                                   sample_select_fn=sample_selector, beat_sync=True)
         val_dataset = hmx.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, 
                                 sample_select_fn=sample_selector, beat_sync=True)
+    elif DS == 'new-hmx':
+        train_dataset = ssdm.base.HmxDS(split='train', infer=False, device=device)
+        val_dataset = ssdm.base.HmxDS(split='val', infer=False, device=device)
     else:
         print('bad DS')
 
@@ -64,9 +71,10 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-3', LS='sc
     num_layer_loss = torch.nn.MSELoss()
     optimizer = optim.AdamW(net.parameters(), weight_decay=float(WDM))
     lr_scheduler = optim.lr_scheduler.CyclicLR(
-        optimizer, base_lr=1e-7, max_lr=5e-3, cycle_momentum=False, mode='triangular2', step_size_up=2000
+        optimizer, base_lr=1e-7, max_lr=5e-3, cycle_momentum=False, mode='triangular2', step_size_up=1000
     )
 
+    ### Train loop:
     # pretrain check-up
     net_eval_val = scn.net_eval_multi_loss(val_dataset, net, utility_loss, num_layer_loss, device, verbose=True)
     best_u_loss = net_eval_val.u_loss.mean()
@@ -84,7 +92,7 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-3', LS='sc
         u_loss = net_eval_val.u_loss.mean()
         lvl_loss = net_eval_val.loc[net_eval_val.label == 1].lvl_loss.mean()
         val_loss = (u_loss, lvl_loss)
-        weighted_val_loss = u_loss + lvl_loss/10
+        weighted_val_loss = u_loss + lvl_loss/25
         
         print(f'\n Epoch {epoch} (wegithed val loss): {weighted_val_loss:.4f} '), 
         print(f'\t Train: util BCE {training_loss[0]:.4f}, nlvl MSE {training_loss[1]:.4f}')
@@ -98,27 +106,35 @@ def train(MODEL_ID, EPOCH, DATE, LOSS_TYPE='multi', DS='slm', WDM='1e-3', LS='sc
             # update best_loss and save model
             best_u_loss = u_loss
             best_state = net.state_dict()
-            torch.save(best_state, f'{experiment_id_str}_best_util')
+            torch.save(best_state, f'{short_xid_str}_e{epoch}u{u_loss:.4f}l{lvl_loss:.2f}_best_util')
 
         if lvl_loss < best_lvl_loss:
             # update best_loss and save model
             best_lvl_loss = lvl_loss
             best_state = net.state_dict()
-            torch.save(best_state, f'{experiment_id_str}_best_nlvl')
+            torch.save(best_state, f'{short_xid_str}_e{epoch}u{u_loss:.4f}l{lvl_loss:.2f}_best_nlvl')
 
         if weighted_val_loss < best_weighted_loss:
             # update best_loss and save model
             best_weighted_loss = weighted_val_loss
             best_state = net.state_dict()
-            torch.save(best_state, f'{experiment_id_str}_best_weighted')
+            torch.save(best_state, f'{short_xid_str}_e{epoch}u{u_loss:.4f}l{lvl_loss:.2f}_best_weighted')
+
+        if epoch % 5 == 0:
+            # save every 5 epoch regardless
+            best_state = net.state_dict()
+            torch.save(best_state, f'{short_xid_str}_e{epoch}u{u_loss:.4f}l{lvl_loss:.2f}')
         
         # save simple log as json
         trainning_info = {'train_loss': train_losses,
                           'val_loss': val_losses,
                           'weighted_loss': weighted_losses,
                           }
-        with open(f'{experiment_id_str}epoch.json', 'w') as file:
+        with open(f'{short_xid_str}epoch.json', 'w') as file:
             json.dump(trainning_info, file)
+    
+    return net
+    
 
 
 if __name__ == '__main__':
@@ -135,9 +151,9 @@ if __name__ == '__main__':
     parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
     
     config_list = list(itertools.product(
-        ['EvecSQNetC'],
-        ['slm', 'hmx'],
-        ['score', 'tau'],
+        ['EvecSQNetD', 'EvecSQNetC'],
+        ['new-hmx'],
+        ['score'],
     ))
 
     kwargs = parser.parse_args()

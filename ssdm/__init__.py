@@ -12,8 +12,9 @@ from .formatting import *
 # from . import scanner
 from . import viz
 viz.hv.extension('bokeh')
-# from . import harmonix
-# from . import salami
-# from . import beatles
+
+from . import harmonix as hmx
+from . import salami as slm
+from . import jsd
 
 from .expand_hier import expand_hierarchy

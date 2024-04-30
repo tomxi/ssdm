@@ -17,7 +17,6 @@ import ssdm.scluster as sc
 import ssdm.scanner as scn
 
 
-
 def anno_to_meet(
     anno: jams.Annotation,  # multi-layer
     ts: list,
@@ -526,7 +525,7 @@ def dev_deploy_perf(
     return deploy_naive_perf, deploy_tau_perf, (dev_rep_pick, dev_loc_pick)
 
 
-# Sample selection functions
+# DEPRECATED: old Sample selection functions
 def select_samples_using_tau_percentile(ds, low=30, high=85, m_type='f'):
     ds_scores_full = get_lsd_scores(ds, heir=True, beat_sync=ds.beat_sync).sel(m_type=m_type)
     # best_layer_scores = ds_scores_full.max('layer')

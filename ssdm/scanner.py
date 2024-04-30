@@ -128,7 +128,11 @@ def net_eval(ds, net, criterion, device='cpu', verbose=False):
             tau_hat = net(data)
             label = s['label'].to(device)
             loss = criterion(tau_hat, label)
-            result_df.loc['_'.join(s['info'])] = (tau_hat.item(), int(tau_hat >= 0.5), label.item(), loss.item())      
+            if type(s['info']) is str:
+                idx = s['info']
+            else:
+                idx = '_'.join(s['info']) 
+            result_df.loc[idx] = (tau_hat.item(), int(tau_hat >= 0.5), label.item(), loss.item())      
     return result_df.astype('float')
 
 
@@ -150,8 +154,13 @@ def net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device='cpu', verbose=Fal
 
             nl_loss = nlvl_loss(nlayer, s['best_layer'])
             best_nlvl = torch.floor(nlayer)
-            result_df.loc['_'.join(s['info'])] = (util.item(), best_nlvl.item(), u_loss.item(), nl_loss.item(),
-                                                  u_loss.item() + nl_loss.item()/10, s['label'].item(), s['best_layer'].item())      
+
+            if type(s['info']) is str:
+                idx = s['info']
+            else:
+                idx = '_'.join(s['info']) 
+            result_df.loc[idx] = (util.item(), best_nlvl.item(), u_loss.item(), nl_loss.item(),
+                                  u_loss.item() + nl_loss.item()/10, s['label'].item(), s['best_layer'].item())      
     return result_df.astype('float')
 
 
@@ -181,7 +190,7 @@ def net_infer(infer_ds, net, device='cpu', out_type='pd'):
         return xr_da.sortby('tid')
     
 
-# Need fixing
+# 
 def net_infer_multi_loss(infer_ds=None, net=None, device='cpu', out_type='xr'):
     if out_type != 'xr':
         assert NotImplementedError
@@ -200,7 +209,7 @@ def net_infer_multi_loss(infer_ds=None, net=None, device='cpu', out_type='xr'):
     net.eval()
     with torch.no_grad():
         for s in tqdm(infer_loader):
-            tid, rep_feat, loc_feat = s['info'][:3]
+            tid, rep_feat, loc_feat = s['info'].split('_')
             data = s['data'].to(device)
             utility, nlvl = net(data)
             result_xr.loc[tid, rep_feat, loc_feat, 'util'] = utility.item()
@@ -361,7 +370,6 @@ class EvecSQNetC(nn.Module):
         self.utility_head = nn.Sequential(
             self.dropout,
             nn.Linear(25 * 6 * 6, 100, bias=False),
-            self.dropout,
             self.activation(),
             nn.Linear(100, 1, bias=True), 
             nn.Sigmoid()
@@ -376,7 +384,6 @@ class EvecSQNetC(nn.Module):
         self.num_layer_head = nn.Sequential(
             self.dropout,
             nn.Linear(25 * 6 * 6, 100, bias=False),
-            self.dropout,
             self.activation(),
             nn.Linear(100, 1, bias=True), 
             nn.Softplus()
@@ -404,7 +411,6 @@ class EvecSQNetD(EvecSQNetC):
         self.utility_head = nn.Sequential(
             self.dropout,
             nn.Linear(25 * 6 * 6, 36, bias=False),
-            self.dropout,
             self.activation(),
             nn.Linear(36, 1, bias=True), 
             nn.Sigmoid()
@@ -412,7 +418,6 @@ class EvecSQNetD(EvecSQNetC):
         self.num_layer_head = nn.Sequential(
             self.dropout,
             nn.Linear(25 * 6 * 6, 36, bias=False),
-            self.dropout,
             self.activation(),
             nn.Linear(36, 1, bias=True), 
             nn.Softplus()
@@ -666,6 +671,66 @@ class EvecSQNet3(EvecSQNet2):
         )
 
 
+class SQSmall(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.activation = nn.ReLU
+        self.dropout = nn.Dropout(0.2)
+        self.expand_evecs = ExpandEvecs()
+        self.adamaxpool = nn.AdaptiveMaxPool2d((81, 81))
+    
+        self.convlayers1 = nn.Sequential(
+            nn.Conv2d(16, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(16, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25, affine=True), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25, affine=True), self.activation(), 
+        )
+
+        self.convlayers2 = nn.Sequential(
+            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25, affine=True), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25, affine=True), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25, affine=True), self.activation(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25, affine=True), self.activation(),
+        )
+
+        self.convlayers3 = nn.Sequential(
+            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25, affine=True), self.activation(),
+            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25, affine=True), self.activation(),
+            nn.Conv2d(25, 25, kernel_size=5, padding='same', bias=False), nn.InstanceNorm2d(25, affine=True), self.activation(),
+        )
+        
+        self.utility_head = nn.Sequential(
+            self.dropout,
+            nn.Linear(25 * 3 * 3, 100, bias=False),
+            self.activation(),
+            nn.Linear(100, 1, bias=True), 
+            nn.Sigmoid()
+        ) 
+
+        self.num_layer_head = nn.Sequential(
+            self.dropout,
+            nn.Linear(25 * 3 * 3, 100, bias=False),
+            self.activation(),
+            nn.Linear(100, 1, bias=True), 
+            nn.Softplus()
+        )
+        
+    def forward(self, x):
+        x = self.expand_evecs(x)
+        x = self.convlayers1(x)
+        x = self.adamaxpool(x)
+        x = self.convlayers2(x)
+        x = x + self.convlayers3(x)
+
+        x_flat = torch.flatten(x, 1)
+        nlvl = self.num_layer_head(x_flat) + 1
+        util = self.utility_head(x_flat)
+        return util, nlvl   
+
 AVAL_MODELS = {
     'EvecNetMulti2': EvecNetMulti2,
     'EvecNetMulti3': EvecNetMulti3,
@@ -674,4 +739,5 @@ AVAL_MODELS = {
     'EvecSQNetD': EvecSQNetD,
     'EvecSQNet2': EvecSQNet2,
     'EvecSQNet3': EvecSQNet3,
+    'SQSmall': SQSmall,
 }

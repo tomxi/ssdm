@@ -778,6 +778,75 @@ class DS(Dataset):
         raise NotImplementedError
 
 
+class HmxDS(Dataset):
+    def __init__(self, split='val', infer=True, device='cpu', transform=None):
+        self.device = device
+        self.split = split
+        
+        self.infer = infer
+        self.transform = transform
+        self.ds_module = ssdm.hmx
+        self.mode = 'both' # for legacy support 
+        self.tids = self.ds_module.get_ids(self.split)
+        
+        all_samples = list(itertools.product(
+            self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES
+        ))
+        if self.infer:
+            self.samples = ['_'.join(sid_list) for sid_list in all_samples]
+        else:    
+            with open('/home/qx244/scanning-ssm/ssdm/new_nbs/hmx_samples_percentile.json', 'r') as j:
+                self._samp_json = json.load(j)
+            self.labels = {**self._samp_json['pos'], **self._samp_json['neg']}
+            
+            # Get rid of tids with no positive or negatvie samples
+            tids_no_zero_sample = []
+            for samp in self.labels.copy():
+                tid = samp.split('_')[0]
+                if tid not in self.tids:
+                    del self.labels[samp]
+                else:
+                    tids_no_zero_sample.append(tid)
+            self.tids = list(set(tids_no_zero_sample))
+            self.samples = list(self.labels.keys())
+        
+        self.tids.sort()
+        self.samples.sort()
+                    
+    def __len__(self):
+        return len(self.samples)
+
+    def __repr__(self):
+        return f'hmx_{self.split}{"_infer" if self.infer else ""}'
+        
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+        tid, rep_feat, loc_feat = self.samples[idx].split('_')
+        
+        first_evecs = self.ds_module.Track(tid=tid).embedded_rec_mat(
+            feat_combo=dict(rep_ftype=rep_feat, loc_ftype=loc_feat), 
+            lap_norm='random_walk', beat_sync=True,
+            recompute=False
+        )
+        data = torch.tensor(first_evecs, dtype=torch.float32, device=self.device)
+        datum = {'data': data[None, None, :],
+                 'info': self.samples[idx]}
+
+        if not self.infer:
+            label, nlvl = self.labels[self.samples[idx]]
+            datum['label'] = torch.tensor([label], dtype=torch.float32, device=self.device)[None, :]
+            datum['best_layer'] = torch.tensor([nlvl], dtype=torch.float32, device=self.device)[None, :]
+        
+        if self.transform:
+            datum = self.transform(datum)
+        
+        return datum
+    
+    def track_obj(self, **kwargs):
+        return self.ds_module.Track(**kwargs)
+
+
 def delay_embed(
     feat_mat,
     add_noise: bool = False,

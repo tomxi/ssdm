@@ -6,6 +6,10 @@ import holoviews as hv
 from holoviews import opts
 hv.extension('bokeh')
 
+from ssdm import viz
+
+import torch
+
 import xarray as xr
 
 import ssdm
@@ -79,7 +83,7 @@ def follow_along(track):
         name='tau-rep width', options=[16, 22, 27, 30, 32, 54], value=30, width=170
     )
     lfs_dropdown = pn.widgets.Select(
-        name='l frame size', options=[0.1, 1], width=100)
+        name='l frame size', options=[0.1, 0.5, 1], width=100)
     qm_sel = pn.widgets.Select(
         name='quantize method', options=[None, 'percentile'], value='percentile', width=100
     )
@@ -106,7 +110,7 @@ def follow_along(track):
     # lsd l score grid for all feature combos
     @pn.depends(anno_id=selecta, l_frame_size=lfs_dropdown)
     def lsd_score_heatmap(anno_id, l_frame_size):
-        lsd_score = track.lsd_score(l_frame_size=l_frame_size, anno_id=anno_id).sel(l_type='lr')
+        lsd_score = track.new_lsd_score(l_frame_size=l_frame_size, anno_id=anno_id).sel(l_type='lr')
         lsd_score_grid = hv.HeatMap(lsd_score).opts(frame_width=300, frame_height=300, cmap='coolwarm', toolbar='disable')
         score_label = hv.Labels(lsd_score_grid)
         return lsd_score_grid * score_label
@@ -179,5 +183,143 @@ def follow_along(track):
         pn.Row(qm_sel, qb_slider, slider_tau_width, lfs_dropdown),
         pn.Row(ssm_img * playhead, lsd_hm),
         pn.Row(tau_hm)
+    )
+    return layout
+
+
+def template(track):
+    # all the panel elements for selection etc.
+    audio = pn.pane.Audio(track.audio_path, sample_rate=22050, name=track.tid, throttle=250, width=300)
+    selectr = pn.widgets.Select(
+        name='lsd rep feature', options=ssdm.AVAL_FEAT_TYPES, width=90, value='openl3'
+    )
+    selectl = pn.widgets.Select(
+        name='lsd loc feature', options=ssdm.AVAL_FEAT_TYPES, width=90, value='mfcc'
+    )
+    sel_layers = pn.widgets.EditableIntSlider(
+        name='LSD Layer', 
+        start=1, end=16, step=1, value=7, 
+        fixed_start=1, fixed_end=16,
+        width=160
+    )
+
+    # hv options
+    options = [
+        opts.QuadMesh(
+            cmap='inferno',
+            colorbar=True,
+            aspect='equal',
+            frame_width=300,
+            frame_height=300,
+            line_alpha = 0,
+            line_width=0,
+        )
+    ]
+    hv.Dimension.type_formatters[np.float64]='%.3f'
+
+    @pn.depends(rep_feat=selectr, loc_feat=selectl, layers2show=sel_layers)
+    def update_lsd_meet(rep_feat, loc_feat, layers2show):
+        lsd_meet_mat = ssdm.anno_to_meet(
+            track.lsd({'rep_ftype': rep_feat, 'loc_ftype': loc_feat}, beat_sync=True), 
+            track.ts(mode='beat'), 
+            num_layers=layers2show
+        )
+        return hv.QuadMesh(
+            (track.ts(mode='beat'), track.ts(mode='beat'), lsd_meet_mat),
+        ).opts(*options).opts(title='lsd meet')
+    
+
+
+    anno_meet = ssdm.anno_to_meet(track.ref(mode='normal'), track.ts(mode='beat'))
+    anno_meet_mesh = hv.QuadMesh(
+            (track.ts(mode='beat'), track.ts(mode='beat'), anno_meet),
+        ).opts(*options).opts(title='anno meet')
+    
+
+    lsd_meet = hv.DynamicMap(update_lsd_meet)
+
+    
+    layout = pn.Column(
+        pn.Row(audio),
+        pn.Row(selectr, selectl, sel_layers),
+        pn.Row(lsd_meet, anno_meet_mesh),
+    )
+    return layout
+
+
+def ds_xplore(ds, net=None, device='cuda:0', eval_result=None):
+    tids = ds.tids
+    hv.Dimension.type_formatters[np.float64]='%.3f'
+    
+    sel_tid = pn.widgets.Select(
+        name='Track ID', options=tids, width=120
+    )
+    sel_layers = pn.widgets.EditableIntSlider(
+        name='LSD Layer', 
+        start=1, end=16, step=1, value=7, 
+        fixed_start=1, fixed_end=16,
+        width=160
+    )
+
+    if eval_result is not None:
+        if net is not None:
+            util_loss = torch.nn.BCELoss()
+            nlvl_loss = torch.nn.MSELoss()
+            eval_result = ssdm.scanner.net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device=device, verbose=True)
+
+    @pn.depends(tid=sel_tid, layer=sel_layers)
+    def update_lsd_scores(tid, layer):
+        track = ssdm.hmx.Track(tid=tid)
+        track_score = track.new_lsd_score().sel(m_type='f')
+        best_layer = track_score.idxmax('layer')
+
+        lsd_score_grid = hv.HeatMap(track_score.sel(layer=layer)).opts(
+            frame_width=300, frame_height=300, 
+            cmap='coolwarm', toolbar='disable',
+            title='L measure'
+        )
+        score_label = hv.Labels(lsd_score_grid).opts(text_color='black')
+
+        lsd_best_layer_grid = hv.HeatMap(best_layer).opts(
+            frame_width=300, frame_height=300, 
+            cmap='coolwarm', toolbar='disable',
+            title='Best layer'
+        )
+        best_layer_label = hv.Labels(lsd_best_layer_grid).opts(text_color='black')
+        return lsd_score_grid * score_label + lsd_best_layer_grid * best_layer_label
+
+    def get_samples(tid):
+        track_lab = {k: str(ds.labels[k]) for k in ds.labels if k.split('_')[0] == tid}
+        return track_lab
+
+    def show_samp_evecs(tid):
+        track_lab = get_samples(tid)
+        imgs = []
+        for k in track_lab:
+            samp_idx = ds.samples.index(k)
+            if ds[samp_idx]['label'] == 1:
+                evecs = ds[samp_idx]['data'].cpu().numpy().squeeze()
+                imgs.append(hv.Image(evecs).opts(
+                    xaxis=None, yaxis=None, frame_width=200, frame_height=300,
+                    cmap='RdBu', colorbar=False, toolbar='disable',
+                    title = k + '\n' + str(ds.labels[k])
+                ))
+
+        if len(imgs) != 0:
+            return hv.Layout(imgs).cols(7)
+
+    lsd_score = hv.DynamicMap(update_lsd_scores)
+
+    def get_lvl_est(tid):
+        samps = get_samples(tid)
+        if eval_result is not None:
+            return {s: eval_result.nlvl[s] for s in samps if eval_result.label[s] == 1}
+
+
+    layout = pn.Column(
+        pn.Row(sel_tid, sel_layers),
+        pn.Row(lsd_score),
+        pn.Row(pn.bind(get_samples, sel_tid), pn.bind(get_lvl_est, sel_tid)),
+        pn.Row(pn.bind(show_samp_evecs, sel_tid))
     )
     return layout

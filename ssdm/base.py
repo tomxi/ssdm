@@ -503,13 +503,13 @@ class Track(object):
     #     return out
 
 
-    def lsd_score_flat(self, anno_id=0, beat_sync=False, recompute=False) -> xr.DataArray:
+    def lsd_score_flat(self, anno_id=0, beat_sync=True, recompute=False) -> xr.DataArray:
         # save 
         if anno_id != 0:
             anno_flag = f'a{anno_id}'
         else:
             anno_flag = ''
-        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{anno_flag}flat{"_bsync2" if beat_sync else ""}.nc')
+        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{anno_flag}flat_pfc{"_bsync" if beat_sync else ""}.nc')
 
         if not os.path.exists(nc_path):
             # build da to store
@@ -517,7 +517,8 @@ class Track(object):
                 rep_ftype=ssdm.AVAL_FEAT_TYPES,
                 loc_ftype=ssdm.AVAL_FEAT_TYPES,
                 m_type=['p', 'r', 'f'],
-                metric=['hr', 'hr3', 'pfc', 'nce'],
+                # metric=['hr', 'hr3', 'pfc', 'nce'],
+                metric=['pfc'],
                 layer=[x+1 for x in range(16)],
             )
 
@@ -779,7 +780,7 @@ class DS(Dataset):
 
 
 class HmxDS(Dataset):
-    def __init__(self, split='val', infer=True, device='cpu', transform=None):
+    def __init__(self, split='val', infer=True, device='cpu', transform=None, nlvl_metric='l'):
         self.device = device
         self.split = split
         
@@ -788,6 +789,9 @@ class HmxDS(Dataset):
         self.ds_module = ssdm.hmx
         self.mode = 'both' # for legacy support 
         self.tids = self.ds_module.get_ids(self.split)
+
+        self.expand_evec = ssdm.scn.ExpandEvecs().to(device)
+        self.nlvl_metric = nlvl_metric
         
         all_samples = list(itertools.product(
             self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES
@@ -830,13 +834,30 @@ class HmxDS(Dataset):
             recompute=False
         )
         data = torch.tensor(first_evecs, dtype=torch.float32, device=self.device)
-        datum = {'data': data[None, None, :],
+        data = self.expand_evec(data[None, None, :])
+        datum = {'data': data,
                  'info': self.samples[idx]}
 
         if not self.infer:
             label, nlvl = self.labels[self.samples[idx]]
+            
             datum['label'] = torch.tensor([label], dtype=torch.float32, device=self.device)[None, :]
             datum['best_layer'] = torch.tensor([nlvl], dtype=torch.float32, device=self.device)[None, :]
+
+            if self.nlvl_metric == 'l':
+                layer_score = self.track_obj(tid=tid).new_lsd_score().sel(m_type='f', rep_ftype=rep_feat, loc_ftype=loc_feat)
+                datum['layer_score'] = torch.tensor(layer_score.values, dtype=torch.float32, device=self.device)[None, :]
+            elif self.nlvl_metric == 'pfc':
+                layer_score_flat = self.track_obj(tid=tid).lsd_score_flat(beat_sync=True).sel(m_type='f', metric='pfc', rep_ftype=rep_feat, loc_ftype=loc_feat)
+                datum['layer_score'] = torch.tensor(layer_score_flat.values, dtype=torch.float32, device=self.device)[None, :]
+            else:
+                raise NotImplementedError('bad metric for getting layer score')
+            
+            if datum['layer_score'].isnan().any():
+                print(datum['info'])
+                assert self.nlvl_metric == 'pfc'
+                layer_score_flat = self.track_obj(tid=tid).lsd_score_flat(beat_sync=True, recompute=True).sel(m_type='f', metric='pfc', rep_ftype=rep_feat, loc_ftype=loc_feat)
+                datum['layer_score'] = torch.tensor(layer_score_flat.values * 100, dtype=torch.float32, device=self.device)[None, :]
         
         if self.transform:
             datum = self.transform(datum)

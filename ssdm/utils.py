@@ -108,7 +108,8 @@ def compute_flat(
     # get empty dataarray for result
     results_dim = dict(
         m_type=['p', 'r', 'f'],
-        metric=['hr', 'hr3', 'pfc', 'nce'],
+        # metric=['hr', 'hr3', 'pfc', 'nce'],
+        metric=['pfc'],
         layer=[x+1 for x in range(16)]
     )
     results = xr.DataArray(data=None, coords=results_dim, dims=list(results_dim.keys()))
@@ -120,10 +121,10 @@ def compute_flat(
         est_inter[-1, 1] = end_time
         
         layer_result_dict = dict(
-            hr=mir_eval.segment.detection(ref_inter, est_inter, window=.5, trim=True),
-            hr3=mir_eval.segment.detection(ref_inter, est_inter, window=3, trim=True),
+            # hr=mir_eval.segment.detection(ref_inter, est_inter, window=.5, trim=True),
+            # hr3=mir_eval.segment.detection(ref_inter, est_inter, window=3, trim=True),
             pfc=mir_eval.segment.pairwise(ref_inter, ref_labels, est_inter, est_labels),
-            nce=mir_eval.segment.vmeasure(ref_inter, ref_labels, est_inter, est_labels)
+            # nce=mir_eval.segment.vmeasure(ref_inter, ref_labels, est_inter, est_labels)
         )
 
         for metric in layer_result_dict:

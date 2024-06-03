@@ -275,46 +275,78 @@ def train_curve_multi_loss(json_path):
     best_u_epoch = np.asarray(util_val_loss).argmin()
     best_val_u_loss = np.asarray(util_val_loss).min()
     best_u_epoch_line = hv.VLine(x=best_u_epoch)
+    
 
     best_nlvl_epoch = np.asarray(nlvl_val_loss).argmin()
     best_val_nlvl_loss = np.asarray(nlvl_val_loss).min()
     best_nlvl_epoch_line = hv.VLine(x=best_nlvl_epoch)
+    boa_nlvl_baseline_val_l = hv.HLine(y=0.012391).opts(color='orange', line_width=1)
+    boa_nlvl_baseline_train_l = hv.HLine(y=0.010598).opts(color='navy', line_width=1)
+    boa_nlvl_baseline_val_pfc = hv.HLine(y=0.032466).opts(color='orange')
+    boa_nlvl_baseline_train_pfc = hv.HLine(y=0.031441).opts(color='navy')
+    baselines = boa_nlvl_baseline_val_l * boa_nlvl_baseline_train_l * boa_nlvl_baseline_val_pfc * boa_nlvl_baseline_train_pfc
+
     best_val_text = hv.Text(
-        1, 1e-4, 
-        f" Best util epoch {best_u_epoch}: val util loss: {best_val_u_loss:.3f} \n Best nlvl epoch {best_nlvl_epoch}: val nlvl loss: {best_val_nlvl_loss:.3f}"
+        1, 1e-2, 
+        f" Best util epoch {best_u_epoch}, loss: {best_val_u_loss:.3f}"
+    ).opts(text_align='left', text_baseline='bottom')
+    best_nlvl_text = hv.Text(
+        1, 1e-2, 
+        f" Best nlvl epoch {best_nlvl_epoch}, loss: {best_val_nlvl_loss:.3f}"
     ).opts(text_align='left', text_baseline='bottom')
 
+    util_overlay = train_u_loss * val_u_loss * best_u_epoch_line * best_val_text
+    nlvl_overlay = train_lvl_loss * val_lvl_loss * best_nlvl_epoch_line * best_nlvl_text * baselines
 
-    return train_u_loss * val_u_loss * best_u_epoch_line * best_val_text * train_lvl_loss * val_lvl_loss * best_nlvl_epoch_line
+    return util_overlay, nlvl_overlay
 
 
 def nlvl_est(ds, net, device='cuda:0', pos_only=True, plot=True, **img_kwargs):
-    xr_coords = dict(sid=ds.samples, layer=list(range(16)))
+    first_s = ds[0]
+    nlvl_output_size = first_s['layer_score'].shape[-1]
+    print('nlvl_output_size: ', nlvl_output_size)
+    xr_coords = dict(sid=ds.samples, pred=['pred', 'target'], layer=list(range(nlvl_output_size)))
     nlvl_outputs = xr.DataArray(None, coords=xr_coords, dims=xr_coords.keys())
     nlvl_loss_fn = ssdm.scn.NLvlLoss()
-    loss = {}
+    loss = dict()
+    target_best_layer = dict()
+    pred_best_layer = dict()
     
     net.eval()
     net.to(device)
+    counter = 0
     with torch.no_grad():
         for s in tqdm(ds):
             if s['label'] == 0 and pos_only:
                 nlvl_outputs = nlvl_outputs.drop_sel(sid=s['info'])
             else:
                 util, nlvl = net(s['data'])
-                nlvl_outputs.loc[s['info']] = nlvl.detach().cpu().numpy().squeeze()
-                # nlvl_outputs.loc[s['info']] = 1
+                nlvl_outputs.loc[s['info'], 'pred'] = nlvl.detach().cpu().numpy().squeeze()
+                nlvl_outputs.loc[s['info'], 'target'] = s['layer_score'].detach().cpu().numpy().squeeze()
                 loss[s['info']] = nlvl_loss_fn(nlvl, s['layer_score']).detach().cpu().numpy().squeeze()
+                pred_best_layer[s['info']] = nlvl_outputs.loc[s['info'], 'pred'].argmax().item()
+                target_best_layer[s['info']] = nlvl_outputs.loc[s['info'], 'target'].argmax().item()
+                counter += 1
+            
+            # if counter >= 30:
+            #     break
     
+    sid_by_best_layer = sorted(target_best_layer, key=target_best_layer.get)
+    sorted_nlvl_outputs = nlvl_outputs.loc[sid_by_best_layer]
+
+
     losses = np.array(list(loss.values()))
     print('mean nlvl loss:', losses.mean())
     if plot:
-        x_axis = list(range(16))
-        y_axis = list(range(len(loss)))
-        hv.output(hv.Image((x_axis, y_axis, nlvl_outputs.values)).opts(colorbar=True, cmap='coolwarm', invert_axes=True, width=500, **img_kwargs))
-
+        x_axis = list(range(len(loss)))
+        y_axis = list(range(nlvl_output_size))
+        best_layer_line = hv.Curve(sorted_nlvl_outputs.sel(pred='target').argmax('layer').values).opts(interpolation='steps-mid', color='white')
+        pred_img = hv.Image((x_axis, y_axis, sorted_nlvl_outputs.sel(pred='pred').values.T)).opts(colorbar=True, cmap='coolwarm', width=500, height=150, **img_kwargs)
+        target_img = hv.Image((x_axis, y_axis, sorted_nlvl_outputs.sel(pred='target').values.T)).opts(colorbar=True, cmap='coolwarm', width=500, height=150, **img_kwargs)
+        layout = [pred_img*best_layer_line, target_img*best_layer_line]
+        hv.output(hv.Layout(layout).cols(2))
     
-    return nlvl_outputs
+    return sorted_nlvl_outputs
 
 
 # def plot_mean_score(ds, rep_model='RepNet20240303_epoch28', loc_model='LocNet20240303_epoch17', heir=False):

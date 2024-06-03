@@ -7,59 +7,35 @@ import json, argparse, itertools
 
 import ssdm
 import ssdm.scanner as scn
-import ssdm.salami as slm
-from ssdm import harmonix as hmx
+# import ssdm.salami as slm
+# from ssdm import harmonix as hmx
 
-def train(MODEL_ID='EvecSQNetC', EPOCH=7, DATE=None, LOSS_TYPE='multi', DS='slm', WDM='1e-3', LS='score', LAPNORM='random_walk', AUGMENT=False, net=None):
+# No Dropout
+
+def train(MODEL_ID='MultiRes', EPOCH=7, DATE=None, LOSS_TYPE='multi', DS='new-hmx', WD='1', LR='cyclic', LAPNORM='random_walk', AUGMENT=False, net=None):
     """
-    MODEL_ID
-    DS can be slm and hmx for now
-    LOSS_TYPE: mutil, util, nlvl
-    WDM: weight decay multiplyer
-    
     """
     aug_str = 'aug' if AUGMENT else ''
-    experiment_id_str = f'{DATE}{MODEL_ID}_{DS}{WDM}{LOSS_TYPE}{LS}{LAPNORM}{EPOCH}{aug_str}'
+    short_xid_str = f'{MODEL_ID}_{DS}wd{WD}lr{LR}{aug_str}'
+    experiment_id_str = f'{DATE}{short_xid_str}{LOSS_TYPE}{LAPNORM}{EPOCH}'
     print(experiment_id_str)
-    short_xid_str = f'{MODEL_ID}_{DS}{aug_str}{DATE}'
-
+    
     # setup device
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(device)
 
-    
     if net is None:
         # Initialize network based on model_id:
         net = scn.AVAL_MODELS[MODEL_ID]()
     net.to(device)
 
-    
     # setup dataloaders
-    # augmentor = lambda x: scn.time_mask(x, T=100, num_masks=4, replace_with_zero=False, tau=TAU_TYPE)
     if AUGMENT:
         augmentor = scn.perm_layer
     else:
         augmentor = None
-    if LS == 'score':
-    #     sample_selector = ssdm.select_samples_using_outstanding_l_score
-        sample_selector = ssdm.sel_samp_l
-    elif LS == 'tau':
-        sample_selector = ssdm.select_samples_using_tau_percentile
-    else:
-        print('bad learning signal: score or tau')
-    
 
-    if DS == 'slm':
-        train_dataset = slm.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM,
-                                  sample_select_fn=sample_selector, beat_sync=True)
-        val_dataset = slm.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, 
-                                sample_select_fn=sample_selector, beat_sync=True)
-    elif DS == 'hmx':
-        train_dataset = hmx.NewDS(split='train', infer=False, mode='both', transform=augmentor, lap_norm=LAPNORM,
-                                  sample_select_fn=sample_selector, beat_sync=True)
-        val_dataset = hmx.NewDS(split='val', infer=False, mode='both', lap_norm=LAPNORM, 
-                                sample_select_fn=sample_selector, beat_sync=True)
-    elif DS == 'new-hmx':
+    if DS == 'new-hmx':
         train_dataset = ssdm.base.HmxDS(split='train', infer=False, device=device, nlvl_metric='l', transform=augmentor)
         val_dataset = ssdm.base.HmxDS(split='val', infer=False, device=device, nlvl_metric='l')
     elif DS == 'new-hmx-flat':
@@ -75,25 +51,40 @@ def train(MODEL_ID='EvecSQNetC', EPOCH=7, DATE=None, LOSS_TYPE='multi', DS='slm'
     # num_layer_loss = torch.nn.MSELoss()
     num_layer_loss = scn.NLvlLoss()
 
-    optimizer = optim.AdamW(net.parameters(), lr=1e-6, weight_decay=float(WDM))
-    # lr_scheduler = optim.lr_scheduler.CyclicLR(
-    #     optimizer, base_lr=1e-7, max_lr=1e-3, cycle_momentum=False, mode='triangular2', step_size_up=2000
-    # )
+    
+    grouped_parameters = [
+        {
+            "params": [p for n, p in net.named_parameters() if 'bias' not in n],
+            "weight_decay": float(WD),
+        },
+        {
+            "params": [p for n, p in net.named_parameters() if 'bias' in n],
+            "weight_decay": 0.0,
+        },
+    ]
+
+    if LR == 'cyclic':
+        optimizer = optim.AdamW(grouped_parameters)
+
+        lr_scheduler = optim.lr_scheduler.CyclicLR(
+            optimizer, base_lr=1e-6, max_lr=1e-4, cycle_momentum=False, mode='triangular2', step_size_up=2000
+        )
+    else:
+        optimizer = optim.AdamW(grouped_parameters, lr=float(LR))
+        lr_scheduler = None
 
     ### Train loop:
     # pretrain check-up
     net_eval_val, nlvl_outputs = scn.net_eval_multi_loss(val_dataset, net, utility_loss, num_layer_loss, device, verbose=True)
     best_u_loss = net_eval_val.u_loss.mean()
     best_lvl_loss = net_eval_val.loc[net_eval_val.label == 1].lvl_loss.mean()
-    best_weighted_loss = best_u_loss + best_lvl_loss/10
 
     # simple logging
     val_losses = []
     train_losses = []
-    weighted_losses = []
 
     for epoch in tqdm(range(int(EPOCH))):
-        training_loss = scn.train_multi_loss(train_loader, net, utility_loss, num_layer_loss, optimizer, lr_scheduler=None, device=device, loss_type=LOSS_TYPE)
+        training_loss = scn.train_multi_loss(train_loader, net, utility_loss, num_layer_loss, optimizer, lr_scheduler=lr_scheduler, device=device, loss_type=LOSS_TYPE)
         
         net_eval_val, nlvl_outputs_val = scn.net_eval_multi_loss(val_dataset, net, utility_loss, num_layer_loss, device)
         net_eval_val.to_pickle(f'{short_xid_str}_val_perf_e{epoch}.pkl')
@@ -106,7 +97,6 @@ def train(MODEL_ID='EvecSQNetC', EPOCH=7, DATE=None, LOSS_TYPE='multi', DS='slm'
         u_loss = net_eval_val.u_loss.mean()
         lvl_loss = net_eval_val.loc[net_eval_val.label == 1].lvl_loss.mean()
         val_loss = (u_loss, lvl_loss)
-        weighted_val_loss = u_loss + lvl_loss
         
         print(f'\n Post Epoch {epoch}:'), 
         print(f'\t Train: util BCE {training_loss[0]:.4f}, nlvl Loss {training_loss[1]:.4f}')
@@ -114,7 +104,6 @@ def train(MODEL_ID='EvecSQNetC', EPOCH=7, DATE=None, LOSS_TYPE='multi', DS='slm'
         
         val_losses.append(val_loss)
         train_losses.append(training_loss)
-        weighted_losses.append(weighted_val_loss)
         
         if u_loss < best_u_loss:
             # update best_loss and save model
@@ -128,13 +117,7 @@ def train(MODEL_ID='EvecSQNetC', EPOCH=7, DATE=None, LOSS_TYPE='multi', DS='slm'
             best_state = net.state_dict()
             torch.save(best_state, f'{short_xid_str}_e{epoch}u{u_loss:.3f}l{lvl_loss:.2f}_best_nlvl')
 
-        if weighted_val_loss < best_weighted_loss:
-            # update best_loss and save model
-            best_weighted_loss = weighted_val_loss
-            best_state = net.state_dict()
-            torch.save(best_state, f'{short_xid_str}_e{epoch}u{u_loss:.3f}l{lvl_loss:.2f}_best_weighted')
-
-        if epoch % 5 == 0:
+        if epoch % 10 == 0:
             # save every 5 epoch regardless
             best_state = net.state_dict()
             torch.save(best_state, f'{short_xid_str}_e{epoch}u{u_loss:.3f}l{lvl_loss:.2f}')
@@ -142,13 +125,11 @@ def train(MODEL_ID='EvecSQNetC', EPOCH=7, DATE=None, LOSS_TYPE='multi', DS='slm'
         # save simple log as json
         trainning_info = {'train_loss': train_losses,
                           'val_loss': val_losses,
-                          'weighted_loss': weighted_losses,
                           }
         with open(f'{short_xid_str}.json', 'w') as file:
             json.dump(trainning_info, file)
     
     return net
-    
 
 
 if __name__ == '__main__':
@@ -164,20 +145,28 @@ if __name__ == '__main__':
     
     parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
     
-    config_list = list(itertools.product(
-        ['MultiRes'],
-        ['new-hmx', 'new-hmx-flat'],
-        [False, True]
-    ))
+    
 
     kwargs = parser.parse_args()
-    model_id, dataset, aug= config_list[int(kwargs.config_idx)]
     total_epoch = int(kwargs.total_epoch)
     date = kwargs.date
-    loss_type = 'multi'
-    wd = 1e-3
-    ls = 'score'
-    lap_norm = 'random_walk'
 
-    train(model_id, total_epoch, date, loss_type, dataset, wd, ls, lap_norm, aug)
+    model_id = 'MultiRes'
+    dataset = 'new-hmx'
+    wd = 10
+    lr = 1e-4
+    loss_type = 'multi'
+    lap_norm = 'random_walk'
+    aug = False
+
+
+    overwrite_config_list = list(itertools.product(
+        ['MultiResB', 'MultiResC', 'MultiResD'],
+        ['new-hmx', 'new-hmx-flat'],
+        [10],
+        ['cyclic'],
+    ))
+    model_id, dataset, wd, lr = overwrite_config_list[int(kwargs.config_idx)]
+
+    train(model_id, total_epoch, date, loss_type, dataset, wd, lr, lap_norm, aug, None)
     print('done without failure!')

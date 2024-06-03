@@ -826,8 +826,11 @@ class HmxDS(Dataset):
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
-        tid, rep_feat, loc_feat = self.samples[idx].split('_')
-        
+
+        samp_info = self.samples[idx]
+        tid, rep_feat, loc_feat = samp_info.split('_')
+
+
         first_evecs = self.ds_module.Track(tid=tid).embedded_rec_mat(
             feat_combo=dict(rep_ftype=rep_feat, loc_ftype=loc_feat), 
             lap_norm='random_walk', beat_sync=True,
@@ -836,10 +839,10 @@ class HmxDS(Dataset):
         data = torch.tensor(first_evecs, dtype=torch.float32, device=self.device)
         data = self.expand_evec(data[None, None, :])
         datum = {'data': data,
-                 'info': self.samples[idx]}
+                 'info': samp_info}
 
         if not self.infer:
-            label, nlvl = self.labels[self.samples[idx]]
+            label, nlvl = self.labels[samp_info]
             
             datum['label'] = torch.tensor([label], dtype=torch.float32, device=self.device)[None, :]
             datum['best_layer'] = torch.tensor([nlvl], dtype=torch.float32, device=self.device)[None, :]

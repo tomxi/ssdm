@@ -29,6 +29,11 @@ def perm_layer(samp):
     if 'best_layer' in new_samp:
         del new_samp['best_layer']
     return new_samp
+
+def quant_nlvl_target(samp, new_lvl_idx=[2, 4, 7, 15]):
+    samp = samp.copy()
+    samp['layer_score'] = samp['layer_score'][:, new_lvl_idx]
+    return samp
     
 # class NLvlRegressionLoss(torch.nn.Module):
 #     def __init__(self):
@@ -105,7 +110,7 @@ def time_mask(sample, T=40, num_masks=1, replace_with_zero=False, tau='rep'):
 #     return (running_loss / len(ds_loader)).item()
 
 
-def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size=8, lr_scheduler=None, device='cpu', loss_type='multi', verbose=False):
+def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size=8, lr_scheduler=None, device='cpu', loss_type='multi', pos_mask=True, verbose=False):
     running_loss_util = 0.
     running_loss_nlvl = 0.
     running_nlvl_loss_count = 0
@@ -123,9 +128,9 @@ def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size
         nl_loss = nlvl_loss(nlayer, s['layer_score'])
         
         if loss_type == 'multi':
-            if s['label'] == 0:
+            if s['label'] == 0 and pos_mask:
                 loss = u_loss + nl_loss * 0
-            elif s['label'] == 1:
+            else:
                 loss = u_loss + nl_loss
         elif loss_type == 'util':
             loss = u_loss
@@ -146,7 +151,7 @@ def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size
         
         # For logging
         running_loss_util += u_loss.item()
-        if s['label'] == 1:
+        if s['label'] == 1 or not pos_mask:
             running_loss_nlvl += nl_loss.item()
             running_nlvl_loss_count += 1
         
@@ -445,7 +450,7 @@ class NewSQSmall(SQSmall):
 
 
 class MultiRes(nn.Module):
-    def __init__(self, output_bias=False):
+    def __init__(self, num_lvl=16):
         super().__init__()
         self.convlayers = nn.Sequential(
             nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.ReLU(),
@@ -463,18 +468,16 @@ class MultiRes(nn.Module):
         self.adapool_sm = nn.AdaptiveMaxPool2d((3, 3))
 
         self.util_head = nn.Sequential(
-            nn.Dropout(0.2),
             nn.Linear(6651, 100, bias=False),
             nn.ReLU(),
-            nn.Linear(100, 1, bias=output_bias), 
+            nn.Linear(100, 1, bias=False), 
             nn.Sigmoid()
         ) 
 
         self.nlvl_head = nn.Sequential(
-            nn.Dropout(0.2),
             nn.Linear(106416, 100, bias=False),
             nn.ReLU(),
-            nn.Linear(100, 16, bias=output_bias), 
+            nn.Linear(100, num_lvl, bias=True), 
             nn.Softmax(dim=-1)
         )
 
@@ -503,10 +506,126 @@ class MultiRes(nn.Module):
         return self.util_head(pre_util_head), self.nlvl_head(pre_nlvl_head)
 
 
+class MultiResB(MultiRes):
+    def __init__(self, num_lvl=16):
+        super().__init__(num_lvl=num_lvl)
+        self.convlayers = nn.Sequential(
+            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.ReLU(), 
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.ReLU(), 
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.ReLU(), 
+            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.ReLU(),
+            nn.Conv3d(1, 1, kernel_size=(1, 5, 5), bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.ReLU(),
+        )
+
+
+class MultiResC(MultiRes):
+    def __init__(self, num_lvl=16):
+        super().__init__(num_lvl=num_lvl)
+        self.convlayers = nn.Sequential(
+            nn.Conv2d(16, 64, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(64, affine=True, eps=1e-3), nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(64, affine=True, eps=1e-3), nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(64, 64, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(64, affine=True, eps=1e-3), nn.ReLU(), 
+            nn.Conv2d(64, 64, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(64, affine=True, eps=1e-3), nn.ReLU(), 
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(64, 64, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(64, affine=True, eps=1e-3), nn.ReLU(), 
+            nn.Conv2d(64, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.ReLU(),
+        )
+
+
+class MultiResD(MultiRes):
+    def __init__(self, num_lvl=16):
+        super().__init__(num_lvl=num_lvl)
+        self.convlayers = nn.Sequential(
+            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=8, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=8, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=8, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.ReLU(), 
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=8, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.ReLU(), 
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=8, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.ReLU(), 
+            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=8, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.ReLU(),
+        )
+
+
+class MultiResE(nn.Module):
+    def __init__(self, num_lvl=16):
+        super().__init__()
+        self.convlayers = nn.Sequential(
+            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), TempSwish(),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), TempSwish(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), TempSwish(), 
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), TempSwish(), 
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), TempSwish(), 
+            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), TempSwish(), 
+        )
+
+        self.adapool_big = nn.AdaptiveMaxPool2d((81, 81))
+        self.adapool_med = nn.AdaptiveMaxPool2d((9, 9))
+        self.adapool_sm = nn.AdaptiveMaxPool2d((3, 3))
+
+        self.post_adapool_big = nn.Sequential(
+            nn.Conv2d(16, 64, kernel_size=7, padding='same', groups=16, bias=False), nn.InstanceNorm2d(64, affine=True, eps=1e-3), TempSwish(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+            nn.Conv2d(64, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), TempSwish(),
+            nn.MaxPool2d(kernel_size=3, stride=3),
+        )
+
+        self.util_head = nn.Sequential(
+            nn.Linear(9 + 81 + 81 , 100, bias=False),
+            TempSwish(),
+            nn.Linear(100, 1, bias=False), 
+            nn.Sigmoid()
+        ) 
+
+        self.nlvl_head = nn.Sequential(
+            nn.Linear((9 + 81 + 81) * 16, 100, bias=False),
+            TempSwish(),
+            nn.Linear(100, num_lvl, bias=True), 
+            nn.Softmax(dim=-1)
+        )
+
+    def forward(self, x):
+        x = self.convlayers(x)
+        
+        x_sm = self.adapool_sm(x)
+        x_med = self.adapool_med(x)
+        x_big = self.adapool_big(x)
+        x_big = self.post_adapool_big(x_big)
+
+        x_sm_ch_mean = torch.mean(x_sm, 1)
+        x_med_ch_mean = torch.mean(x_med, 1)
+        x_big_ch_mean = torch.mean(x_big, 1)
+
+        # print(x_sm_ch_mean.shape, x_med_ch_mean.shape, x_big_ch_mean.shape)
+
+        pre_util_head = torch.cat(
+            [torch.flatten(x_sm_ch_mean, 1), torch.flatten(x_med_ch_mean, 1), torch.flatten(x_big_ch_mean, 1)], 
+            1
+        )
+
+        pre_nlvl_head = torch.cat(
+            [torch.flatten(x_sm, 1), torch.flatten(x_med, 1), torch.flatten(x_big, 1)], 
+            1
+        )
+
+        return self.util_head(pre_util_head), self.nlvl_head(pre_nlvl_head)
+
+
+
 AVAL_MODELS = {
     'EvecSQNetC': EvecSQNetC,
     'EvecSQNetD': EvecSQNetD,
     'SQSmall': SQSmall,
     'NewSQSmall': NewSQSmall,
     'MultiRes': MultiRes,
+    'MultiResB': MultiResB,
+    'MultiResC': MultiResC,
+    'MultiResD': MultiResD,
 }

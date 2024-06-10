@@ -110,7 +110,7 @@ def time_mask(sample, T=40, num_masks=1, replace_with_zero=False, tau='rep'):
 #     return (running_loss / len(ds_loader)).item()
 
 
-def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size=8, lr_scheduler=None, device='cpu', loss_type='multi', pos_mask=True, verbose=False):
+def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size=8, lr_scheduler=None, device='cpu', loss_type='multi', pos_mask=True, entro_pen=0, verbose=False):
     running_loss_util = 0.
     running_loss_nlvl = 0.
     running_nlvl_loss_count = 0
@@ -120,12 +120,12 @@ def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size
 
     iterator = enumerate(ds_loader)
     if verbose:
-        iterator = tqdm(iterator)
+        iterator = tqdm(iterator, total=len(ds_loader))
 
     for i, s in iterator:
-        util, nlayer = net(s['data'])
-        u_loss = util_loss(util, s['label'])
-        nl_loss = nlvl_loss(nlayer, s['layer_score'])
+        util, nlayer = net(s['data'].to(device))
+        u_loss = util_loss(util, s['label'].to(device))
+        nl_loss = nlvl_loss(nlayer, s['layer_score'].to(device))
         
         if loss_type == 'multi':
             if s['label'] == 0 and pos_mask:
@@ -140,6 +140,9 @@ def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size
             # if s['label'] == 0:
             #     loss = 0 * loss
 
+        if entro_pen != 0:
+            logp = torch.log(nlayer)
+            loss += torch.sum(nlayer * logp) * entro_pen
         try:
             loss.backward()
         except RuntimeError:
@@ -148,7 +151,6 @@ def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size
             print(u_loss.item())
             print(s['info'])
 
-        
         # For logging
         running_loss_util += u_loss.item()
         if s['label'] == 1 or not pos_mask:
@@ -192,12 +194,12 @@ def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size
 
 
 # eval tools:
-def net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device='cpu', verbose=False):
+def net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device='cpu', num_workers=4, verbose=False):
     # ds_loader just need to be a iterable of samples
     # make result DF
-    result_df = pd.DataFrame(columns=('util', 'nlvl', 'u_loss', 'lvl_loss', 'label'))
+    result_df = pd.DataFrame(columns=('util', 'nlvl', 'u_loss', 'lvl_loss', 'single_pick_lvl_loss', 'label'))
     nlvl_output = pd.DataFrame(columns=[str(i) for i in range(16)])
-    ds_loader = DataLoader(ds, batch_size=None, shuffle=False)
+    ds_loader = DataLoader(ds, batch_size=None, shuffle=False, num_workers=num_workers, pin_memory=True)
 
     net.to(device)
     net.eval()
@@ -205,9 +207,15 @@ def net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device='cpu', verbose=Fal
         if verbose:
             ds_loader = tqdm(ds_loader)
         for s in ds_loader:
-            util, nlayer = net(s['data'])
-            u_loss = util_loss(util, s['label'])
-            nl_loss = nlvl_loss(nlayer, s['layer_score'])
+            util, nlayer = net(s['data'].to(device))
+            u_loss = util_loss(util, s['label'].to(device))
+            nl_loss = nlvl_loss(nlayer, s['layer_score'].to(device))
+
+            sp_nlayer = torch.zeros((1,16)).to(device)
+            max_index = nlayer.argmax().item()
+            max_index_tuple = np.unravel_index(max_index, sp_nlayer.shape)
+            sp_nlayer[max_index_tuple] = 1
+            sp_nl_loss = nlvl_loss(sp_nlayer, s['layer_score'].to(device))
             
             if type(s['info']) is str:
                 idx = s['info']
@@ -215,11 +223,11 @@ def net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device='cpu', verbose=Fal
                 idx = '_'.join(s['info']) 
             nlvl_output.loc[idx] = nlayer.detach().cpu().numpy().squeeze()
             result_df.loc[idx] = (util.item(), nlayer.argmax().item(), u_loss.item(), nl_loss.item(),
-                                  s['label'].item())
+                                  sp_nl_loss.item(), s['label'].item())
     return result_df.astype('float'), nlvl_output.astype('float')
 
 # 
-def net_infer_multi_loss(infer_ds=None, net=None, device='cpu', out_type='xr'):
+def net_infer_multi_loss(infer_ds=None, net=None, device='cpu', num_workers=4, out_type='xr'):
     if out_type != 'xr':
         assert NotImplementedError
         # out_type can be 'xr'
@@ -232,16 +240,16 @@ def net_infer_multi_loss(infer_ds=None, net=None, device='cpu', out_type='xr'):
         est_type=['util', 'nlvl']
     )
     result_xr = xr.DataArray(np.nan, coords=result_coords, dims=result_coords.keys())
-    infer_loader = DataLoader(infer_ds, batch_size=None, shuffle=False)
+    infer_loader = DataLoader(infer_ds, batch_size=None, shuffle=False, num_workers=num_workers, pin_memory=True)
     net.to(device)
     net.eval()
     with torch.no_grad():
-        for s in tqdm(infer_loader):
+        for s in infer_loader:
             tid, rep_feat, loc_feat = s['info'].split('_')
             data = s['data'].to(device)
             utility, nlvl = net(data)
             result_xr.loc[tid, rep_feat, loc_feat, 'util'] = utility.item()
-            result_xr.loc[tid, rep_feat, loc_feat, 'nlvl'] =  nlvl.item()
+            result_xr.loc[tid, rep_feat, loc_feat, 'nlvl'] =  nlvl.argmax().item()
     return result_xr.sortby('tid')
 
 
@@ -452,6 +460,7 @@ class NewSQSmall(SQSmall):
 class MultiRes(nn.Module):
     def __init__(self, num_lvl=16):
         super().__init__()
+        self.expand_evecs = ExpandEvecs()
         self.convlayers = nn.Sequential(
             nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.ReLU(),
             nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.ReLU(),
@@ -483,6 +492,7 @@ class MultiRes(nn.Module):
 
 
     def forward(self, x):
+        x = self.expand_evecs(x)
         x = self.convlayers(x)
         
         x_sm = self.adapool_sm(x)
@@ -504,6 +514,36 @@ class MultiRes(nn.Module):
         )
 
         return self.util_head(pre_util_head), self.nlvl_head(pre_nlvl_head)
+
+
+class MultiResSoftmax(MultiRes):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, x):
+        x = self.expand_evecs(x)
+        x = self.convlayers(x)
+        
+        x_sm = self.adapool_sm(x)
+        x_med = self.adapool_med(x)
+        x_big = self.adapool_big(x)
+
+        x_sm_ch_softmax = (x_sm.softmax(1) * x_sm).sum(1)
+        x_med_ch_softmax = (x_med.softmax(1) * x_med).sum(1)
+        x_big_ch_softmax = (x_big.softmax(1) * x_big).sum(1)
+
+        pre_util_head = torch.cat(
+            [torch.flatten(x_sm_ch_softmax, 1), torch.flatten(x_med_ch_softmax, 1), torch.flatten(x_big_ch_softmax, 1)], 
+            1
+        )
+
+        pre_nlvl_head = torch.cat(
+            [torch.flatten(x_sm, 1), torch.flatten(x_med, 1), torch.flatten(x_big, 1)], 
+            1
+        )
+
+        return self.util_head(pre_util_head), self.nlvl_head(pre_nlvl_head)
+
 
 
 class MultiResB(MultiRes):
@@ -619,6 +659,80 @@ class MultiResE(nn.Module):
 
 
 
+
+class MultiResMask(nn.Module):
+    def __init__(self, num_lvl=16):
+        super().__init__()
+        self.expand_evecs = ExpandEvecs()
+        self.convlayers = nn.Sequential(
+            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.ReLU(), 
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.ReLU(), 
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.ReLU(), 
+            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), nn.ReLU(), 
+        )
+
+        self.adapool_big = nn.AdaptiveMaxPool2d((81, 81))
+        self.adapool_med = nn.AdaptiveMaxPool2d((9, 9))
+        self.adapool_sm = nn.AdaptiveMaxPool2d((3, 3))
+
+        self.rep_emb = nn.Embedding(5, 8)
+        self.loc_emb = nn.Embedding(5, 8)
+        self.emb_to_sm_mask = nn.Sequential(nn.Linear(16, 16*3*3), nn.ReLU(), nn.Sigmoid())
+        self.emb_to_med_mask = nn.Sequential(nn.Linear(16, 16*9*9), nn.ReLU(), nn.Sigmoid())
+        self.emb_to_big_mask = nn.Sequential(nn.Linear(16, 16*81*81), nn.ReLU(), nn.Sigmoid())
+
+
+        self.util_head = nn.Sequential(
+            nn.Linear(6651, 100, bias=False),
+            nn.ReLU(),
+            nn.Linear(100, 1, bias=False), 
+            nn.Sigmoid()
+        ) 
+
+        self.nlvl_head = nn.Sequential(
+            nn.Linear(106416, 100, bias=False),
+            nn.ReLU(),
+            nn.Linear(100, num_lvl, bias=True), 
+            nn.Softmax(dim=-1)
+        )
+
+    def forward(self, x, rep_f_idx, loc_f_idx):
+        feat_emb = torch.cat([self.rep_emb(rep_f_idx), self.loc_emb(loc_f_idx)])
+        x = self.expand_evecs(x)
+        x = self.convlayers(x)
+        
+        x_sm = self.adapool_sm(x)
+        x_med = self.adapool_med(x)
+        x_big = self.adapool_big(x)
+
+        sm_mask = self.emb_to_sm_mask(feat_emb).reshape(1, 16, 3, 3)
+        med_mask = self.emb_to_med_mask(feat_emb).reshape(1, 16, 9, 9)
+        big_mask = self.emb_to_big_mask(feat_emb).reshape(1, 16, 81, 81)
+
+        x_sm = x_sm * sm_mask
+        x_med = x_med * med_mask
+        x_big = x_big * big_mask
+
+        x_sm_ch_softmax = (x_sm.softmax(1) * x_sm).sum(1)
+        x_med_ch_softmax = (x_med.softmax(1) * x_med).sum(1)
+        x_big_ch_softmax = (x_big.softmax(1) * x_big).sum(1)
+
+        pre_util_head = torch.cat(
+            [torch.flatten(x_sm_ch_softmax, 1), torch.flatten(x_med_ch_softmax, 1), torch.flatten(x_big_ch_softmax, 1)], 
+            1
+        )
+
+        pre_nlvl_head = torch.cat(
+            [torch.flatten(x_sm, 1), torch.flatten(x_med, 1), torch.flatten(x_big, 1)], 
+            1
+        )
+
+        return self.util_head(pre_util_head), self.nlvl_head(pre_nlvl_head)
+
 AVAL_MODELS = {
     'EvecSQNetC': EvecSQNetC,
     'EvecSQNetD': EvecSQNetD,
@@ -628,4 +742,6 @@ AVAL_MODELS = {
     'MultiResB': MultiResB,
     'MultiResC': MultiResC,
     'MultiResD': MultiResD,
+    'MultiResE': MultiResE,
+    'MultiResSoftmax': MultiResSoftmax,
 }

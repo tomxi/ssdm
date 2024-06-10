@@ -287,11 +287,11 @@ def train_curve_multi_loss(json_path):
     baselines = boa_nlvl_baseline_val_l * boa_nlvl_baseline_train_l * boa_nlvl_baseline_val_pfc * boa_nlvl_baseline_train_pfc
 
     best_val_text = hv.Text(
-        1, 1e-2, 
+        1, 0.3, 
         f" Best util epoch {best_u_epoch}, loss: {best_val_u_loss:.3f}"
     ).opts(text_align='left', text_baseline='bottom')
     best_nlvl_text = hv.Text(
-        1, 1e-2, 
+        1, 2e-2, 
         f" Best nlvl epoch {best_nlvl_epoch}, loss: {best_val_nlvl_loss:.3f}"
     ).opts(text_align='left', text_baseline='bottom')
 
@@ -320,10 +320,10 @@ def nlvl_est(ds, net, device='cuda:0', pos_only=True, plot=True, **img_kwargs):
             if s['label'] == 0 and pos_only:
                 nlvl_outputs = nlvl_outputs.drop_sel(sid=s['info'])
             else:
-                util, nlvl = net(s['data'])
+                util, nlvl = net(s['data'].to(device))
                 nlvl_outputs.loc[s['info'], 'pred'] = nlvl.detach().cpu().numpy().squeeze()
                 nlvl_outputs.loc[s['info'], 'target'] = s['layer_score'].detach().cpu().numpy().squeeze()
-                loss[s['info']] = nlvl_loss_fn(nlvl, s['layer_score']).detach().cpu().numpy().squeeze()
+                loss[s['info']] = nlvl_loss_fn(nlvl, s['layer_score'].to(device)).detach().cpu().numpy().squeeze()
                 pred_best_layer[s['info']] = nlvl_outputs.loc[s['info'], 'pred'].argmax().item()
                 target_best_layer[s['info']] = nlvl_outputs.loc[s['info'], 'target'].argmax().item()
                 counter += 1

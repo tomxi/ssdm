@@ -780,17 +780,18 @@ class DS(Dataset):
 
 
 class HmxDS(Dataset):
-    def __init__(self, split='val', infer=True, device='cpu', transform=None, nlvl_metric='l'):
+    def __init__(self, split='val', infer=True, device='cpu', transform=None, nlvl_metric='l', aux=False):
         self.device = device
         self.split = split
         
         self.infer = infer
         self.transform = transform
         self.ds_module = ssdm.hmx
+        self.name = 'hmx'
         self.mode = 'both' # for legacy support 
         self.tids = self.ds_module.get_ids(self.split)
 
-        self.expand_evec = ssdm.scn.ExpandEvecs().to(device)
+        # self.expand_evec = ssdm.scn.ExpandEvecs().to(device)
         self.nlvl_metric = nlvl_metric
         
         all_samples = list(itertools.product(
@@ -821,7 +822,7 @@ class HmxDS(Dataset):
         return len(self.samples)
 
     def __repr__(self):
-        return f'hmx_{self.split}{"_infer" if self.infer else ""}'
+        return f'{self.name}{self.mode}{self.split}{"_slice" if not self.infer else ""}'
         
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
@@ -830,29 +831,28 @@ class HmxDS(Dataset):
         samp_info = self.samples[idx]
         tid, rep_feat, loc_feat = samp_info.split('_')
 
-
         first_evecs = self.ds_module.Track(tid=tid).embedded_rec_mat(
             feat_combo=dict(rep_ftype=rep_feat, loc_ftype=loc_feat), 
             lap_norm='random_walk', beat_sync=True,
             recompute=False
         )
-        data = torch.tensor(first_evecs, dtype=torch.float32, device=self.device)
-        data = self.expand_evec(data[None, None, :])
+        data = torch.tensor(first_evecs, dtype=torch.float32)[None, None, :]
+        # data = self.expand_evec(data)
         datum = {'data': data,
                  'info': samp_info}
 
         if not self.infer:
             label, nlvl = self.labels[samp_info]
             
-            datum['label'] = torch.tensor([label], dtype=torch.float32, device=self.device)[None, :]
-            datum['best_layer'] = torch.tensor([nlvl], dtype=torch.float32, device=self.device)[None, :]
+            datum['label'] = torch.tensor([label], dtype=torch.float32)[None, :]
+            datum['best_layer'] = torch.tensor([nlvl], dtype=torch.float32)[None, :]
 
             if self.nlvl_metric == 'l':
                 layer_score = self.track_obj(tid=tid).new_lsd_score().sel(m_type='f', rep_ftype=rep_feat, loc_ftype=loc_feat)
-                datum['layer_score'] = torch.tensor(layer_score.values, dtype=torch.float32, device=self.device)[None, :]
+                datum['layer_score'] = torch.tensor(layer_score.values, dtype=torch.float32)[None, :]
             elif self.nlvl_metric == 'pfc':
                 layer_score_flat = self.track_obj(tid=tid).lsd_score_flat(beat_sync=True).sel(m_type='f', metric='pfc', rep_ftype=rep_feat, loc_ftype=loc_feat)
-                datum['layer_score'] = torch.tensor(layer_score_flat.values, dtype=torch.float32, device=self.device)[None, :]
+                datum['layer_score'] = torch.tensor(layer_score_flat.values, dtype=torch.float32)[None, :]
             else:
                 raise NotImplementedError('bad metric for getting layer score')
             
@@ -860,7 +860,7 @@ class HmxDS(Dataset):
                 print(datum['info'])
                 assert self.nlvl_metric == 'pfc'
                 layer_score_flat = self.track_obj(tid=tid).lsd_score_flat(beat_sync=True, recompute=True).sel(m_type='f', metric='pfc', rep_ftype=rep_feat, loc_ftype=loc_feat)
-                datum['layer_score'] = torch.tensor(layer_score_flat.values * 100, dtype=torch.float32, device=self.device)[None, :]
+                datum['layer_score'] = torch.tensor(layer_score_flat.values * 100, dtype=torch.float32)[None, :]
         
         if self.transform:
             datum = self.transform(datum)
@@ -869,6 +869,29 @@ class HmxDS(Dataset):
     
     def track_obj(self, **kwargs):
         return self.ds_module.Track(**kwargs)
+
+
+class SlmDS(HmxDS):
+    def __init__(self, split='test', infer=True, 
+                 device='cpu', transform=None, nlvl_metric='pfc'):
+        self.device = device
+        self.split = split
+        self.infer = infer
+        self.transform = transform
+        self.nlvl_metric = nlvl_metric
+
+        self.ds_module = ssdm.slm
+        self.name = 'slm'
+        self.mode = 'both' # for legacy support 
+        self.tids = self.ds_module.get_ids(self.split)
+
+        all_samples = list(itertools.product(
+            self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES
+        ))
+        if self.infer:
+            self.samples = ['_'.join(sid_list) for sid_list in all_samples]
+        else:
+            raise NotImplementedError
 
 
 def delay_embed(

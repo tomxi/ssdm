@@ -7,7 +7,7 @@ import ssdm.formatting
 import xarray as xr
 import pandas as pd
 from tqdm import tqdm
-
+import itertools
 from scipy import stats
 
 from ssdm.expand_hier import expand_hierarchy
@@ -196,4 +196,3 @@ class NewDS(base.DS):
         super().__init__(infer=infer, sample_select_fn=sample_select_fn, **kwargs)
     def track_obj(self, **track_kwargs):
         return Track(**track_kwargs)
-    

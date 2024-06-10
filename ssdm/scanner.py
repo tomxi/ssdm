@@ -34,24 +34,6 @@ def quant_nlvl_target(samp, new_lvl_idx=[2, 4, 7, 15]):
     samp = samp.copy()
     samp['layer_score'] = samp['layer_score'][:, new_lvl_idx]
     return samp
-    
-# class NLvlRegressionLoss(torch.nn.Module):
-#     def __init__(self):
-#         super().__init__()
-
-#     def pred2weight(self,
-#             pred, sigmas=torch.tensor([0.5] * 16, device='cuda:0'), 
-#             mus=torch.tensor(list(range(16)), device='cuda:0')
-#         ):
-#         deviations = -(pred - mus) ** 2 / sigmas ** 2
-#         weight = torch.exp(deviations)
-#         return weight / weight.sum()
-
-#     def forward(self, pred, targets):
-#         score_gap = (targets - targets.max()) ** 2
-#         loss_weight = self.pred2weight(pred)
-#         return torch.mean(torch.linalg.vecdot(loss_weight, score_gap))
-
 
 
 # TiME MASK DATA AUG on sample, adapted from SpecAugment 
@@ -86,28 +68,6 @@ def time_mask(sample, T=40, num_masks=1, replace_with_zero=False, tau='rep'):
     return sample
 
 
-# Training loops:
-# returns average epoch loss.
-# def train_epoch(ds_loader, net, criterion, optimizer, batch_size=8, lr_scheduler=None, device='cpu'):
-#     running_loss = 0.
-#     optimizer.zero_grad()
-#     net.train()
-#     for i, s in enumerate(ds_loader):
-#         data = s['data'].to(device)
-
-#         tau_hat = net(data)
-#         label = s['label'].to(device)
-#         loss = criterion(tau_hat, label)
-#         loss.backward()
-#         running_loss += loss
-        
-#         if i % batch_size == (batch_size - 1):
-#             # take back prop step
-#             optimizer.step()
-#             optimizer.zero_grad()
-#             if lr_scheduler is not None:
-#                 lr_scheduler.step()
-#     return (running_loss / len(ds_loader)).item()
 
 
 def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size=8, lr_scheduler=None, device='cpu', loss_type='multi', pos_mask=True, entro_pen=0, verbose=False):
@@ -123,7 +83,11 @@ def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size
         iterator = tqdm(iterator, total=len(ds_loader))
 
     for i, s in iterator:
-        util, nlayer = net(s['data'].to(device))
+        tid, repf, locf = s['info'].split('_')
+        repf_idx = torch.tensor(ssdm.AVAL_FEAT_TYPES.index(repf)).to(device)
+        locf_idx = torch.tensor(ssdm.AVAL_FEAT_TYPES.index(locf)).to(device)
+
+        util, nlayer = net(s['data'].to(device), repf_idx, locf_idx)
         u_loss = util_loss(util, s['label'].to(device))
         nl_loss = nlvl_loss(nlayer, s['layer_score'].to(device))
         
@@ -169,31 +133,6 @@ def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size
     return (running_loss_util / len(ds_loader)), (running_loss_nlvl / running_nlvl_loss_count)
 
 # eval tools:
-# def net_eval(ds, net, criterion, device='cpu', verbose=False):
-#     # ds_loader just need to be a iterable of samples
-#     # make result DF
-#     result_df = pd.DataFrame(columns=('tau_hat', 'pred', 'label', 'loss'))
-#     ds_loader = DataLoader(ds, batch_size=None, shuffle=False)
-
-#     net.to(device)
-#     net.eval()
-#     with torch.no_grad():
-#         if verbose:
-#             ds_loader = tqdm(ds_loader)
-#         for s in ds_loader:
-#             data = s['data'].to(device)
-#             tau_hat = net(data)
-#             label = s['label'].to(device)
-#             loss = criterion(tau_hat, label)
-#             if type(s['info']) is str:
-#                 idx = s['info']
-#             else:
-#                 idx = '_'.join(s['info']) 
-#             result_df.loc[idx] = (tau_hat.item(), int(tau_hat >= 0.5), label.item(), loss.item())      
-#     return result_df.astype('float')
-
-
-# eval tools:
 def net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device='cpu', num_workers=4, verbose=False):
     # ds_loader just need to be a iterable of samples
     # make result DF
@@ -207,7 +146,11 @@ def net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device='cpu', num_workers
         if verbose:
             ds_loader = tqdm(ds_loader)
         for s in ds_loader:
-            util, nlayer = net(s['data'].to(device))
+            tid, repf, locf = s['info'].split('_')
+            repf_idx = torch.tensor(ssdm.AVAL_FEAT_TYPES.index(repf)).to(device)
+            locf_idx = torch.tensor(ssdm.AVAL_FEAT_TYPES.index(locf)).to(device)
+            util, nlayer = net(s['data'].to(device), repf_idx, locf_idx)
+            # util, nlayer = net(s['data'].to(device))
             u_loss = util_loss(util, s['label'].to(device))
             nl_loss = nlvl_loss(nlayer, s['layer_score'].to(device))
 
@@ -246,8 +189,10 @@ def net_infer_multi_loss(infer_ds=None, net=None, device='cpu', num_workers=4, o
     with torch.no_grad():
         for s in infer_loader:
             tid, rep_feat, loc_feat = s['info'].split('_')
+            repf_idx = torch.tensor(ssdm.AVAL_FEAT_TYPES.index(rep_feat)).to(device)
+            locf_idx = torch.tensor(ssdm.AVAL_FEAT_TYPES.index(loc_feat)).to(device)
             data = s['data'].to(device)
-            utility, nlvl = net(data)
+            utility, nlvl = net(data, repf_idx, locf_idx)
             result_xr.loc[tid, rep_feat, loc_feat, 'util'] = utility.item()
             result_xr.loc[tid, rep_feat, loc_feat, 'nlvl'] =  nlvl.argmax().item()
     return result_xr.sortby('tid')
@@ -337,7 +282,7 @@ class EvecSQNetC(nn.Module):
             nn.Softmax(dim=-1)
         )
         
-    def forward(self, x):
+    def forward(self, x, rep_f_idx=None, loc_f_idx=None):
         x = self.expand_evecs(x)
         x = self.convlayers1(x)
         x = self.adamaxpool(x)
@@ -420,7 +365,7 @@ class SQSmall(nn.Module):
             nn.Softplus()
         )
         
-    def forward(self, x):
+    def forward(self, x, rep_f_idx=None, loc_f_idx=None):
         x = self.expand_evecs(x)
         x = self.convlayers1(x)
         x = self.adamaxpool(x)
@@ -444,7 +389,7 @@ class NewSQSmall(SQSmall):
             nn.Softmax(dim=-1)
         )
 
-    def forward(self, x):
+    def forward(self, x, rep_f_idx=None, loc_f_idx=None):
         x = self.expand_evecs(x)
         x = self.convlayers1(x)
         x = self.adamaxpool(x)
@@ -491,7 +436,7 @@ class MultiRes(nn.Module):
         )
 
 
-    def forward(self, x):
+    def forward(self, x, rep_f_idx=None, loc_f_idx=None):
         x = self.expand_evecs(x)
         x = self.convlayers(x)
         
@@ -520,7 +465,7 @@ class MultiResSoftmax(MultiRes):
     def __init__(self):
         super().__init__()
     
-    def forward(self, x):
+    def forward(self, x, rep_f_idx=None, loc_f_idx=None):
         x = self.expand_evecs(x)
         x = self.convlayers(x)
         
@@ -631,7 +576,7 @@ class MultiResE(nn.Module):
             nn.Softmax(dim=-1)
         )
 
-    def forward(self, x):
+    def forward(self, x, rep_f_idx=None, loc_f_idx=None):
         x = self.convlayers(x)
         
         x_sm = self.adapool_sm(x)
@@ -700,7 +645,7 @@ class MultiResMask(nn.Module):
             nn.Softmax(dim=-1)
         )
 
-    def forward(self, x, rep_f_idx, loc_f_idx):
+    def forward(self, x, rep_f_idx=None, loc_f_idx=None):
         feat_emb = torch.cat([self.rep_emb(rep_f_idx), self.loc_emb(loc_f_idx)])
         x = self.expand_evecs(x)
         x = self.convlayers(x)
@@ -744,4 +689,5 @@ AVAL_MODELS = {
     'MultiResD': MultiResD,
     'MultiResE': MultiResE,
     'MultiResSoftmax': MultiResSoftmax,
+    'MultiResMask': MultiResMask,
 }

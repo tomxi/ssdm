@@ -191,9 +191,9 @@ if __name__ == '__main__':
 
 
     overwrite_config_list = list(itertools.product(
-        ['MultiRes', 'MultiResSoftmax'],
+        ['MultiRes', 'MultiResSoftmax', 'MultiResMask'],
         # ['new-hmx', 'new-hmx-flat'],
-        [0.01, 0.03, 0.1, 0.3],
+        [0.02, 0.2],
         ['cyclic'],
     ))
     model_id, etp, lr = overwrite_config_list[int(kwargs.config_idx)]

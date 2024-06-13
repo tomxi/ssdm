@@ -444,8 +444,9 @@ def net_pick_performance(ds, net, heir=True):
     util_score = net_output.loc[:, :, :, 'util']
     nlvl_pick = net_output.loc[:, :, :, 'nlvl']
     best_util_idx = util_score.argmax(dim=['rep_ftype', 'loc_ftype'])
-    net_pick = nlvl_pick.isel(best_util_idx).astype(int)
-    return score_da.sel(rep_ftype=net_pick.rep_ftype, loc_ftype=net_pick.loc_ftype).isel(layer=net_pick)
+    net_layer_pick = nlvl_pick.isel(best_util_idx).astype(int)
+    net_feat_pick_score = score_da.sel(rep_ftype=net_layer_pick.rep_ftype, loc_ftype=net_layer_pick.loc_ftype)
+    return net_feat_pick_score.isel(layer=net_layer_pick), net_feat_pick_score.max('layer')
 
 # def dataset_performance(score_da, tau_hat_rep, tau_hat_loc, heir=False):
 #     if heir:

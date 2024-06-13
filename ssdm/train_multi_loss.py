@@ -75,7 +75,7 @@ def train(MODEL_ID='MultiRes', EPOCH=7, DATE=None, LOSS_TYPE='multi', DS='new-hm
         optimizer = optim.AdamW(grouped_parameters)
 
         lr_scheduler = optim.lr_scheduler.CyclicLR(
-            optimizer, base_lr=1e-6, max_lr=1e-4, cycle_momentum=False, mode='triangular', step_size_up=2000
+            optimizer, base_lr=1e-6, max_lr=1e-3, cycle_momentum=False, mode='triangular2', step_size_up=2000
         )
     else:
         optimizer = optim.AdamW(grouped_parameters, lr=float(LR))
@@ -84,7 +84,7 @@ def train(MODEL_ID='MultiRes', EPOCH=7, DATE=None, LOSS_TYPE='multi', DS='new-hm
     ### Train loop:
     # pretrain check-up
     net_eval_val, nlvl_outputs = scn.net_eval_multi_loss(val_dataset, net, utility_loss, num_layer_loss, device, verbose=False)
-    net_pick_score_val = ssdm.net_pick_performance(val_infer_ds, net, heir)
+    net_pick_score_val, _ = ssdm.net_pick_performance(val_infer_ds, net, heir)
     best_net_pick_score = net_pick_score_val.sel(m_type='f').mean().item()
     best_u_loss = net_eval_val.u_loss.mean()
     best_lvl_loss = net_eval_val.loc[net_eval_val.label == 1].single_pick_lvl_loss.mean()
@@ -109,7 +109,7 @@ def train(MODEL_ID='MultiRes', EPOCH=7, DATE=None, LOSS_TYPE='multi', DS='new-hm
         # net_eval_val.to_pickle(f'{short_xid_str}_val_perf_e{epoch}.pkl')
         # nlvl_outputs_val.to_pickle(f'{short_xid_str}_val_nlvl_e{epoch}.pkl')
 
-        net_pick_score_val = ssdm.net_pick_performance(val_infer_ds, net, heir)
+        net_pick_score_val, _ = ssdm.net_pick_performance(val_infer_ds, net, heir)
         # net_pick_score_val.to_pickle(f'{short_xid_str}netpick_val_perf_e{epoch}.pkl')
         
         # net_eval_train, nlvl_outputs_train = scn.net_eval_multi_loss(train_dataset, net, utility_loss, num_layer_loss, device)
@@ -193,7 +193,7 @@ if __name__ == '__main__':
     overwrite_config_list = list(itertools.product(
         ['MultiRes', 'MultiResSoftmax', 'MultiResMask'],
         # ['new-hmx', 'new-hmx-flat'],
-        [0.02, 0.2],
+        [0.02, 0.1],
         ['cyclic'],
     ))
     model_id, etp, lr = overwrite_config_list[int(kwargs.config_idx)]

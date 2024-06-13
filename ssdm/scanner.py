@@ -68,8 +68,6 @@ def time_mask(sample, T=40, num_masks=1, replace_with_zero=False, tau='rep'):
     return sample
 
 
-
-
 def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size=8, lr_scheduler=None, device='cpu', loss_type='multi', pos_mask=True, entro_pen=0, verbose=False):
     running_loss_util = 0.
     running_loss_nlvl = 0.
@@ -425,7 +423,7 @@ class MultiRes(nn.Module):
             nn.Linear(6651, 100, bias=False),
             nn.ReLU(),
             nn.Linear(100, 1, bias=False), 
-            nn.Sigmoid()
+            # nn.Sigmoid()
         ) 
 
         self.nlvl_head = nn.Sequential(
@@ -491,9 +489,9 @@ class MultiResSoftmax(MultiRes):
 
 
 
-class MultiResB(MultiRes):
-    def __init__(self, num_lvl=16):
-        super().__init__(num_lvl=num_lvl)
+class MultiResB(MultiResSoftmax):
+    def __init__(self):
+        super().__init__()
         self.convlayers = nn.Sequential(
             nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.ReLU(),
             nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.ReLU(),
@@ -507,9 +505,9 @@ class MultiResB(MultiRes):
         )
 
 
-class MultiResC(MultiRes):
-    def __init__(self, num_lvl=16):
-        super().__init__(num_lvl=num_lvl)
+class MultiResC(MultiResSoftmax):
+    def __init__(self):
+        super().__init__()
         self.convlayers = nn.Sequential(
             nn.Conv2d(16, 64, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(64, affine=True, eps=1e-3), nn.ReLU(),
             nn.Conv2d(64, 64, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(64, affine=True, eps=1e-3), nn.ReLU(),
@@ -522,7 +520,7 @@ class MultiResC(MultiRes):
         )
 
 
-class MultiResD(MultiRes):
+class MultiResD(MultiResSoftmax):
     def __init__(self, num_lvl=16):
         super().__init__(num_lvl=num_lvl)
         self.convlayers = nn.Sequential(

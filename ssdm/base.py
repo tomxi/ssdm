@@ -5,6 +5,7 @@ from . import feature
 from .expand_hier import expand_hierarchy
 import librosa
 import madmom
+from tqdm import tqdm
 
 import jams
 import json, itertools, os
@@ -893,6 +894,93 @@ class SlmDS(HmxDS):
         else:
             raise NotImplementedError
 
+
+class PairDS(Dataset):
+    def __init__(self, ds_module, name=None, split='val', transform=None, perf_metric='pfc', perf_margin=0.05):
+        super().__init__()
+        self.ds_module = ds_module
+        self.split = split
+        self.transform = transform
+        self.perf_metric = perf_metric
+        self.perf_margin = perf_margin
+        
+        self.name = name
+        self.tids = self.ds_module.get_ids(self.split)
+        self.scores = self.get_scores()
+        self.score_gaps = self.get_score_gaps()
+        self.samples = list(self.score_gaps.keys())
+
+        self.tids.sort()
+        self.samples.sort()
+
+    def __repr__(self):
+        return f'{self.name}_{self.split}_{self.perf_metric}'
+    
+    def __len__(self):
+        return len(self.samples)
+    
+    def track_obj(self, **kwargs):
+        return self.ds_module.Track(**kwargs)
+    
+    def get_scores(self):
+        if self.perf_metric == 'l':
+            return ssdm.get_lsd_scores(self, heir=True).sel(m_type='f')
+        elif self.perf_metric == 'pfc':
+            return ssdm.get_lsd_scores(self, heir=False).sel(m_type='f', metric=self.perf_metric)
+
+    def get_score_gaps(self):
+        fpath = f'/home/qx244/scanning-ssm/ssdm/{self}_score_gaps.json'
+        try:
+            with open(fpath, 'r') as f:
+                score_gaps = json.load(f)
+        except:
+            samp_iter = itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES)
+            score_gaps = {}
+            scores = self.scores.max('layer')
+            for tid, rep_a, loc_a, rep_b, loc_b in tqdm(samp_iter):
+                score_a = scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a).item()
+                score_b = scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b).item()
+                score_gaps[f'{tid}_{rep_a}_{loc_a}_{rep_b}_{loc_b}'] = score_a - score_b
+            with open(fpath, 'w') as f:
+                json.dump(score_gaps, f)
+        return {samp: gap for samp, gap in score_gaps.items() if abs(gap) > self.perf_margin}
+
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        samp_info = self.samples[idx]
+        tid, rep_a, loc_a, rep_b, loc_b = samp_info.split('_')
+
+        first_evecs_a = self.ds_module.Track(tid=tid).embedded_rec_mat(
+            feat_combo=dict(rep_ftype=rep_a, loc_ftype=loc_a), 
+            lap_norm='random_walk', beat_sync=True,
+            recompute=False
+        )
+        first_evecs_b = self.ds_module.Track(tid=tid).embedded_rec_mat(
+            feat_combo=dict(rep_ftype=rep_b, loc_ftype=loc_b), 
+            lap_norm='random_walk', beat_sync=True,
+            recompute=False
+        )
+        x1 = torch.tensor(first_evecs_a, dtype=torch.float32)[None, None, :]
+        x2 = torch.tensor(first_evecs_b, dtype=torch.float32)[None, None, :]
+        x1_layer_score = self.scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
+        x1_layer_score = torch.tensor(x1_layer_score.values, dtype=torch.float32)[None, :]
+        x2_layer_score = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
+        x2_layer_score = torch.tensor(x2_layer_score.values, dtype=torch.float32)[None, :]
+        datum = {'x1': x1,
+                 'x2': x2,
+                 'x1_layer_score': x1_layer_score,
+                 'x2_layer_score': x2_layer_score,
+                 'x1_info': f'{rep_a}_{loc_a}',
+                 'x2_info': f'{rep_b}_{loc_b}',
+                 'track_info': f'{self.name}_{tid}',
+                 'perf_gap': torch.tensor(self.score_gaps[samp_info], dtype=torch.float32)[None, None]
+                 }
+        if self.transform:
+            datum = self.transform(datum)
+        return datum
 
 def delay_embed(
     feat_mat,

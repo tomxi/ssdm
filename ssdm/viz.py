@@ -263,8 +263,8 @@ def train_curve_multi_loss(json_path):
 
     util_train_loss = [pair[0] for pair in train_curves['train_loss']]
     nlvl_train_loss = [pair[1] for pair in train_curves['train_loss']]
-    util_val_loss = [pair[0] for pair in train_curves['val_loss']]
-    nlvl_val_loss = [pair[1] for pair in train_curves['val_loss']]
+    util_val_loss = [triplet[0] for triplet in train_curves['val_loss']]
+    nlvl_val_loss = [triplet[-1] for triplet in train_curves['val_loss']]
 
     train_u_loss = hv.Curve(util_train_loss, label='train util')
     val_u_loss = hv.Curve(util_val_loss, label='val util')
@@ -299,6 +299,21 @@ def train_curve_multi_loss(json_path):
     nlvl_overlay = train_lvl_loss * val_lvl_loss * best_nlvl_epoch_line * best_nlvl_text * baselines
 
     return util_overlay, nlvl_overlay
+
+
+def train_curve_contrastive(json_path):
+    with open(json_path) as f:
+        train_curves = json.load(f)
+
+    util_train_loss = [triplet[0] for triplet in train_curves['train_loss']]
+    nlvl_train_loss = [triplet[1] for triplet in train_curves['train_loss']]
+    entropy_train_penalty = [-triplet[2] for triplet in train_curves['train_loss']]
+
+    train_u_loss = hv.Curve(util_train_loss, label='train util')
+    train_lvl_loss = hv.Curve(nlvl_train_loss, label='train n_lvl')
+    train_nlvl_entropy = hv.Curve(entropy_train_penalty, label='val util')
+
+    return train_u_loss + train_lvl_loss + train_nlvl_entropy
 
 
 def nlvl_est(ds, net, device='cuda:0', pos_only=True, plot=True, **img_kwargs):

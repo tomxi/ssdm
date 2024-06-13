@@ -81,3 +81,9 @@ class NewDS(base.DS):
     
     def track_obj(self, **track_kwargs):
         return Track(**track_kwargs)
+    
+
+class PairDS(base.PairDS):
+    def __init__(self, **kwargs):
+        super().__init__(ds_module=ssdm.hmx, name='hmx', **kwargs)
+        

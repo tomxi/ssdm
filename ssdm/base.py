@@ -472,9 +472,9 @@ class Track(object):
         return score_da
 
 
-    def lsd_score_flat(self, anno_id=0, beat_sync=True, anno_mode='normal', a_layer=0, frame_size=0.1, recompute=False) -> xr.DataArray:
+    def lsd_score_flat(self, anno_id=0, beat_sync=True, anno_mode='expand', a_layer=0, frame_size=0.1, recompute=False) -> xr.DataArray:
         # save 
-        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_a{anno_id}{anno_mode}fs{frame_size}{a_layer if anno_mode=="expand" else ""}f{"_bsync" if beat_sync else ""}.nc')
+        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_a{anno_id}{anno_mode}{a_layer}v{frame_size}.nc')
 
         if not os.path.exists(nc_path):
             # build da to store
@@ -482,8 +482,8 @@ class Track(object):
                 rep_ftype=ssdm.AVAL_FEAT_TYPES,
                 loc_ftype=ssdm.AVAL_FEAT_TYPES,
                 m_type=['p', 'r', 'f'],
-                metric=['hr', 'hr3', 'pfc', 'v'],
-                # metric=['pfc'],
+                # metric=['hr', 'hr3', 'pfc', 'v'],
+                metric=['v'],
                 layer=[x+1 for x in range(16)],
             )
 
@@ -582,7 +582,6 @@ class Track(object):
         return util_score, nlvl_score
 
 
-
 class MyTrack(Track):
     def __init__(self,
                  audio_dir='/vast/qx244/my_tracks/audio', 
@@ -627,7 +626,7 @@ class InferDS(Dataset):
         return f'{self.name}_{self.split}_infer'
         
     def get_scores(self, drop_feats=[]):
-        score_da = ssdm.get_lsd_scores(self, heir=True, shuffle=True).sel(m_type='r', layer=16).sortby('tid')
+        score_da = ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=0).sel(m_type='f').sortby('tid')
         new_tid = [self.name + tid.item() for tid in score_da.tid]
         if drop_feats:
             score_da = score_da.drop_sel(rep_ftype=drop_feats, loc_ftype=drop_feats)
@@ -674,7 +673,7 @@ class PairDS(Dataset):
 
 
     def __repr__(self):
-        return f'{self.name}_{self.split}_l-recall'
+        return f'{self.name}_{self.split}_vmeasure'
     
 
     def __len__(self):
@@ -682,7 +681,7 @@ class PairDS(Dataset):
     
 
     def get_scores(self):
-        return ssdm.get_lsd_scores(self, heir=True, shuffle=True).sel(m_type='r', layer=16).sortby('tid')
+        return ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=0).sel(m_type='f').sortby('tid')
         # new_tid = [self.name + tid.item() for tid in score_da.tid]
         # return score_da.assign_coords(tid=new_tid)
 
@@ -695,9 +694,10 @@ class PairDS(Dataset):
         except:
             samp_iter = itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES)
             score_gaps = {}
+            best_lvl_score = self.scores.max('layer')
             for tid, rep_a, loc_a, rep_b, loc_b in tqdm(samp_iter):
-                score_a = self.scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a).item()
-                score_b = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b).item()
+                score_a = best_lvl_score.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a).item()
+                score_b = best_lvl_score.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b).item()
                 score_gaps[f'{tid}_{rep_a}_{loc_a}_{rep_b}_{loc_b}'] = score_a - score_b
             with open(fpath, 'w') as f:
                 json.dump(score_gaps, f)
@@ -723,14 +723,14 @@ class PairDS(Dataset):
         )
         x1 = torch.tensor(first_evecs_a, dtype=torch.float32)[None, None, :]
         x2 = torch.tensor(first_evecs_b, dtype=torch.float32)[None, None, :]
-        x1_l_recall = self.scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
-        x1_l_recall = torch.tensor(x1_l_recall.values, dtype=torch.float32)[None, :]
-        x2_l_recall = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
-        x2_l_recall = torch.tensor(x2_l_recall.values, dtype=torch.float32)[None, :]
+        x1_vmeasure = self.scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
+        x1_vmeasure = torch.tensor(x1_vmeasure.values, dtype=torch.float32)[None, :]
+        x2_vmeasure = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
+        x2_vmeasure = torch.tensor(x2_vmeasure.values, dtype=torch.float32)[None, :]
         datum = {'x1': x1,
                  'x2': x2,
-                 'x1_l_recall': x1_l_recall,
-                 'x2_l_recall': x2_l_recall,
+                 'x1_vmeasure': x1_vmeasure,
+                 'x2_vmeasure': x2_vmeasure,
                  'x1_info': f'{rep_a}_{loc_a}',
                  'x2_info': f'{rep_b}_{loc_b}',
                  'track_info': f'{self.name}_{tid}',
@@ -758,3 +758,4 @@ def delay_embed(
         n_steps=n_steps, 
         delay=delay
     )
+

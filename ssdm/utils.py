@@ -20,7 +20,15 @@ import ssdm.scanner as scn
 def noop(x):
     pass
 
+def noop3(x, y, z):
+    pass
+
+def noop4(w, x, y, z):
+    pass
+
 mir_eval.hierarchy.validate_hier_intervals = noop
+mir_eval.segment.validate_boundary = noop3
+mir_eval.segment.validate_structure = noop4
 
 def anno_to_meet(
     anno: jams.Annotation,  # multi-layer
@@ -111,8 +119,8 @@ def compute_flat(
     # get empty dataarray for result
     results_dim = dict(
         m_type=['p', 'r', 'f'],
-        metric=['hr', 'hr3', 'pfc', 'v'],
-        # metric=['pfc'],
+        # metric=['hr', 'hr3', 'pfc', 'v'],
+        metric=['v'],
         layer=[x+1 for x in range(16)]
     )
     results = xr.DataArray(data=None, coords=results_dim, dims=list(results_dim.keys()))
@@ -124,9 +132,9 @@ def compute_flat(
         est_inter[-1, 1] = end_time
         
         layer_result_dict = dict(
-            hr=mir_eval.segment.detection(ref_inter, est_inter, window=.5, trim=True),
-            hr3=mir_eval.segment.detection(ref_inter, est_inter, window=3, trim=True),
-            pfc=mir_eval.segment.pairwise(ref_inter, ref_labels, est_inter, est_labels, frame_size=frame_size),
+            # hr=mir_eval.segment.detection(ref_inter, est_inter, window=.5, trim=True),
+            # hr3=mir_eval.segment.detection(ref_inter, est_inter, window=3, trim=True),
+            # pfc=mir_eval.segment.pairwise(ref_inter, ref_labels, est_inter, est_labels, frame_size=frame_size),
             v=mir_eval.segment.vmeasure(ref_inter, ref_labels, est_inter, est_labels, frame_size=frame_size)
         )
 
@@ -277,52 +285,34 @@ def get_lsd_scores(
     ds,
     shuffle=False,
     anno_col_fn=lambda stack: stack.max(dim='anno_id'), # activated when there are more than 1 annotation for a track
-    heir=True,
+    heir=False,
     beat_sync=True,
-    recollect=False,
     **lsd_score_kwargs,
-) -> xr.DataArray:
-    ds_str = str(ds).replace('rep', '').replace('loc', '')
-    sync_str = "_bsync" if beat_sync else ""
-    if heir:
-        save_path = f'/vast/qx244/{ds_str}_{len(ds.tids)}_heir{sync_str}_lsd_scores.nc'
-    else:
-        save_path = f'/vast/qx244/{ds_str}_{len(ds.tids)}_flat{sync_str}_lsd_scores.nc'
+) -> xr.DataArray:    
+    score_per_track = []
+    tids = ds.tids
+    if shuffle:
+        random.shuffle(tids)
 
-    if 'custom' in str(ds):
-        recollect = True
-    if recollect or (not os.path.exists(save_path)):
-        score_per_track = []
-        tids = ds.tids
-        if shuffle:
-            random.shuffle(tids)
-
-        for tid in tqdm(tids):
-            track = ds.ds_module.Track(tid=tid)
-            if track.num_annos() == 1:
-                if heir:
-                    score_per_track.append(track.lsd_score_l(beat_sync=beat_sync, **lsd_score_kwargs))
-                else:
-                    score_per_track.append(track.lsd_score_flat(beat_sync=beat_sync, **lsd_score_kwargs))
+    for tid in tqdm(tids):
+        track = ds.ds_module.Track(tid=tid)
+        if track.num_annos() == 1:
+            if heir:
+                score_per_track.append(track.lsd_score_l(beat_sync=beat_sync, **lsd_score_kwargs))
             else:
-                score_per_anno = []
-                for anno_id in range(track.num_annos()):
-                    if heir:
-                        score_per_anno.append(track.lsd_score_l(anno_id=anno_id, beat_sync=beat_sync, **lsd_score_kwargs))
-                    else:
-                        score_per_anno.append(track.lsd_score_flat(anno_id=anno_id, beat_sync=beat_sync, **lsd_score_kwargs))
-                # print(score_per_anno)
-                anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
-                score_per_track.append(anno_col_fn(anno_stack))
+                score_per_track.append(track.lsd_score_flat(beat_sync=beat_sync, **lsd_score_kwargs))
+        else:
+            score_per_anno = []
+            for anno_id in range(track.num_annos()):
+                if heir:
+                    score_per_anno.append(track.lsd_score_l(anno_id=anno_id, beat_sync=beat_sync, **lsd_score_kwargs))
+                else:
+                    score_per_anno.append(track.lsd_score_flat(anno_id=anno_id, beat_sync=beat_sync, **lsd_score_kwargs))
+            # print(score_per_anno)
+            anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
+            score_per_track.append(anno_col_fn(anno_stack))
 
-        out = xr.concat(score_per_track, pd.Index(tids, name='tid'), coords='minimal').rename()
-        try:
-            out.to_netcdf(save_path)
-        except:
-            os.system(f'rm {save_path}')
-            out.to_netcdf(save_path)
-
-    return xr.load_dataarray(save_path).sortby('tid')
+    return xr.concat(score_per_track, pd.Index(tids, name='tid'), coords='minimal').rename().sortby('tid')
 
 
 # def net_pick_performance(ds, net, heir=True, verbose=False, drop_feats=[]):

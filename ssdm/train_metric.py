@@ -10,7 +10,7 @@ import ssdm.scanner as scn
 
 
 
-def train(MODEL_ID='MultiResSoftmaxB', EPOCH=7, DATE='YYMMDD', DS='slm', OPT='sgd', MARGIN=0.05, net=None):
+def train(MODEL_ID='MultiResSoftmaxB', EPOCH=7, DATE='YYMMDD', DS='slm', OPT='sgd', MARGIN=0.01, net=None):
     """
     """
     short_xid_str = f'{MODEL_ID}-{DS}-{OPT}-l_recall{MARGIN}'

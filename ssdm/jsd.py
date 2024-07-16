@@ -108,6 +108,17 @@ class PairDS(base.PairDS):
         super().__init__(ds_module=ssdm.jsd, name='jsd', split=split, transform=transform, perf_margin=perf_margin)
 
 
+    def get_scores(self):
+        return ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=2).sel(m_type='f').sortby('tid')
+
 class InferDS(base.InferDS):
     def __init__(self, **kwargs):
         super().__init__(ds_module=ssdm.jsd, name='jsd', **kwargs)
+
+
+    def get_scores(self, drop_feats=[]):
+        score_da = ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=2).sel(m_type='f').sortby('tid')
+        new_tid = [self.name + tid.item() for tid in score_da.tid]
+        if drop_feats:
+            score_da = score_da.drop_sel(rep_ftype=drop_feats, loc_ftype=drop_feats)
+        return score_da.assign_coords(tid=new_tid)

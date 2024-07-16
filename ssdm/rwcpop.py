@@ -1,4 +1,5 @@
 import ssdm
+import ssdm.rwcpop
 from . import base
 import xarray as xr
 
@@ -23,6 +24,7 @@ class Track(base.Track):
         audio_dir: str = '/scratch/work/marl/datasets/mir_datasets/rwc_popular/audio'
     ):
         super().__init__(tid, dataset_dir, output_dir, feature_dir)
+        self.ds_name = 'rwc'
 
         metadata_csv = pd.read_csv(os.path.join(dataset_dir, 'metadata-master/rwc-p.csv'))
         self.metadata = metadata_csv[metadata_csv['Piece No.'] == f'No. {tid}']
@@ -48,58 +50,35 @@ class Track(base.Track):
                 new_anno.append(time = row[0] / 100,
                                 duration = (row[1] - row[0]) / 100,
                                 value = row[2])
-                
+            # return new_anno
             j.annotations.append(new_anno)
+            # return j
             self._jam = j
         return self._jam
 
 
-def get_ids(out_type: str = 'list'):
-    tids = [str(tid) for tid in range(1, 101)]
+def get_ids(split: str = None, out_type: str = 'list'):
+    all_ids = [str(tid) for tid in range(1, 101)]
+
+    if split:
+    # Get different splits: can be train test val
+        split_dict = ssdm.create_splits(all_ids, val_ratio=0.15, test_ratio=0.15, random_state=20230327)
+        tids = split_dict[split]
+    else:
+        tids = all_ids
 
     if out_type == 'set':
         return set(tids)
     else:
+        tids.sort()
         return tids
     
 
-def get_lsd_scores(
-    tids=None, 
-    **lsd_score_kwargs
-) -> xr.DataArray:
-    score_per_track = []
-    if tids == None:
-        tids = get_ids()
-    for tid in tqdm(tids):
-        track = Track(tid)
-        score_per_track.append(track.lsd_score(**lsd_score_kwargs))
-    
-    return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
-    
-
-def get_taus(
-    tids=[], 
-    **tau_kwargs,
-) -> xr.DataArray:
-    tau_per_track = []
-    for tid in tqdm(tids):
-        track = Track(tid)
-        tau_per_track.append(track.tau(**tau_kwargs))
-    
-    return xr.concat(tau_per_track, pd.Index(tids, name='tid')).rename()
+class PairDS(base.PairDS):
+    def __init__(self, split='val', transform=None, perf_margin=0.05):
+        super().__init__(ds_module=ssdm.rwcpop, name='rwcpop', split=split, transform=transform, perf_margin=perf_margin)
 
 
-class NewDS(base.DS):
-    def __init__(self, tids=None, **kwargs):
-        self.name = 'rwcp'
-        if not tids:
-            self.tids=get_ids(out_type='list')
-            self.split=''
-        else:
-            self.tids=tids
-            self.split=f'custom{len(tids)}'
-        
-        super().__init__(infer=True, **kwargs)
-
-    def track_obj(self, **track_kwargs):
-        return Track(**track_kwargs)
+class InferDS(base.InferDS):
+    def __init__(self, **kwargs):
+        super().__init__(ds_module=ssdm.rwcpop, name='rwcpop', **kwargs)

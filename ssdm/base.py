@@ -41,6 +41,7 @@ class Track(object):
 
         self.title = tid
         self.audio_path = None
+        self.ds_name = None
         
         self._sr = 22050 # This is fixed
         self._hop_len = 4096 # This is fixed
@@ -89,7 +90,6 @@ class Track(object):
             beat_times = np.append(beat_times, self.ts(mode='frame')[-1])
         np.save(save_path, beat_times)
         return beat_times
-
 
 
     def representation(self, feat_type='mfcc', use_track_ts=True, recompute=False, beat_sync=False, full=False, **delay_emb_kwargs):
@@ -147,8 +147,13 @@ class Track(object):
                 return beats[:-1]
 
 
-    def ref(self, mode='expand', ts_mode='frame', **anno_id_kwarg):
-        seg_anns = self.jam().search(namespace='segment_open')
+    def ref(self, mode='expand', ts_mode='beat', anno_id=0):
+        try:
+            seg_anns = self.jam().search(namespace='segment_salami_upper')
+            assert len(seg_anns) != 0
+        except:
+            seg_anns = self.jam().search(namespace='segment_open')
+            assert len(seg_anns) != 0
 
         def fill_out_anno(anno, ts):
             anno_start_time = anno.data[0].time
@@ -161,15 +166,18 @@ class Track(object):
                         )
             if anno_end_time < last_frame_time:
                 anno.append(value='NL', time=anno_end_time, 
-                            duration=last_frame_time - anno_start_time, confidence=1
+                            duration=last_frame_time - anno_end_time, confidence=1
                         )
             return anno
-        
-        anno = fill_out_anno(seg_anns[0], self.ts(mode=ts_mode))
+
+        anno = fill_out_anno(seg_anns[anno_id], self.ts(mode=ts_mode))
         if mode == 'expand':
-            return ssdm.openseg2multi(expand_hierarchy(anno))
+            return ssdm.openseg2multi(expand_hierarchy(anno, dataset=self.ds_name, always_include=True))
         elif mode == 'normal':
-            return ssdm.openseg2multi([anno])
+            if self.ds_name == 'jsd':
+                return ssdm.openseg2multi([expand_hierarchy(anno, dataset=self.ds_name, always_include=True)[-1]])
+            else:
+                return ssdm.openseg2multi([anno])
 
 
     def path_ref(
@@ -304,13 +312,49 @@ class Track(object):
             path_sim = path_sim[:rep_ssm.shape[0] - 1]
         return scluster.combine_ssms(rep_ssm, path_sim, rec_smooth=config['rec_smooth'])
 
-    
+
+    def embedded_rec_mat(self, feat_combo=dict(), lap_norm='random_walk', beat_sync=True, recompute=False):
+        beat_suffix = {"_bsync" if beat_sync else ""}
+        save_path = os.path.join(self.output_dir, f'evecs/{self.tid}_rep{feat_combo["rep_ftype"]}_loc{feat_combo["loc_ftype"]}_{lap_norm}{beat_suffix}.npy')
+        if not recompute:
+            try:
+                return np.load(save_path)
+            except:
+                recompute = True
+        
+        rec_mat = self.combined_rec_mat(config_update=feat_combo, beat_sync=beat_sync)
+        degree_matrix = np.diag(np.sum(rec_mat, axis=1))
+        unnormalized_laplacian = degree_matrix - rec_mat
+        # Compute the Random Walk normalized Laplacian matrix
+        if lap_norm == 'random_walk':
+            degree_inv = np.linalg.inv(degree_matrix)
+            normalized_laplacian = degree_inv @ unnormalized_laplacian
+            evals, evecs = eig(normalized_laplacian)
+            sort_indices = np.argsort(evals.real)
+            # Reorder the eigenvectors matrix columns using the sort indices of evals
+            sorted_eigenvectors = evecs[:, sort_indices]
+            first_evecs = sorted_eigenvectors.real[:, :20]
+        elif lap_norm == 'symmetrical':
+            sqrt_degree_inv = np.linalg.inv(np.sqrt(degree_matrix))
+            normalized_laplacian = sqrt_degree_inv @ unnormalized_laplacian @ sqrt_degree_inv
+            evals, evecs = eigh(normalized_laplacian)
+            sort_indices = np.argsort(evals)
+            # Reorder the eigenvectors matrix columns using the sort indices of evals
+            sorted_eigenvectors = evecs[:, sort_indices]
+            first_evecs = sorted_eigenvectors[:, :20]
+        else:
+            print('lap_norm can only be random_walk or symmetrical')
+
+        np.save(save_path, first_evecs)
+        return first_evecs
+
+
     def lsd(
         self,
         config_update: dict = dict(),
         recompute: bool  = False,
         print_config: bool = False,
-        beat_sync: bool = False,
+        beat_sync: bool = True,
         path_sim_sigma_percentile: float = 95,
     ) -> jams.Annotation:
         # load lsd jams and file/log handeling...
@@ -373,15 +417,11 @@ class Track(object):
         return lsd_anno
     
 
-    def new_lsd_score(self, anno_id=0, l_frame_size=0.5, beat_sync=True, path_sim_bw=95, recompute=False):
+    def lsd_score_l(self, anno_id=0, l_frame_size=0.5, beat_sync=True, path_sim_bw=95, recompute=False):
         # save 
-        if anno_id != 0:
-            anno_flag = f'a{anno_id}'
-        else:
-            anno_flag = ''
         nc_path = os.path.join(
             self.output_dir, 
-            f'ells/{self.tid}_{anno_flag}_{l_frame_size}p{path_sim_bw}{"_bsync" if beat_sync else ""}.nc'
+            f'ells/{self.tid}_a{anno_id}_{l_frame_size}locbw{path_sim_bw}{"_bsync" if beat_sync else ""}.nc'
         )
 
         if not recompute:
@@ -395,6 +435,7 @@ class Track(object):
             rep_ftype=ssdm.AVAL_FEAT_TYPES,
             loc_ftype=ssdm.AVAL_FEAT_TYPES,
             layer=[x+1 for x in range(16)],
+            metric=['l'],
             m_type=['p', 'r', 'f'],
         )
 
@@ -417,100 +458,23 @@ class Track(object):
 
             for layer in score_dims['layer']:
                 score_da.loc[feature_pair].loc[layer] = list(ssdm.compute_l(
-                    self.lsd(lsd_config, beat_sync=beat_sync, recompute=False), 
-                    self.ref(mode='normal', anno_id=anno_id),
+                    self.lsd(lsd_config, beat_sync=beat_sync, path_sim_sigma_percentile=path_sim_bw, recompute=False), 
+                    self.ref(mode='expand', anno_id=anno_id),
                     l_frame_size=l_frame_size, nlvl=layer
                 ))
         
         try:
             score_da.to_netcdf(nc_path)
+            print(f'(re)computed and saved {self.ds_name} {self.tid} a{anno_id} l score')
         except PermissionError:
             os.system(f'rm {nc_path}')
             score_da.to_netcdf(nc_path)
         return score_da
 
 
-    # def lsd_score(
-    #     self,
-    #     lsd_sel_dict: dict = dict(),
-    #     recompute: bool = False,
-    #     l_frame_size: float = 0.1,
-    #     beat_sync: bool = False,
-    #     path_sim_sigma_percent: float = 95,
-    #     anno_id: int = 0,
-    # ) -> xr.DataArray:
-    #     #initialize file if doesn't exist or load the xarray nc file
-    #     nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{l_frame_size}p{path_sim_sigma_percent}{"_bsync2" if beat_sync else ""}.nc')
-    #     if not os.path.exists(nc_path):
-    #         init_grid = ssdm.LSD_SEARCH_GRID.copy()
-    #         init_grid.update(anno_id=range(self.num_annos()), l_type=['lp', 'lr', 'lm'])
-    #         lsd_score_da = xr.DataArray(np.nan, dims=init_grid.keys(), coords=init_grid, name=str(self.tid))
-    #         lsd_score_da.to_netcdf(nc_path)
-    #     else:
-    #         with xr.open_dataarray(nc_path) as lsd_score_da:
-    #             lsd_score_da.load()
-        
-    #     # build lsd_configs from lsd_sel_dict
-    #     configs = []
-    #     config_midx = lsd_score_da.sel(**lsd_sel_dict).coords.to_index()
-    #     for option_values in config_midx:
-    #         exp_config = ssdm.DEFAULT_LSD_CONFIG.copy()
-    #         if beat_sync:
-    #             exp_config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
-    #         for opt in lsd_sel_dict:
-    #             if opt in ssdm.DEFAULT_LSD_CONFIG:
-    #                 exp_config[opt] = lsd_sel_dict[opt]
-    #         try:
-    #             for opt, value in zip(config_midx.names, option_values):
-    #                 if opt in ssdm.DEFAULT_LSD_CONFIG:
-    #                     exp_config[opt] = value
-    #         except TypeError:
-    #             pass
-    #         if exp_config not in configs:
-    #             configs.append(exp_config)
-
-    #     # run through the configs list and populate / readout scores
-    #     for lsd_conf in configs:
-    #         # first build the index dict
-    #         coord_idx = lsd_conf.copy()
-    #         coord_idx.update(l_type=['lp', 'lr', 'lm'])
-    #         for k in coord_idx.copy():
-    #             if k not in lsd_score_da.coords:
-    #                 del coord_idx[k]
-            
-    #         exp_slice = lsd_score_da.sel(coord_idx)
-    #         if recompute or exp_slice.isnull().any():
-    #             # Only compute if value doesn't exist:
-    #             # print('recomputing l score')
-    #             proposal = self.lsd(lsd_conf, print_config=False, beat_sync=beat_sync, path_sim_sigma_percentile=path_sim_sigma_percent, recompute=False)
-    #             annotation = self.ref(anno_id=anno_id)
-    #             # search l_score from old places first?
-    #             l_score = ssdm.compute_l(proposal, annotation, l_frame_size=l_frame_size)
-    #             with xr.open_dataarray(nc_path) as lsd_score_da:
-    #                 lsd_score_da.load()
-    #             lsd_score_da.loc[coord_idx] = list(l_score)
-    #             try:
-    #                 lsd_score_da.to_netcdf(nc_path)
-    #             except PermissionError:
-    #                 os.system(f'rm {nc_path}')
-    #                 # Sometimes saving can fail due to multiple workers
-    #                 pass
-    #     # return lsd_score_da
-    #     out = lsd_score_da.sel(**lsd_sel_dict)
-    #     try:
-    #         out = out.sel(anno_id=anno_id)
-    #     except:
-    #         pass
-    #     return out
-
-
-    def lsd_score_flat(self, anno_id=0, beat_sync=True, recompute=False) -> xr.DataArray:
+    def lsd_score_flat(self, anno_id=0, beat_sync=True, anno_mode='normal', a_layer=0, frame_size=0.1, recompute=False) -> xr.DataArray:
         # save 
-        if anno_id != 0:
-            anno_flag = f'a{anno_id}'
-        else:
-            anno_flag = ''
-        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_{anno_flag}flat_pfc{"_bsync" if beat_sync else ""}.nc')
+        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_a{anno_id}{anno_mode}fs{frame_size}{a_layer if anno_mode=="expand" else ""}f{"_bsync" if beat_sync else ""}.nc')
 
         if not os.path.exists(nc_path):
             # build da to store
@@ -518,8 +482,8 @@ class Track(object):
                 rep_ftype=ssdm.AVAL_FEAT_TYPES,
                 loc_ftype=ssdm.AVAL_FEAT_TYPES,
                 m_type=['p', 'r', 'f'],
-                # metric=['hr', 'hr3', 'pfc', 'nce'],
-                metric=['pfc'],
+                metric=['hr', 'hr3', 'pfc', 'v'],
+                # metric=['pfc'],
                 layer=[x+1 for x in range(16)],
             )
 
@@ -548,114 +512,22 @@ class Track(object):
                     if beat_sync:
                         lsd_config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
                     lsd_config.update(feature_pair)
-                    score_da.loc[feature_pair] = ssdm.compute_flat(self.lsd(lsd_config, beat_sync=beat_sync, recompute=False), self.ref(mode='normal', anno_id=anno_id))
+                    score_da.loc[feature_pair] = ssdm.compute_flat(
+                        self.lsd(lsd_config, beat_sync=beat_sync, recompute=False), 
+                        self.ref(mode=anno_mode, anno_id=anno_id),
+                        a_layer=a_layer,
+                        frame_size=frame_size
+                    )
             
             try:
                 score_da.to_netcdf(nc_path)
+                print(f'(re)computed and saved {self.ds_name} {self.tid} a{anno_id} flat score')
             except PermissionError:
                 os.system(f'rm {nc_path}')
 
         return score_da
 
-
-    def tau_both(
-        self,
-        anno_mode: str = 'normal',
-        recompute: bool = False,
-        lap_norm: str = 'random_walk', # symmetrical or random_walk
-        quantize: str = 'percentile', # None, 'kmeans' or 'percentile'
-        quant_bins: int = 8, # used for loc tau quant schemes
-        beat_sync: bool = True,
-        verbose: bool = False,
-        **anno_id_kwarg
-    ) -> xr.DataArray:
-        # test if record_path exist, if no, set recompute to true.
-        quantize_suffix = f'_{quantize}{quant_bins}' if quantize is not None else ''
-        beat_suffix = "_bsync3" if beat_sync else ""
-        record_path = os.path.join(self.output_dir, f'taus/{self.tid}_{anno_mode}{quantize_suffix}{lap_norm}{beat_suffix}.nc')
-        
-        if not recompute:
-            try:
-                with xr.open_dataarray(record_path) as tau:
-                    return tau.load().sel(**anno_id_kwarg)
-            except:
-                recompute = True
-
-        grid_coords = dict(
-            anno_id=list(range(self.num_annos())), 
-            rep_ftype=ssdm.AVAL_FEAT_TYPES, 
-            loc_ftype=ssdm.AVAL_FEAT_TYPES
-        )
-        tau = xr.DataArray(np.nan, coords=grid_coords, dims=grid_coords.keys())
-        
-        for anno_id, rep_ftype, loc_ftype in tau.coords.to_index():
-            if verbose:
-                print(anno_id, rep_ftype, loc_ftype)
-            # Compute the combined rec mat
-            feat_combo = dict(rep_ftype=rep_ftype, loc_ftype=loc_ftype)
-            # Combined rec -> evecs function function (with caching, and normalization param lap_norm)
-            evecs = self.embedded_rec_mat(feat_combo=feat_combo, beat_sync=beat_sync, lap_norm=lap_norm, recompute=recompute)
-            # print(evecs.shape, beat_sync)
-            # Calculate the LRA of the normalized laplacian, and use that to compute corr with anno_meet_mat
-            lap_low_rank_approx = evecs[:, :10] @ evecs[:, :10].T
-            
-            if quantize:
-                lap_low_rank_approx = ssdm.quantize(lap_low_rank_approx, quant_bins=quant_bins)
-            
-            if beat_sync:
-                ts_mode = 'beat'
-            else:
-                ts_mode = 'frame'
-            meet_mat = ssdm.anno_to_meet(self.ref(mode=anno_mode, anno_id=anno_id), self.ts(mode=ts_mode))
-            least_beats = min(lap_low_rank_approx.shape[0], meet_mat.shape[0])
-            lap_low_rank_approx = lap_low_rank_approx[:least_beats, :least_beats]
-            meet_mat = meet_mat[:least_beats, :least_beats]
-            tau.loc[anno_id, rep_ftype, loc_ftype] = stats.kendalltau(
-                lap_low_rank_approx.flatten(), meet_mat.flatten()
-                )[0]
-        try:
-            tau.to_netcdf(record_path)
-        except:
-            pass
-        return tau.sel(**anno_id_kwarg)
-
-
-    def embedded_rec_mat(self, feat_combo=dict(), lap_norm='random_walk', beat_sync=True, recompute=False):
-        beat_suffix = {"_bsync" if beat_sync else ""}
-        save_path = os.path.join(self.output_dir, f'evecs/{self.tid}_rep{feat_combo["rep_ftype"]}_loc{feat_combo["loc_ftype"]}_{lap_norm}{beat_suffix}.npy')
-        if not recompute:
-            try:
-                return np.load(save_path)
-            except:
-                recompute = True
-        
-        rec_mat = self.combined_rec_mat(config_update=feat_combo, beat_sync=beat_sync)
-        degree_matrix = np.diag(np.sum(rec_mat, axis=1))
-        unnormalized_laplacian = degree_matrix - rec_mat
-        # Compute the Random Walk normalized Laplacian matrix
-        if lap_norm == 'random_walk':
-            degree_inv = np.linalg.inv(degree_matrix)
-            normalized_laplacian = degree_inv @ unnormalized_laplacian
-            evals, evecs = eig(normalized_laplacian)
-            sort_indices = np.argsort(evals.real)
-            # Reorder the eigenvectors matrix columns using the sort indices of evals
-            sorted_eigenvectors = evecs[:, sort_indices]
-            first_evecs = sorted_eigenvectors.real[:, :20]
-        elif lap_norm == 'symmetrical':
-            sqrt_degree_inv = np.linalg.inv(np.sqrt(degree_matrix))
-            normalized_laplacian = sqrt_degree_inv @ unnormalized_laplacian @ sqrt_degree_inv
-            evals, evecs = eigh(normalized_laplacian)
-            sort_indices = np.argsort(evals)
-            # Reorder the eigenvectors matrix columns using the sort indices of evals
-            sorted_eigenvectors = evecs[:, sort_indices]
-            first_evecs = sorted_eigenvectors[:, :20]
-        else:
-            print('lap_norm can only be random_walk or symmetrical')
-
-        np.save(save_path, first_evecs)
-        return first_evecs
-
-
+    
     def num_dist_segs(self):
         num_seg_per_anno = []
         for aid in range(self.num_annos()):
@@ -665,6 +537,50 @@ class Track(object):
                 segs.append(obs.value)
             num_seg_per_anno.append(len(set(segs)))
         return max(num_seg_per_anno)
+
+
+    def scan_by(self, net, device='cuda:0'):
+        # build da to store
+        util_score_dims = dict(
+            rep_ftype=ssdm.AVAL_FEAT_TYPES,
+            loc_ftype=ssdm.AVAL_FEAT_TYPES,
+        )
+        nlvl_score_dims = dict(
+            rep_ftype=ssdm.AVAL_FEAT_TYPES,
+            loc_ftype=ssdm.AVAL_FEAT_TYPES,
+            layer=[x+1 for x in range(16)],
+        )
+
+        util_score = xr.DataArray(
+            data=np.nan,  # Initialize the data with NaNs
+            coords=util_score_dims,
+            dims=list(util_score_dims.keys()),
+            name=str(self.tid)
+        )
+
+        nlvl_score = xr.DataArray(
+            data=np.nan,  # Initialize the data with NaNs
+            coords=nlvl_score_dims,
+            dims=list(nlvl_score_dims.keys()),
+            name=str(self.tid)
+        )
+
+        # build all the lsd configs:
+        indexer = itertools.product(ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES)
+        net.to(device)
+        net.eval()
+        for rep_feat, loc_feat in indexer:
+            first_evecs = self.embedded_rec_mat(
+                feat_combo=dict(rep_ftype=rep_feat, loc_ftype=loc_feat), 
+                lap_norm='random_walk', beat_sync=True,
+                recompute=False
+            )
+            x = torch.tensor(first_evecs, dtype=torch.float32)[None, None, :]
+            util, nlvl = net(x.to(device))
+            util_score.loc[rep_feat, loc_feat] = util.item()
+            nlvl_score.loc[rep_feat, loc_feat, :] = nlvl.detach().cpu().numpy().squeeze()
+        return util_score, nlvl_score
+
 
 
 class MyTrack(Track):
@@ -690,141 +606,33 @@ class MyTrack(Track):
         return self._jam
 
 
-class DS(Dataset):
-    def __init__(
-        self, 
-        mode='both',
-        infer = True,
-        transform = None,
-        lap_norm = 'random_walk',
-        beat_sync = True,
-        sample_select_fn=None
-    ):
-        if torch.cuda.is_available():
-            self.device = torch.device("cuda")
-        else:
-            self.device = torch.device("cpu")
-
-        if mode not in ('rep', 'loc', 'both'):
-            raise AssertionError('bad dataset mode, can only be rep or loc both')
-        self.mode = mode
-        self.infer = infer
-        self.sample_select_fn = sample_select_fn
-        self.lap_norm = lap_norm
-        self.beat_sync = beat_sync
-
-        # sample building
-        if self.infer:
-            if self.mode == 'both':
-                self.samples = list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES))
-            else:
-                self.samples = list(itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES))
-        else:
-            self.labels = sample_select_fn(self)
-            self.samples = list(self.labels.keys())
-        self.samples.sort()
-        self.transform=transform
-        self.output_dir = self.track_obj().output_dir
-        
-
-    def __len__(self):
-        return len(self.samples)
-
-
-    def __repr__(self):
-        return f'{self.name}{self.mode}{self.split}'
-
-
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-        tid, *feats = self.samples[idx]
-        config = ssdm.DEFAULT_LSD_CONFIG.copy()
-        if self.beat_sync:
-            config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
-        s_info = (tid, *feats, self.mode)
-        
-
-        first_evecs = self.track_obj(tid=tid).embedded_rec_mat(
-            feat_combo=dict(rep_ftype=feats[0], loc_ftype=feats[1]), 
-            lap_norm=self.lap_norm, beat_sync=self.beat_sync,
-            recompute=False
-        )
-        data = torch.tensor(first_evecs, dtype=torch.float32, device=self.device)
-        if self.mode != 'both':
-            assert KeyError('bad mode: can only be both')
-        
-        nlvl_save_path = os.path.join(self.output_dir, 'evecs/'+s_info[0]+'_nlvl.npy')
-        try:
-            best_nlvl = np.load(nlvl_save_path)
-        except:
-            track = self.track_obj(tid=tid)
-            best_nlvl = np.array([min(track.num_dist_segs() - 1, 10)])
-            np.save(nlvl_save_path, best_nlvl)
-
-        datum = {'data': data[None, None, :],
-                 'info': s_info,
-                 'uniq_segs': torch.tensor(best_nlvl, dtype=torch.long, device=self.device)}
-
-        if not self.infer:
-            label, nlvl = self.labels[self.samples[idx]]
-            datum['label'] = torch.tensor([label], dtype=torch.float32, device=self.device)[None, :]
-            datum['best_layer'] = torch.tensor([nlvl], dtype=torch.float32, device=self.device)[None, :]
-        
-        if self.transform:
-            datum = self.transform(datum)
-        
-        return datum
-
-    def track_obj(self):
-        raise NotImplementedError
-
-
-class HmxDS(Dataset):
-    def __init__(self, split='val', infer=True, device='cpu', transform=None, nlvl_metric='l', aux=False):
-        self.device = device
+class InferDS(Dataset):
+    def __init__(self, ds_module=None, name='base', split='val', transform=None):
         self.split = split
-        
-        self.infer = infer
         self.transform = transform
-        self.ds_module = ssdm.hmx
-        self.name = 'hmx'
-        self.mode = 'both' # for legacy support 
+        self.ds_module = ds_module
+        self.name = name
         self.tids = self.ds_module.get_ids(self.split)
-
-        # self.expand_evec = ssdm.scn.ExpandEvecs().to(device)
-        self.nlvl_metric = nlvl_metric
-        
+        self.tids.sort()
         all_samples = list(itertools.product(
             self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES
         ))
-        if self.infer:
-            self.samples = ['_'.join(sid_list) for sid_list in all_samples]
-        else:    
-            with open('/home/qx244/scanning-ssm/ssdm/new_nbs/hmx_samples_percentile.json', 'r') as j:
-                self._samp_json = json.load(j)
-            self.labels = {**self._samp_json['pos'], **self._samp_json['neg']}
-            
-            # Get rid of tids with no positive or negatvie samples
-            tids_no_zero_sample = []
-            for samp in self.labels.copy():
-                tid = samp.split('_')[0]
-                if tid not in self.tids:
-                    del self.labels[samp]
-                else:
-                    tids_no_zero_sample.append(tid)
-            self.tids = list(set(tids_no_zero_sample))
-            self.samples = list(self.labels.keys())
-        
-        self.tids.sort()
+        self.samples = ['_'.join(sid_list) for sid_list in all_samples]
         self.samples.sort()
                     
     def __len__(self):
         return len(self.samples)
 
     def __repr__(self):
-        return f'{self.name}{self.mode}{self.split}{"_slice" if not self.infer else ""}'
+        return f'{self.name}_{self.split}_infer'
         
+    def get_scores(self, drop_feats=[]):
+        score_da = ssdm.get_lsd_scores(self, heir=True, shuffle=True).sel(m_type='r', layer=16).sortby('tid')
+        new_tid = [self.name + tid.item() for tid in score_da.tid]
+        if drop_feats:
+            score_da = score_da.drop_sel(rep_ftype=drop_feats, loc_ftype=drop_feats)
+        return score_da.assign_coords(tid=new_tid)
+    
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
@@ -838,70 +646,21 @@ class HmxDS(Dataset):
             recompute=False
         )
         data = torch.tensor(first_evecs, dtype=torch.float32)[None, None, :]
-        # data = self.expand_evec(data)
         datum = {'data': data,
                  'info': samp_info}
 
-        if not self.infer:
-            label, nlvl = self.labels[samp_info]
-            
-            datum['label'] = torch.tensor([label], dtype=torch.float32)[None, :]
-            datum['best_layer'] = torch.tensor([nlvl], dtype=torch.float32)[None, :]
-
-            if self.nlvl_metric == 'l':
-                layer_score = self.track_obj(tid=tid).new_lsd_score().sel(m_type='f', rep_ftype=rep_feat, loc_ftype=loc_feat)
-                datum['layer_score'] = torch.tensor(layer_score.values, dtype=torch.float32)[None, :]
-            elif self.nlvl_metric == 'pfc':
-                layer_score_flat = self.track_obj(tid=tid).lsd_score_flat(beat_sync=True).sel(m_type='f', metric='pfc', rep_ftype=rep_feat, loc_ftype=loc_feat)
-                datum['layer_score'] = torch.tensor(layer_score_flat.values, dtype=torch.float32)[None, :]
-            else:
-                raise NotImplementedError('bad metric for getting layer score')
-            
-            if datum['layer_score'].isnan().any():
-                print(datum['info'])
-                assert self.nlvl_metric == 'pfc'
-                layer_score_flat = self.track_obj(tid=tid).lsd_score_flat(beat_sync=True, recompute=True).sel(m_type='f', metric='pfc', rep_ftype=rep_feat, loc_ftype=loc_feat)
-                datum['layer_score'] = torch.tensor(layer_score_flat.values * 100, dtype=torch.float32)[None, :]
-        
         if self.transform:
             datum = self.transform(datum)
         
         return datum
-    
-    def track_obj(self, **kwargs):
-        return self.ds_module.Track(**kwargs)
-
-
-class SlmDS(HmxDS):
-    def __init__(self, split='test', infer=True, 
-                 device='cpu', transform=None, nlvl_metric='pfc'):
-        self.device = device
-        self.split = split
-        self.infer = infer
-        self.transform = transform
-        self.nlvl_metric = nlvl_metric
-
-        self.ds_module = ssdm.slm
-        self.name = 'slm'
-        self.mode = 'both' # for legacy support 
-        self.tids = self.ds_module.get_ids(self.split)
-
-        all_samples = list(itertools.product(
-            self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES
-        ))
-        if self.infer:
-            self.samples = ['_'.join(sid_list) for sid_list in all_samples]
-        else:
-            raise NotImplementedError
 
 
 class PairDS(Dataset):
-    def __init__(self, ds_module, name=None, split='val', transform=None, perf_metric='pfc', perf_margin=0.05):
+    def __init__(self, ds_module, name=None, split='val', transform=None, perf_margin=0.05):
         super().__init__()
         self.ds_module = ds_module
         self.split = split
         self.transform = transform
-        self.perf_metric = perf_metric
         self.perf_margin = perf_margin
         
         self.name = name
@@ -913,20 +672,20 @@ class PairDS(Dataset):
         self.tids.sort()
         self.samples.sort()
 
+
     def __repr__(self):
-        return f'{self.name}_{self.split}_{self.perf_metric}'
+        return f'{self.name}_{self.split}_l-recall'
     
+
     def __len__(self):
         return len(self.samples)
     
-    def track_obj(self, **kwargs):
-        return self.ds_module.Track(**kwargs)
-    
+
     def get_scores(self):
-        if self.perf_metric == 'l':
-            return ssdm.get_lsd_scores(self, heir=True).sel(m_type='f')
-        elif self.perf_metric == 'pfc':
-            return ssdm.get_lsd_scores(self, heir=False).sel(m_type='f', metric=self.perf_metric)
+        return ssdm.get_lsd_scores(self, heir=True, shuffle=True).sel(m_type='r', layer=16).sortby('tid')
+        # new_tid = [self.name + tid.item() for tid in score_da.tid]
+        # return score_da.assign_coords(tid=new_tid)
+
 
     def get_score_gaps(self):
         fpath = f'/home/qx244/scanning-ssm/ssdm/{self}_score_gaps.json'
@@ -936,10 +695,9 @@ class PairDS(Dataset):
         except:
             samp_iter = itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES)
             score_gaps = {}
-            scores = self.scores.max('layer')
             for tid, rep_a, loc_a, rep_b, loc_b in tqdm(samp_iter):
-                score_a = scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a).item()
-                score_b = scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b).item()
+                score_a = self.scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a).item()
+                score_b = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b).item()
                 score_gaps[f'{tid}_{rep_a}_{loc_a}_{rep_b}_{loc_b}'] = score_a - score_b
             with open(fpath, 'w') as f:
                 json.dump(score_gaps, f)
@@ -965,14 +723,14 @@ class PairDS(Dataset):
         )
         x1 = torch.tensor(first_evecs_a, dtype=torch.float32)[None, None, :]
         x2 = torch.tensor(first_evecs_b, dtype=torch.float32)[None, None, :]
-        x1_layer_score = self.scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
-        x1_layer_score = torch.tensor(x1_layer_score.values, dtype=torch.float32)[None, :]
-        x2_layer_score = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
-        x2_layer_score = torch.tensor(x2_layer_score.values, dtype=torch.float32)[None, :]
+        x1_l_recall = self.scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
+        x1_l_recall = torch.tensor(x1_l_recall.values, dtype=torch.float32)[None, :]
+        x2_l_recall = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
+        x2_l_recall = torch.tensor(x2_l_recall.values, dtype=torch.float32)[None, :]
         datum = {'x1': x1,
                  'x2': x2,
-                 'x1_layer_score': x1_layer_score,
-                 'x2_layer_score': x2_layer_score,
+                 'x1_l_recall': x1_l_recall,
+                 'x2_l_recall': x2_l_recall,
                  'x1_info': f'{rep_a}_{loc_a}',
                  'x2_info': f'{rep_b}_{loc_b}',
                  'track_info': f'{self.name}_{tid}',
@@ -981,6 +739,7 @@ class PairDS(Dataset):
         if self.transform:
             datum = self.transform(datum)
         return datum
+
 
 def delay_embed(
     feat_mat,

@@ -21,6 +21,7 @@ class Track(base.Track):
                 ):
         super().__init__(tid=tid, feature_dir=feature_dir, output_dir=output_dir, dataset_dir=dataset_dir)
         self.title = self.tid + '_' + HMX_TITLE_DICT[self.tid]
+        self.ds_name = 'hmx'
 
     def audio(self, **kwargs): 
         print('Audio not Available')
@@ -62,28 +63,14 @@ def get_ids(
     else:
         print('invalid out_type')
         return None
-
-
-class NewDS(base.DS):
-    def __init__(self, split='train', tids=None, infer=True, 
-                 sample_select_fn=ssdm.sel_samp_l, **kwargs):
-        self.name = 'hmx'
-
-        if tids is None:
-            self.tids = get_ids(split=split, out_type='list')
-            self.split = split
-        else:
-            self.tids = tids
-            self.split = f'custom{len(tids)}'
-        
-        super().__init__(infer=infer, sample_select_fn=sample_select_fn, **kwargs)
-    
-    
-    def track_obj(self, **track_kwargs):
-        return Track(**track_kwargs)
     
 
 class PairDS(base.PairDS):
+    def __init__(self, **kwargs):
+        super().__init__(ds_module=ssdm.hmx, name='hmx', **kwargs)
+
+
+class InferDS(base.InferDS):
     def __init__(self, **kwargs):
         super().__init__(ds_module=ssdm.hmx, name='hmx', **kwargs)
         

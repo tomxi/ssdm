@@ -1,17 +1,11 @@
 import ssdm
 from ssdm import base
 import os, json, pkg_resources
-import librosa, jams
-import numpy as np
+import jams
 import ssdm.formatting
 import xarray as xr
 import pandas as pd
 from tqdm import tqdm
-import itertools
-from scipy import stats
-
-from ssdm.expand_hier import expand_hierarchy
-
 
 class Track(base.Track):
     def __init__(
@@ -23,45 +17,12 @@ class Track(base.Track):
         ):
         super().__init__(tid, dataset_dir=dataset_dir, output_dir=output_dir, feature_dir=feature_dir)
         self.audio_path = os.path.join(dataset_dir, f'audio/{tid}/audio.mp3')
-
+        self.ds_name = 'slm'
 
     def num_annos(
         self,
     ) -> int:
-        return len(self.jam().search(namespace='segment_salami_upper'))
-
-
-    def ref(
-        self,
-        mode: str = 'expand', # {'normal', 'expand', 'refine', 'coarse'},
-        anno_id: int = 0,
-    ) -> jams.Annotation: 
-        """
-        A list of `jams.Annotation`s with two modes: {'normal', 'expand'}
-        """
-        upper_annos = self.jam().search(namespace='segment_salami_upper')
-        lower_annos = self.jam().search(namespace='segment_salami_lower')
-        if mode == 'normal':
-
-            out_anno = ssdm.openseg2multi([upper_annos[anno_id], lower_annos[anno_id]])
-            # multi_anno = jams.Annotation(namespace='multi_segment')
-        else:
-            upper_expanded = expand_hierarchy(upper_annos[anno_id])
-            lower_expanded = expand_hierarchy(lower_annos[anno_id])
-            
-            if mode == 'expand':
-                out_anno = ssdm.openseg2multi(upper_expanded + lower_expanded)
-            elif mode == 'refine':
-                upper_refined = upper_expanded[-1]
-                lower_refined = lower_expanded[-1]
-                out_anno = ssdm.openseg2multi([upper_refined, lower_refined])
-            elif mode == 'coarse':
-                upper_coarsened = upper_expanded[0]
-                lower_coarsened = lower_expanded[0]
-                out_anno = ssdm.openseg2multi([upper_coarsened, lower_coarsened])
-            else:
-                raise librosa.ParameterError("mode can only be one of 'normal', 'expand', 'refine', or 'coarse'.")
-        return out_anno
+        return len(self.jam().search(namespace='segment_salami_function'))
 
 
     def adobe(
@@ -111,8 +72,7 @@ def get_ids(
     split: str = 'working',
     out_type: str = 'list' # one of {'set', 'list'}
 ) -> list:
-    """ split can be ['audio', 'jams', 'excluded', 'new_val', 'new_test', 'new_train']
-        Dicts sotred in id_path json file.
+    """
     """
     id_path = pkg_resources.resource_filename('ssdm', 'split_ids.json')
     try:
@@ -123,6 +83,8 @@ def get_ids(
         id_json[split] = []
         with open(id_path, 'w') as f:
             json.dump(id_json, f)
+    if split == None:
+        split = 'working'
     ids = id_json[split]
         
     if out_type == 'set':
@@ -133,6 +95,7 @@ def get_ids(
     else:
         print('invalid out_type')
         return None
+
 
 def get_adobe_scores(
     tids=[],
@@ -180,19 +143,11 @@ def update_split_json(split_name='', split_idx=[]):
         return json.load(f)
 
 
-class NewDS(base.DS):
-    def __init__(self, split='train', tids=None, infer=True, 
-                 sample_select_fn=ssdm.sel_samp_l, 
-                 **kwargs):
-        self.name = 'slm'
+class PairDS(base.PairDS):
+    def __init__(self, **kwargs):
+        super().__init__(ds_module=ssdm.slm, name='slm', **kwargs)
 
-        if tids is None:
-            self.tids = get_ids(split=split, out_type='list')
-            self.split = split
-        else:
-            self.tids = tids
-            self.split = f'custom{len(tids)}'
-        
-        super().__init__(infer=infer, sample_select_fn=sample_select_fn, **kwargs)
-    def track_obj(self, **track_kwargs):
-        return Track(**track_kwargs)
+
+class InferDS(base.InferDS):
+    def __init__(self, **kwargs):
+        super().__init__(ds_module=ssdm.slm, name='slm', **kwargs)

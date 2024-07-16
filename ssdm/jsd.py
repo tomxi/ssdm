@@ -29,7 +29,7 @@ class Track(base.Track):
         self.title = self.title.replace('(', '').replace(')', '').replace('_solo', '_Solo')
         self.track_title = self.info.filename_track.item()
         self.audio_path = os.path.join(audio_dir, f'{self.title}.wav')
-        
+        self.ds_name = 'jsd'
         self._solo_start = None
 
         for directory in [output_dir, feature_dir]:
@@ -68,8 +68,11 @@ class Track(base.Track):
                 item = df.loc[i]
                 start = item.segment_start
                 dur = item.segment_end - item.segment_start
-                
-                seg_anno.append(time=start, duration=dur, value=item.label)
+                if '_' in item.label:
+                    label = item.label[:-3]
+                else:
+                    label = item.label
+                seg_anno.append(time=start, duration=dur, value=label)
 
             # Add the annotation to the JAMS object, but trimmed
             jam.annotations.append(seg_anno)
@@ -83,7 +86,7 @@ class Track(base.Track):
         return self._jam.slice(solo_start, solo_end)
        
        
-def get_ids(out_type: str = 'list'):
+def get_ids(split='all'):
     track_relationships = pd.read_csv('/home/qx244/jsd/data/track_relationships.csv')
     melids = set(list(track_relationships.melid))
     issue_files = set([43, 64, 309, 382]) # issue files from above
@@ -91,53 +94,20 @@ def get_ids(out_type: str = 'list'):
     single_segment = set([86, 119, 207])
     flipped_files = set([79 ,82])
     mid_set = melids - issue_files - duplicate_files - flipped_files - single_segment
-    mid_set_strings = {str(x) for x in mid_set}
-    if out_type == 'list':
-        return list(mid_set_strings)
-    if out_type == 'set':
+    mid_set_strings = [str(x) for x in mid_set]
+    mid_set_strings.sort()
+    if split == 'all':
         return mid_set_strings
     else:
-        raise KeyError('bad out_type')
+        split_dict = ssdm.create_splits(mid_set_strings, val_ratio=0.15, test_ratio=0.15, random_state=20240627)
+        return split_dict[split]
 
 
-def get_lsd_scores(
-    tids=[], 
-    **lsd_score_kwargs
-) -> xr.DataArray:
-    score_per_track = []
-    for tid in tqdm(tids):
-        track = Track(tid)
-        score_per_track.append(track.lsd_score(**lsd_score_kwargs))
-    
-    return xr.concat(score_per_track, pd.Index(tids, name='tid')).rename()
-    
-
-def get_taus(
-    tids=[], 
-    **tau_kwargs,
-) -> xr.DataArray:
-    tau_per_track = []
-    for tid in tqdm(tids):
-        track = Track(tid)
-        tau_per_track.append(track.tau(**tau_kwargs))
-    
-    return xr.concat(tau_per_track, pd.Index(tids, name='tid')).rename()
+class PairDS(base.PairDS):
+    def __init__(self, split='train', transform=None, perf_margin=0.05):
+        super().__init__(ds_module=ssdm.jsd, name='jsd', split=split, transform=transform, perf_margin=perf_margin)
 
 
-class NewDS(base.DS):
-    def __init__(self, tids=None, **kwargs):
-        self.name = 'jsd'
-        if not tids:
-            self.tids=get_ids(out_type='list')
-            self.split=''
-        else:
-            self.tids=tids
-            self.split=f'custom{len(tids)}'
-        
-        super().__init__(infer=True, **kwargs)
-
-    def track_obj(self, **track_kwargs):
-        return Track(**track_kwargs)
-
-        
-        
+class InferDS(base.InferDS):
+    def __init__(self, **kwargs):
+        super().__init__(ds_module=ssdm.jsd, name='jsd', **kwargs)

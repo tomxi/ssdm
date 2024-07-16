@@ -14,24 +14,24 @@ import xarray as xr
 
 import ssdm
 
-def scatter(perf_series1, perf_series2, xlabel='s1', ylabel='s2', title='L-recall scores', l_gap=0, side='both'):
+def scatter(perf_series1, perf_series2, xlabel='s1', ylabel='s2', title='Scores', score_gap=0, side='both'):
     # side can be 'both', s1' 's2'
     # put 2 series together into a dataframe
     df = pd.concat([perf_series1, perf_series2, perf_series1.index.to_series()], axis=1)
     df.columns = ['s1', 's2', 'tid']
 
-    # get the gap smaller than l_gap out of the picture
+    # get the gap smaller than score_gap out of the picture
     if side == 's2':
-        df_gap = df[df.s2 - df.s1 >= l_gap]
+        df_gap = df[df.s2 - df.s1 >= score_gap]
     elif side == 's1':
-        df_gap = df[df.s1 - df.s2 >= l_gap]
+        df_gap = df[df.s1 - df.s2 >= score_gap]
     elif side == 'both':
-        df_gap = df[np.abs(df.s1 - df.s2) >= l_gap]
+        df_gap = df[np.abs(df.s1 - df.s2) >= score_gap]
     else:
         raise AssertionError(f"bad side: {side}, can only be 'both', s1' 's2'.")
     
     # build some texts
-    count_tx = hv.Text(0.2, 0.05, f'tracks in plot: {len(df_gap)}\n with gap={l_gap}')
+    count_tx = hv.Text(0.2, 0.05, f'tracks in plot: {len(df_gap)}\n with gap={score_gap}')
     s1_tx = hv.Text(0.8, 0.05, f'{xlabel} is better: {len(df_gap[df_gap.s1 - df_gap.s2 > 0])}')
     s2_tx = hv.Text(0.2, 0.95, f'{ylabel} is better: {len(df_gap[df_gap.s1 - df_gap.s2 < 0])}')
     texts = s1_tx * s2_tx * count_tx
@@ -46,10 +46,10 @@ def scatter(perf_series1, perf_series2, xlabel='s1', ylabel='s2', title='L-recal
         color='red', line_dash='dashed', line_width=2
     )
     # Marker lines that shows the gap (diagonal strip)
-    gap_line_lower = hv.Curve(([l_gap, 1], [0, 1 - l_gap])).opts(
+    gap_line_lower = hv.Curve(([score_gap, 1], [0, 1 - score_gap])).opts(
         color='blue', line_dash='dashed', line_width=1
     )
-    gap_line_upper = hv.Curve(([0, 1 - l_gap], [l_gap, 1])).opts(
+    gap_line_upper = hv.Curve(([0, 1 - score_gap], [score_gap, 1])).opts(
         color='blue', line_dash='dashed', line_width=1
     )
     diag_band = diag_line * gap_line_upper * gap_line_lower
@@ -187,14 +187,19 @@ def follow_along(track):
     return layout
 
 
-def template(track):
+def template(track, state_dict_paths, default_rep='openl3', default_loc='mfcc', device='cuda:0'):
     # all the panel elements for selection etc.
+    print(track.tid)
+
     audio = pn.pane.Audio(track.audio_path, sample_rate=22050, name=track.tid, throttle=250, width=300)
     selectr = pn.widgets.Select(
-        name='lsd rep feature', options=ssdm.AVAL_FEAT_TYPES, width=90, value='openl3'
+        name='lsd rep feature', options=ssdm.AVAL_FEAT_TYPES, width=90, value=default_rep
     )
     selectl = pn.widgets.Select(
-        name='lsd loc feature', options=ssdm.AVAL_FEAT_TYPES, width=90, value='mfcc'
+        name='lsd loc feature', options=ssdm.AVAL_FEAT_TYPES, width=90, value=default_loc
+    )
+    sel_net = pn.widgets.Select(
+        name='Model', options=state_dict_paths, width=500, value=state_dict_paths[0]
     )
     sel_layers = pn.widgets.EditableIntSlider(
         name='LSD Layer', 
@@ -202,7 +207,9 @@ def template(track):
         fixed_start=1, fixed_end=16,
         width=160
     )
-
+    selecta = pn.widgets.Select(
+        name='anno id', options=[x for x in range(track.num_annos())], width=65
+    )
     # hv options
     options = [
         opts.QuadMesh(
@@ -229,20 +236,49 @@ def template(track):
         ).opts(*options).opts(title='lsd meet')
     
 
-
-    anno_meet = ssdm.anno_to_meet(track.ref(mode='normal'), track.ts(mode='beat'))
-    anno_meet_mesh = hv.QuadMesh(
+    @pn.depends(anno_id=selecta)
+    def update_anno_meet(anno_id):
+        anno_meet = ssdm.anno_to_meet(track.ref(mode='normal', anno_id=anno_id), track.ts(mode='beat'))
+        return hv.QuadMesh(
             (track.ts(mode='beat'), track.ts(mode='beat'), anno_meet),
         ).opts(*options).opts(title='anno meet')
+
+
+    # lsd l score grid for all feature combos
+    @pn.depends(anno_id=selecta)
+    def perf_score_heatmap(anno_id):
+        lsd_score = track.new_lsd_score(anno_id=anno_id).sel(m_type='f').max('layer')
+        lsd_score_grid = hv.HeatMap(lsd_score).opts(frame_width=300, frame_height=300, cmap='coolwarm', toolbar='disable', title='perf score')
+        score_label = hv.Labels(lsd_score_grid).opts(text_color='black')
+
+        # nlvl_pick = track.new_lsd_score(anno_id=anno_id).sel(m_type='f').argmax('layer').astype(int)
+        # nlvl_grid = hv.HeatMap(nlvl_pick).opts(frame_width=300, frame_height=300, cmap='coolwarm', toolbar='disable', title='net nlvl pick')
+        # nlvl_label = hv.Labels(nlvl_grid).opts(text_color='black')
+        return lsd_score_grid * score_label # + nlvl_grid * nlvl_label
+
     
+    @pn.depends(model_path=sel_net)
+    def net_score_heatmap(model_path):
+        net = ssdm.load_net(model_path)
+        util_score, nlvl_score = track.scan_by(net, device)
+        util_grid = hv.HeatMap(util_score).opts(frame_width=300, frame_height=300, cmap='coolwarm', toolbar='disable', title='net util score')
+        score_label = hv.Labels(util_grid).opts(text_color='black')
+        # nlvl_pick = nlvl_score.argmax('layer').astype(int)
+        # nlvl_grid = hv.HeatMap(nlvl_pick).opts(frame_width=300, frame_height=300, cmap='coolwarm', toolbar='disable', title='net nlvl pick')
+        # nlvl_label = hv.Labels(nlvl_grid).opts(text_color='black')
+        return util_grid * score_label # + nlvl_grid * nlvl_label
 
     lsd_meet = hv.DynamicMap(update_lsd_meet)
+    anno_meet = hv.DynamicMap(update_anno_meet)
+    perf_hm = hv.DynamicMap(perf_score_heatmap)
+    net_hm = hv.DynamicMap(net_score_heatmap)   
 
     
     layout = pn.Column(
-        pn.Row(audio),
-        pn.Row(selectr, selectl, sel_layers),
-        pn.Row(lsd_meet, anno_meet_mesh),
+        pn.Row(audio, selecta, selectr, selectl, sel_layers),
+        pn.Row(sel_net),
+        pn.Row(lsd_meet, anno_meet),
+        pn.Row(perf_hm, net_hm),
     )
     return layout
 
@@ -323,3 +359,4 @@ def ds_xplore(ds, net=None, device='cuda:0', eval_result=None):
         pn.Row(pn.bind(show_samp_evecs, sel_tid))
     )
     return layout
+

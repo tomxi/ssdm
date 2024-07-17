@@ -316,7 +316,7 @@ def get_lsd_scores(
 
 
 def net_pick_performance(ds, net, device='cpu', verbose=False, drop_feats=[]):
-    score_da = ds.get_scores()
+    score_da = ds.scores
     net_output = scn.net_infer_multi_loss(ds, net, device, verbose=verbose)
     if drop_feats:
         net_output = net_output.drop_sel(rep_ftype=drop_feats, loc_ftype=drop_feats)

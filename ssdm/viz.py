@@ -158,9 +158,9 @@ def multi_seg(multi_seg, hier_depth=None):
     return plot_segmentation(hier)
 
 
-def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True, no_deci=False):   
+def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True, figsize=(5,5), no_deci=False):   
     if ax is None:
-        fig, ax = plt.subplots(figsize=(5,5))
+        fig, ax = plt.subplots(figsize=figsize)
 
     da = da.squeeze()
     if len(da.shape) == 1:
@@ -169,23 +169,28 @@ def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True, no
     
     im = ax.imshow(da.values.astype(float), cmap='coolwarm')
     
-    ycoord, xcoord = da.dims
-    xticks = da.indexes[xcoord]
-    yticks = da.indexes[ycoord]
-    if xlabel is None:
-        xlabel = xcoord
-    if ylabel is None:
-        ylabel = ycoord
-    
-    ax.set_xticks(np.arange(len(xticks)), labels=xticks)
-    ax.set_yticks(np.arange(len(yticks)), labels=yticks)
+    try:
+        # try to get axis label and ticks from dataset coords
+        ycoord, xcoord = da.dims
+        xticks = da.indexes[xcoord]
+        yticks = da.indexes[ycoord]
+        if xlabel is None:
+            xlabel = xcoord
+        if ylabel is None:
+            ylabel = ycoord
 
-    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor");
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
+        ax.set_xticks(np.arange(len(xticks)), labels=xticks)
+        ax.set_yticks(np.arange(len(yticks)), labels=yticks)
+
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor");
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+    except:
+        pass
     
-    for i in range(len(yticks)):
-        for j in range(len(xticks)):
+    
+    for i in range(da.shape[0]):
+        for j in range(da.shape[1]):
             if no_deci:
                 ax.text(j, i, f"{da.values[i, j]}",
                         ha="center", va="center", color="k")

@@ -611,8 +611,9 @@ class InferDS(Dataset):
         self.transform = transform
         self.ds_module = ds_module
         self.name = name
-        self.tids = self.ds_module.get_ids(self.split)
+        self.tids = ds_module.get_ids(self.split)
         self.tids.sort()
+        self.scores = self.get_scores()
         all_samples = list(itertools.product(
             self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES
         ))
@@ -626,11 +627,17 @@ class InferDS(Dataset):
         return f'{self.name}_{self.split}_infer'
         
     def get_scores(self, drop_feats=[]):
-        score_da = ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=0).sel(m_type='f').sortby('tid')
-        new_tid = [self.name + tid.item() for tid in score_da.tid]
+        try:
+            return self.scores
+        
+        except AttributeError:
+            score_da = ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=0).sel(m_type='f').sortby('tid')
+            new_tid = [self.name + tid.item() for tid in score_da.tid]
+            score_da = score_da.assign_coords(tid=new_tid)
+        
         if drop_feats:
             score_da = score_da.drop_sel(rep_ftype=drop_feats, loc_ftype=drop_feats)
-        return score_da.assign_coords(tid=new_tid)
+        return score_da
     
     def __getitem__(self, idx):
         if torch.is_tensor(idx):

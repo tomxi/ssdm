@@ -255,6 +255,28 @@ class ExpandEvecs(nn.Module):
             cube = torch.cat(lras, dim=1)
         return cube
 
+## MaxPool that doesn't pool to 1
+class ConditionalMaxPool2d(nn.Module):
+    def __init__(self, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False):
+        super(ConditionalMaxPool2d, self).__init__()
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
+        self.ceil_mode = ceil_mode
+
+    def forward(self, x):
+        # Get the height and width of the input
+        height, width = x.shape[2], x.shape[3]
+
+        # Check if both dimensions are greater than 4
+        if height > 4 and width > 4:
+            # Apply max pooling
+            return nn.functional.max_pool2d(x, self.kernel_size, self.stride, self.padding, self.dilation, self.ceil_mode)
+        else:
+            # Return the input unchanged
+            return x
+
 
 class EvecSQNetC(nn.Module):
     def __init__(self, output_bias=False):
@@ -522,29 +544,29 @@ class MultiResSoftmaxB(nn.Module):
     def __init__(self):
         super().__init__()
         self.expand_evecs = ExpandEvecs()
-        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
+        
         self.convlayers1 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
-            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
-            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), nn.SiLU()
+            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), TempSwish(),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), TempSwish(),
+            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), TempSwish()
         )
         self.convlayers2 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
-            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
-            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), nn.SiLU()
+            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), TempSwish(),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), TempSwish(),
+            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), TempSwish()
         )
         self.convlayers3 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
-            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
-            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), nn.SiLU()
+            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), TempSwish(),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), TempSwish(),
+            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), TempSwish()
         )
         self.convlayers4 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
-            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
-            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), nn.SiLU()
+            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), TempSwish(),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), TempSwish(),
+            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), TempSwish()
         )
 
-        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.maxpool = ConditionalMaxPool2d(kernel_size=2, stride=2)
         self.adapool_big = nn.AdaptiveMaxPool2d((36, 36))
         self.adapool_med = nn.AdaptiveMaxPool2d((9, 9))
         self.adapool_sm = nn.AdaptiveMaxPool2d((3, 3))
@@ -552,14 +574,14 @@ class MultiResSoftmaxB(nn.Module):
         self.util_head = nn.Sequential(
             nn.Dropout(0.2, inplace=False),
             nn.Linear(1386, 128, bias=False),
-            nn.SiLU(),
+            TempSwish(),
             nn.Linear(128, 1, bias=False)
         ) 
 
         self.nlvl_head = nn.Sequential(
             nn.Dropout(0.2, inplace=False),
             nn.Linear(22176, 128, bias=False),
-            nn.SiLU(),
+            TempSwish(),
             nn.Linear(128, 16, bias=True), 
             nn.Softmax(dim=-1)
         )

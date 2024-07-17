@@ -665,6 +665,7 @@ class PairDS(Dataset):
         self.name = name
         self.tids = self.ds_module.get_ids(self.split)
         self.scores = self.get_scores()
+        self.score_ranks = self.get_score_ranks()
         self.score_gaps = self.get_score_gaps()
         self.samples = list(self.score_gaps.keys())
 
@@ -684,6 +685,14 @@ class PairDS(Dataset):
         return ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=0).sel(m_type='f').sortby('tid')
         # new_tid = [self.name + tid.item() for tid in score_da.tid]
         # return score_da.assign_coords(tid=new_tid)
+
+
+    def get_score_ranks(self):
+        from scipy.stats import rankdata
+        score_rank = self.scores.max('layer').copy()
+        for i, sq in enumerate(score_rank):
+            score_rank[i] = rankdata(sq).reshape(5,5,1)
+        return score_rank
 
 
     def get_score_gaps(self):
@@ -727,10 +736,14 @@ class PairDS(Dataset):
         x1_vmeasure = torch.tensor(x1_vmeasure.values, dtype=torch.float32)[None, :]
         x2_vmeasure = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
         x2_vmeasure = torch.tensor(x2_vmeasure.values, dtype=torch.float32)[None, :]
+        # x1_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
+        # x2_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
         datum = {'x1': x1,
                  'x2': x2,
                  'x1_vmeasure': x1_vmeasure,
                  'x2_vmeasure': x2_vmeasure,
+                #  'x1_score_rank': x1_score_rank.item(),
+                #  'x2_score_rank': x2_score_rank.item(),
                  'x1_info': f'{rep_a}_{loc_a}',
                  'x2_info': f'{rep_b}_{loc_b}',
                  'track_info': f'{self.name}_{tid}',

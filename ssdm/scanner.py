@@ -556,13 +556,13 @@ class MultiResSoftmaxB(nn.Module):
             nn.Linear(128, 1, bias=False)
         ) 
 
-        # self.nlvl_head = nn.Sequential(
-        #     nn.Dropout(0.2, inplace=False),
-        #     nn.Linear(22176, 128, bias=False),
-        #     nn.SiLU(),
-        #     nn.Linear(128, 16, bias=True), 
-        #     nn.Softmax(dim=-1)
-        # )
+        self.nlvl_head = nn.Sequential(
+            nn.Dropout(0.2, inplace=False),
+            nn.Linear(22176, 128, bias=False),
+            nn.SiLU(),
+            nn.Linear(128, 16, bias=True), 
+            nn.Softmax(dim=-1)
+        )
 
 
     def forward(self, x, rep_f_idx=None, loc_f_idx=None):
@@ -585,12 +585,12 @@ class MultiResSoftmaxB(nn.Module):
             1
         )
 
-        # pre_nlvl_head = torch.cat(
-        #     [torch.flatten(x_sm, 1), torch.flatten(x_med, 1), torch.flatten(x_big, 1)], 
-        #     1
-        # )
+        pre_nlvl_head = torch.cat(
+            [torch.flatten(x_sm, 1), torch.flatten(x_med, 1), torch.flatten(x_big, 1)], 
+            1
+        )
 
-        return self.util_head(pre_util_head)#, self.nlvl_head(pre_nlvl_head)
+        return self.util_head(pre_util_head), self.nlvl_head(pre_nlvl_head)
 
 
 # # Produced by chatgpt-4o

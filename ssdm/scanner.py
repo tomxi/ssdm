@@ -69,7 +69,7 @@ def time_mask(sample, T=40, num_masks=1, replace_with_zero=False, tau='rep'):
     return sample
 
 
-def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size=8, lr_scheduler=None, device='cpu', loss_type='multi', pos_mask=True, entro_pen=0, verbose=False):
+def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size=8, lr_scheduler=None, device='cuda', loss_type='multi', pos_mask=True, entro_pen=0, verbose=False):
     running_loss_util = 0.
     running_loss_nlvl = 0.
     running_nlvl_loss_count = 0
@@ -132,7 +132,7 @@ def train_multi_loss(ds_loader, net, util_loss, nlvl_loss, optimizer, batch_size
     return (running_loss_util / len(ds_loader)), (running_loss_nlvl / running_nlvl_loss_count)
 
 # eval tools:
-def net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device='cpu', num_workers=4, verbose=False):
+def net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device='cuda', num_workers=4, verbose=False):
     # ds_loader just need to be a iterable of samples
     # make result DF
     result_df = pd.DataFrame(columns=('util', 'nlvl', 'u_loss', 'lvl_loss', 'single_pick_lvl_loss', 'label'))
@@ -169,7 +169,7 @@ def net_eval_multi_loss(ds, net, util_loss, nlvl_loss, device='cpu', num_workers
     return result_df.astype('float'), nlvl_output.astype('float')
 
 # 
-def net_infer_multi_loss(infer_ds=None, net=None, device='cpu', num_workers=4, verbose=False): 
+def net_infer_multi_loss(infer_ds=None, net=None, device='cuda', num_workers=4, verbose=False): 
     full_tids = [infer_ds.name + tid for tid in infer_ds.tids]
     result_coords = dict(
         tid=full_tids, 
@@ -198,7 +198,7 @@ def net_infer_multi_loss(infer_ds=None, net=None, device='cpu', num_workers=4, v
             result_xr.loc[infer_ds.name+tid, rep_feat, loc_feat, 'nlvl'] = nlvl.argmax().item()
     return result_xr.sortby('tid')
 
-def net_infer_util_only(infer_ds=None, net=None, device='cpu', num_workers=4, verbose=False): 
+def net_infer_util_only(infer_ds=None, net=None, device='cuda', num_workers=4, verbose=False): 
     full_tids = [infer_ds.name + tid for tid in infer_ds.tids]
     result_coords = dict(
         tid=full_tids, 

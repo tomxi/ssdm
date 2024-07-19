@@ -73,4 +73,8 @@ class PairDS(base.PairDS):
 class InferDS(base.InferDS):
     def __init__(self, **kwargs):
         super().__init__(ds_module=ssdm.hmx, name='hmx', **kwargs)
-        
+
+
+class LvlDS(base.LvlDS):
+     def __init__(self, **kwargs):
+        super().__init__(ds_module=ssdm.hmx, name='hmx', **kwargs)   

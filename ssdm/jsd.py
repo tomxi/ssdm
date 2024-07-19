@@ -86,7 +86,7 @@ class Track(base.Track):
         return self._jam.slice(solo_start, solo_end)
        
        
-def get_ids(split='all'):
+def get_ids(split=None):
     track_relationships = pd.read_csv('/home/qx244/jsd/data/track_relationships.csv')
     melids = set(list(track_relationships.melid))
     issue_files = set([43, 64, 309, 382]) # issue files from above
@@ -96,7 +96,7 @@ def get_ids(split='all'):
     mid_set = melids - issue_files - duplicate_files - flipped_files - single_segment
     mid_set_strings = [str(x) for x in mid_set]
     mid_set_strings.sort()
-    if split == 'all':
+    if split == None:
         return mid_set_strings
     else:
         split_dict = ssdm.create_splits(mid_set_strings, val_ratio=0.15, test_ratio=0.15, random_state=20240627)
@@ -108,17 +108,11 @@ class PairDS(base.PairDS):
         super().__init__(ds_module=ssdm.jsd, name='jsd', split=split, transform=transform, perf_margin=perf_margin)
 
 
-    def get_scores(self):
-        return ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=2).sel(m_type='f').sortby('tid')
-
 class InferDS(base.InferDS):
     def __init__(self, **kwargs):
         super().__init__(ds_module=ssdm.jsd, name='jsd', **kwargs)
 
 
-    def get_scores(self, drop_feats=[]):
-        score_da = ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=2).sel(m_type='f').sortby('tid')
-        new_tid = [self.name + tid.item() for tid in score_da.tid]
-        if drop_feats:
-            score_da = score_da.drop_sel(rep_ftype=drop_feats, loc_ftype=drop_feats)
-        return score_da.assign_coords(tid=new_tid)
+class LvlDS(base.LvlDS):
+    def __init__(self, **kwargs):
+        super().__init__(ds_module=ssdm.jsd, name='jsd', **kwargs)

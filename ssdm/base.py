@@ -624,14 +624,15 @@ class InferDS(Dataset):
         return len(self.samples)
 
     def __repr__(self):
-        return f'{self.name}_{self.split}_infer'
+        return f'{self.name}_{self.split if self.split is not None else "full"}_infer'
         
     def get_scores(self, drop_feats=[]):
         try:
             return self.scores
         
         except AttributeError:
-            score_da = ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=0).sel(m_type='f').sortby('tid')
+            a_layer = 2 if self.name == 'jsd' else 0
+            score_da = ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=a_layer).sel(m_type='f').sortby('tid')
             new_tid = [self.name + tid.item() for tid in score_da.tid]
             score_da = score_da.assign_coords(tid=new_tid)
         
@@ -681,7 +682,7 @@ class PairDS(Dataset):
 
 
     def __repr__(self):
-        return f'{self.name}_{self.split}_vmeasure'
+        return f'{self.name}_{self.split if self.split is not None else "full"}_vmeasure'
     
 
     def __len__(self):
@@ -689,7 +690,8 @@ class PairDS(Dataset):
     
 
     def get_scores(self):
-        return ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=0).sel(m_type='f').sortby('tid')
+        a_layer = 2 if self.name == 'jsd' else 0
+        return ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=a_layer).sel(m_type='f').sortby('tid')
         # new_tid = [self.name + tid.item() for tid in score_da.tid]
         # return score_da.assign_coords(tid=new_tid)
 
@@ -759,6 +761,48 @@ class PairDS(Dataset):
         if self.transform:
             datum = self.transform(datum)
         return datum
+
+
+class LvlDS(InferDS):
+    def __init__(self, ds_module=None, name='base', split='val', transform=None):
+        super().__init__(ds_module=ds_module, name=name, split=split, transform=transform)
+        self.samples = self.tids
+        self.samples.sort()
+
+    def __repr__(self):
+        return super().__repr__().replace('infer', 'nlvl')
+    
+    def get_scores(self, drop_feats=[]):
+        full_score = super().get_scores(drop_feats=drop_feats)
+        orc_feats = full_score.max('layer').argmax(dim=['rep_ftype', 'loc_ftype'])
+        return full_score.isel(orc_feats)
+    
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        tid = self.samples[idx]
+        full_tid = self.name + tid
+        track_score = self.scores.sel(tid=full_tid)
+        rep_feat = track_score.rep_ftype.item()
+        loc_feat = track_score.loc_ftype.item()
+
+        first_evecs = self.ds_module.Track(tid=tid).embedded_rec_mat(
+            feat_combo=dict(rep_ftype=rep_feat, loc_ftype=loc_feat), 
+            lap_norm='random_walk', beat_sync=True,
+            recompute=False
+        )
+        vmeasure_per_lvl_best_feat = self.scores.sel(tid=full_tid)
+
+        datum = {'x': torch.tensor(first_evecs, dtype=torch.float32)[None, None, :],
+                 'lvl_score': torch.tensor(vmeasure_per_lvl_best_feat.values, dtype=torch.float32)[None, :],
+                 'info': f'{full_tid}_{rep_feat}_{loc_feat}'}
+
+        if self.transform:
+            datum = self.transform(datum)
+        
+        return datum
+    
 
 
 def delay_embed(

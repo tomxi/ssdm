@@ -315,7 +315,7 @@ def get_lsd_scores(
     return xr.concat(score_per_track, pd.Index(tids, name='tid'), coords='minimal').rename().sortby('tid')
 
 
-def net_pick_performance(ds, net, device='cpu', verbose=False, drop_feats=[]):
+def net_pick_performance(ds, net, device='cuda', verbose=False, drop_feats=[]):
     score_da = ds.scores
     net_output = scn.net_infer_multi_loss(ds, net, device, verbose=verbose)
     if drop_feats:
@@ -323,19 +323,18 @@ def net_pick_performance(ds, net, device='cpu', verbose=False, drop_feats=[]):
     util_score = net_output.loc[:, :, :, 'util']
     nlvl_pick = net_output.loc[:, :, :, 'nlvl']
     best_util_idx = util_score.argmax(dim=['rep_ftype', 'loc_ftype'])
-    
-
     net_layer_pick = nlvl_pick.isel(best_util_idx).astype(int)
     net_feat_pick_score = score_da.sel(rep_ftype=net_layer_pick.rep_ftype, loc_ftype=net_layer_pick.loc_ftype)
-    return net_feat_pick_score.isel(layer=net_layer_pick), net_feat_pick_score.max('layer')
 
+    # Get oracle feature pick, and see how net is doing on nlvl
+    orc_feat_idx = score_da.max('layer').argmax(dim=['rep_ftype', 'loc_ftype'])
+    net_layer_pick_orc_feat = nlvl_pick.isel(orc_feat_idx).astype(int)
+    orc_feat_scores = score_da.sel(rep_ftype=net_layer_pick_orc_feat.rep_ftype, loc_ftype=net_layer_pick_orc_feat.loc_ftype)
 
-# def net_pick_performance_util_only(ds, net, device='cpu', verbose=False, drop_feats=[]):
-#     score_da = ds.get_scores()
-#     net_output = scn.net_infer_util_only(ds, net, device=device, verbose=verbose)
-#     if drop_feats:
-#         net_output = net_output.drop_sel(rep_ftype=drop_feats, loc_ftype=drop_feats)
-#     best_util_idx = net_output.argmax(dim=['rep_ftype', 'loc_ftype'])
-#     net_feat_pick_score = score_da.isel(best_util_idx)
-#     return net_feat_pick_score
+    out = dict(net_pick = net_feat_pick_score.isel(layer=net_layer_pick),
+               net_feat_orc_lvl = orc_feat_scores.isel(layer=net_layer_pick_orc_feat),
+               orc_feat_net_lvl = net_feat_pick_score.max('layer'),
+               orc = orc_feat_scores.max('layer')
+               )
+    return out
 

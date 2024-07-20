@@ -27,12 +27,12 @@ def main(MODEL_ID='MultiResSoftmaxB', EPOCH=5, DATE='YYMMDD', DS='rwcpop', OPT='
         net = scn.AVAL_MODELS[MODEL_ID]()
     net.to(device)
     
-    train_loader, val_datasets = setup_dataset(DS)
+    train_loader, val_datasets = setup_dataset(DS, epoch_length=2048)
     
     if OPT == 'adamw':
         optimizer, lr_scheduler = setup_optimizer_adamw(net)
     elif OPT == 'sgd':
-        optimizer, lr_scheduler = setup_optimizer_sgd(net, step_size=250, init_lr=1e-3)
+        optimizer, lr_scheduler = setup_optimizer_sgd(net, step_size=256, init_lr=1e-4)
     else:
         assert False
 
@@ -84,6 +84,7 @@ def main(MODEL_ID='MultiResSoftmaxB', EPOCH=5, DATE='YYMMDD', DS='rwcpop', OPT='
             json.dump(trainning_info, file)
     
     return net
+
 
 def train_lvl_epoch(ds_loader, net, optimizer, lr_scheduler=None, entro_pen=0.01, device='cuda', verbose=False):
     optimizer.zero_grad()
@@ -142,14 +143,14 @@ def eval_net_picking(val_datasets, net, device='cuda', verbose=True):
         all_ds_orc.append(orc.assign_coords(tid=new_tids))
         if verbose:
             print(f'net pick v-measure on {val_ds}:')
-            print('\tnet pick lvl with orc feats / orc picks' , net_lvl_orc_feat.mean('tid').item(), orc.mean().item())
+            print('\tlvl pick gap' , orc.mean().item() - net_lvl_orc_feat.mean('tid').item(), )
             print('__________')
         # break
     all_ds_net_pick = ssdm.xr.concat(all_ds_net_pick, 'tid')
     all_ds_orc = ssdm.xr.concat(all_ds_orc, 'tid')
     if verbose:
         print(f'net pick v-measure on all val ds combined:')
-        print('\tnet pick lvl with orc feats / orc picks\n\t' , all_ds_net_pick.mean('tid').item(), all_ds_orc.mean('tid').item())
+        print('\tlvl pick gap' , all_ds_orc.mean('tid').item() - all_ds_net_pick.mean('tid').item(), )
         print('===================')
 
     return all_ds_net_pick, all_ds_orc
@@ -160,7 +161,7 @@ def setup_optimizer_adamw(net):
     grouped_parameters = [
         {
             "params": [p for n, p in net.named_parameters() if 'bias' not in n],
-            "weight_decay": 2,
+            "weight_decay": 5,
         },
         {
             "params": [p for n, p in net.named_parameters() if 'bias' in n],
@@ -169,12 +170,12 @@ def setup_optimizer_adamw(net):
     ]
     optimizer = optim.AdamW(grouped_parameters)
     lr_scheduler = optim.lr_scheduler.CyclicLR(
-        optimizer, base_lr=2e-7, max_lr=1e-4, cycle_momentum=False, mode='triangular2', step_size_up=3000
+        optimizer, base_lr=1e-7, max_lr=1e-4, cycle_momentum=False, mode='triangular', step_size_up=2048
     )
     return optimizer, lr_scheduler
 
 
-def setup_optimizer_sgd(net, step_size=1250, init_lr=1e-3):
+def setup_optimizer_sgd(net, step_size=256, init_lr=1e-4):
     # training details
     grouped_parameters = [
         {
@@ -187,11 +188,11 @@ def setup_optimizer_sgd(net, step_size=1250, init_lr=1e-3):
         },
     ]
     optimizer = optim.SGD(grouped_parameters, lr=init_lr)
-    lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.95) # goes down by ~1k every 135 steps
+    lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.9) # goes down by ~1k every 135 steps
     return optimizer, lr_scheduler
 
 
-def setup_dataset(option='all'):
+def setup_dataset(option='all', epoch_length=2048):
     if option == 'hmx':
         train_ds = ssdm.hmx.LvlDS(split='train')
         val_datasets = [ssdm.hmx.InferDS(split='val')]
@@ -256,7 +257,7 @@ def setup_dataset(option='all'):
         assert False
 
     train_loader = DataLoader(
-        train_ds, batch_size=None, sampler=PermutationSampler(train_ds, 4000),
+        train_ds, batch_size=None, sampler=PermutationSampler(train_ds, epoch_length),
         num_workers=4, pin_memory=True,
     )
     
@@ -280,7 +281,7 @@ class NLvlLoss(torch.nn.Module):
 
 
 class PermutationSampler(Sampler):
-    def __init__(self, data_source, epoch_length=20000):
+    def __init__(self, data_source, epoch_length=2000):
         self.data_source = data_source
         self.epoch_length = epoch_length
 
@@ -299,20 +300,21 @@ if __name__ == '__main__':
     # parser.add_argument('model_id', help='see scanner.AVAL_MODELS')
     parser.add_argument('total_epoch', help='total number of epochs to train')
     parser.add_argument('date', help='just a marker really, can be any text but mmdd is the intension')
-    # parser.add_argument('optimizer', help='Which sgd or adamw')
+    parser.add_argument('optimizer', help='Which sgd or adamw')
     parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
 
     kwargs = parser.parse_args()
     total_epoch = int(kwargs.total_epoch)
     date = kwargs.date
-    opt = 'sgd'
-    etp = 0.01
+    opt = kwargs.optimizer
+    etp = 0.02
 
     model_id, ds = list(itertools.product(
-        ['MultiResSoftmaxB', 'EfficientNetB0'],
-        ['all', 'jsd', 'rwcpop', 'slm', 'hmx', 'all-but-jsd', 'all-but-rwcpop', 'all-but-slm', 'all-but-hmx'],
+        ['MultiResSoftmaxB'],
+        # ['all', 'jsd', 'rwcpop', 'slm', 'hmx', 'all-but-jsd', 'all-but-rwcpop', 'all-but-slm', 'all-but-hmx'],
+        ['all', 'jsd', 'rwcpop', 'slm', 'hmx'],
     ))[int(kwargs.config_idx)]
 
-    main(MODEL_ID=model_id, EPOCH=total_epoch, DATE=date, DS=ds, OPT=opt, ETP=0.01, net=None)
+    main(MODEL_ID=model_id, EPOCH=total_epoch, DATE=date, DS=ds, OPT=opt, ETP=etp, net=None)
     print('done without failure!')
 

@@ -764,39 +764,54 @@ class PairDS(Dataset):
 
 
 class LvlDS(InferDS):
-    def __init__(self, ds_module=None, name='base', split='val', transform=None):
+    def __init__(self, ds_module=None, name='base', split='val', rank_cutoff=8, transform=None):
         super().__init__(ds_module=ds_module, name=name, split=split, transform=transform)
-        self.samples = self.tids
+        self.score_rank = self.get_score_ranks()
+        self.samples = self.get_samps(rank_cutoff=rank_cutoff)
         self.samples.sort()
 
     def __repr__(self):
         return super().__repr__().replace('infer', 'nlvl')
+
+
+    def get_samps(self, rank_cutoff=8):
+        import numpy as np
+        condition = self.score_rank <= rank_cutoff
+        coords = condition.coords
+        # Get the flattened indices where the condition is true
+        flat_indices = np.flatnonzero(condition.values)
+        # Convert the flat indices to coordinate indices
+        unraveled_indices = np.unravel_index(flat_indices, condition.shape)
+        # Combine the unraveled indices into a list of tuples
+        return [f'{coords["tid"][tid].item()}_{coords["rep_ftype"][rep_ftype].item()}_{coords["loc_ftype"][loc_ftype].item()}' for tid, rep_ftype, loc_ftype, _ in zip(*unraveled_indices)]
     
-    def get_scores(self, drop_feats=[]):
-        full_score = super().get_scores(drop_feats=drop_feats)
-        orc_feats = full_score.max('layer').argmax(dim=['rep_ftype', 'loc_ftype'])
-        return full_score.isel(orc_feats)
+
+    def get_score_ranks(self):
+        from scipy.stats import rankdata
+        self.score_rank = self.scores.max('layer').copy()
+        for i, sq in enumerate(self.score_rank):
+            self.score_rank[i] = rankdata(sq).reshape(5,5,1)
+        return self.score_rank
     
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        tid = self.samples[idx]
-        full_tid = self.name + tid
-        track_score = self.scores.sel(tid=full_tid)
-        rep_feat = track_score.rep_ftype.item()
-        loc_feat = track_score.loc_ftype.item()
+        samp_info = self.samples[idx]
+        full_tid, rep_feat, loc_feat = samp_info.split('_')
+        vmeasure_per_lvl_best_feat = self.scores.sel(tid=full_tid, rep_ftype=rep_feat, loc_ftype=loc_feat)
+        # rep_feat = track_score.rep_ftype.item()
+        # loc_feat = track_score.loc_ftype.item()
 
-        first_evecs = self.ds_module.Track(tid=tid).embedded_rec_mat(
+        first_evecs = self.ds_module.Track(tid=full_tid.replace(self.name, '')).embedded_rec_mat(
             feat_combo=dict(rep_ftype=rep_feat, loc_ftype=loc_feat), 
             lap_norm='random_walk', beat_sync=True,
             recompute=False
         )
-        vmeasure_per_lvl_best_feat = self.scores.sel(tid=full_tid)
 
         datum = {'x': torch.tensor(first_evecs, dtype=torch.float32)[None, None, :],
                  'lvl_score': torch.tensor(vmeasure_per_lvl_best_feat.values, dtype=torch.float32)[None, :],
-                 'info': f'{full_tid}_{rep_feat}_{loc_feat}'}
+                 'info': samp_info}
 
         if self.transform:
             datum = self.transform(datum)

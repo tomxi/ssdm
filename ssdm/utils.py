@@ -146,6 +146,8 @@ def compute_flat(
 def load_net(model_path='', device=None):
     if device is None:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    else: 
+        device = device
     #extract info from model_path
     model_basename = os.path.basename(model_path)
     # Check for cached inference results:

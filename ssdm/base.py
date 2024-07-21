@@ -791,6 +791,8 @@ class LvlDS(InferDS):
         self.score_rank = self.scores.max('layer').copy()
         for i, sq in enumerate(self.score_rank):
             self.score_rank[i] = rankdata(sq).reshape(5,5,1)
+        # Highest first, out of a total of 25
+        self.score_rank = 26 - self.score_rank
         return self.score_rank
     
     def __getitem__(self, idx):

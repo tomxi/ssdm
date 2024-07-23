@@ -10,7 +10,7 @@ import ssdm
 import ssdm.scanner as scn
 
 
-def main(MODEL_ID='MultiResSoftmaxB', EPOCH=5, DATE='YYMMDD', DS='rwcpop', OPT='sgd', ETP=0.01, net=None):
+def main(MODEL_ID='MultiResSoftmaxB', EPOCH=5, DATE='YYMMDD', DS='rwcpop', OPT='adamw', ETP=0.01, net=None):
     """
     """
     short_xid_str = f'{MODEL_ID}-{DS}-{OPT}-vmeasure_nlvl_only'
@@ -161,7 +161,7 @@ def setup_optimizer_adamw(net):
     grouped_parameters = [
         {
             "params": [p for n, p in net.named_parameters() if 'bias' not in n],
-            "weight_decay": 5,
+            "weight_decay": 10,
         },
         {
             "params": [p for n, p in net.named_parameters() if 'bias' in n],
@@ -170,7 +170,7 @@ def setup_optimizer_adamw(net):
     ]
     optimizer = optim.AdamW(grouped_parameters)
     lr_scheduler = optim.lr_scheduler.CyclicLR(
-        optimizer, base_lr=1e-7, max_lr=1e-4, cycle_momentum=False, mode='triangular', step_size_up=2048
+        optimizer, base_lr=1e-7, max_lr=2e-4, cycle_momentum=False, mode='triangular2', step_size_up=2048
     )
     return optimizer, lr_scheduler
 
@@ -300,19 +300,19 @@ if __name__ == '__main__':
     # parser.add_argument('model_id', help='see scanner.AVAL_MODELS')
     parser.add_argument('total_epoch', help='total number of epochs to train')
     parser.add_argument('date', help='just a marker really, can be any text but mmdd is the intension')
-    parser.add_argument('optimizer', help='Which sgd or adamw')
+    parser.add_argument('entropy_penalty', help='Which sgd or adamw')
     parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
 
     kwargs = parser.parse_args()
     total_epoch = int(kwargs.total_epoch)
     date = kwargs.date
-    opt = kwargs.optimizer
-    etp = 0.02
+    opt = 'adamw'
+    etp = float(kwargs.entropy_penalty)
 
-    model_id, ds = list(itertools.product(
+    model_id, ds= list(itertools.product(
         ['MultiResSoftmaxB'],
         # ['all', 'jsd', 'rwcpop', 'slm', 'hmx', 'all-but-jsd', 'all-but-rwcpop', 'all-but-slm', 'all-but-hmx'],
-        ['all', 'jsd', 'rwcpop', 'slm', 'hmx'],
+        ['all', 'jsd', 'rwcpop', 'slm', 'hmx', 'all-but-slm'],
     ))[int(kwargs.config_idx)]
 
     main(MODEL_ID=model_id, EPOCH=total_epoch, DATE=date, DS=ds, OPT=opt, ETP=etp, net=None)

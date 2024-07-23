@@ -13,7 +13,7 @@ import ssdm.scanner as scn
 def main(MODEL_ID='MultiResSoftmaxB', EPOCH=7, DATE='YYMMDD', DS='slm', OPT='sgd', ETP=0.01, MARGIN=0.001, net=None):
     """
     """
-    short_xid_str = f'{MODEL_ID}-{DS}-{OPT}-l_recall{MARGIN}'
+    short_xid_str = f'{MODEL_ID}-{DS}-{OPT}-etp{ETP}-vmeasure{MARGIN}'
     experiment_id_str = f'{DATE}_{EPOCH}_{short_xid_str}'
     print(experiment_id_str)
     
@@ -27,38 +27,38 @@ def main(MODEL_ID='MultiResSoftmaxB', EPOCH=7, DATE='YYMMDD', DS='slm', OPT='sgd
         net = scn.AVAL_MODELS[MODEL_ID]()
     net.to(device)
     
-    train_loader, val_datasets = setup_dataset(DS, float(MARGIN))
+    train_loader, val_datasets = setup_dataset(DS, epoch_length=2048 * 2)
     
     if OPT == 'adamw':
         optimizer, lr_scheduler = setup_optimizer_adamw(net)
     elif OPT == 'sgd':
-        optimizer, lr_scheduler = setup_optimizer_sgd(net, step_size=1250, init_lr=1e-3)
+        optimizer, lr_scheduler = setup_optimizer_sgd(net, step_size=256, init_lr=1e-4)
     else:
         assert False
 
     ### Train loop:
     # pretrain check-up and setup baseline:
-    net_pick_score_val, net_pick_score_val_orclvl = eval_net_picking(val_datasets, net, device=device, verbose=True)
-    best_net_pick_score = net_pick_score_val.mean().item()
-    best_net_pick_score_orclvl = net_pick_score_val_orclvl.mean().item()
-    print('init netpick_score:', best_net_pick_score, 'with oracle lvl choice:', best_net_pick_score_orclvl)
+    net_score_val = eval_net_picking(val_datasets, net, device=device, verbose=True)
+    best_net_pick_score = net_score_val['net_pick'].mean().item()
+    # print('init netpick_score:', best_net_pick_score, 'with oracle lvl choice:', best_net_pick_score_orclvl)
 
     # simple logging
     train_losses = []
     val_perfs = []
 
     for epoch in tqdm(range(int(EPOCH))):
-        training_loss = train_contrastive_epoch(train_loader, net, optimizer, lr_scheduler=lr_scheduler, entro_pen=float(ETP), device=device, verbose=False)
-        net_pick_score_val, net_pick_score_val_orclvl = eval_net_picking(val_datasets, net, device=device, verbose=True)
-        val_perf = net_pick_score_val.mean().item()
-        val_perf_orclvl = net_pick_score_val_orclvl.mean().item()
-        
-        print(f'\n {short_xid_str} Post Epoch {epoch + 1}:'), 
-        print(f'\t Train: Ranking Hinge {training_loss[0]:.4f}, nlvl Loss {training_loss[1]:.4f}, entropy loss: {training_loss[2]:.4f}')
-        print(f'\t Valid: Net Pick Performance {val_perf:.4f} oracle lvl choice {val_perf_orclvl:.4f}')
+        training_loss = train_contrastive_epoch(
+            train_loader, net, optimizer, 
+            lr_scheduler=lr_scheduler, entro_pen=float(ETP), 
+            device=device, verbose=False
+        )
+        net_score_val = eval_net_picking(
+            val_datasets, net, device=device, verbose=True
+        )
+        val_perf = net_score_val['net_pick'].mean().item()
         
         train_losses.append(training_loss)
-        val_perfs.append((val_perf, val_perf_orclvl))
+        val_perfs.append({k: net_score_val[k].mean().item() for k in net_score_val})
 
         if val_perf > best_net_pick_score:
             # update best_loss and save model
@@ -103,16 +103,29 @@ def train_contrastive_epoch(ds_loader, net, optimizer, lr_scheduler=None, entro_
         
         contrast_label = s['perf_gap'].to(device).sign()
         rank_loss = rank_loss_fn(util_pred[0, None], util_pred[1, None], contrast_label)
-        nlvl_loss, entropy = nlvl_loss_fn(nlvl_softmax, vmeasures)
-        ent_loss = -entropy * entro_pen
-        
-        loss = rank_loss + nlvl_loss * 10 + ent_loss
-        loss.backward()
+        loss = rank_loss
+
+        if (s['x1_rank'] <= 8) or (s['x2_rank'] <= 8):
+            if s['x1_rank'] > 8:
+                nlvl_softmax = nlvl_softmax[1, None]
+                vmeasures = vmeasures[1, None]
+            elif s['x2_rank'] > 8:
+                nlvl_softmax = nlvl_softmax[0, None]
+                vmeasures = vmeasures[0, None]
+
+
+            nlvl_loss, entropy = nlvl_loss_fn(nlvl_softmax, vmeasures)
+            ent_loss = -entropy * entro_pen
+            nlvl_loss = nlvl_loss
+            loss = loss + nlvl_loss + ent_loss
+
+            # logging
+            running_loss_nlvl += nlvl_loss.item()
+            running_ent_loss += ent_loss.item()
 
         # logging
         running_loss_ranking += rank_loss.item()
-        running_loss_nlvl += nlvl_loss.item()
-        running_ent_loss += ent_loss.item()
+        loss.backward()
 
         # Manual batching
         batch_size = 16
@@ -123,31 +136,46 @@ def train_contrastive_epoch(ds_loader, net, optimizer, lr_scheduler=None, entro_
             optimizer.zero_grad()
             if lr_scheduler is not None:
                 lr_scheduler.step()
-    
-    return (running_loss_ranking / len(ds_loader)) , (running_loss_nlvl / len(ds_loader)), (running_ent_loss / len(ds_loader))
+    out = dict(rank = running_loss_ranking / len(ds_loader), 
+               lvl = running_loss_nlvl / len(ds_loader),
+               entropy = running_ent_loss / len(ds_loader))
+
+    return out
 
 
-def eval_net_picking(val_datasets, net, device='cuda', verbose=True):
-    all_ds_net_pick = []
-    all_ds_net_pick_orc_lvl = []
+def eval_net_picking(val_datasets, net, device='cuda', verbose=False):
+    all_ds_net_pick_both = []
+    all_ds_net_pick_lvl = []
+    all_ds_net_pick_feat = []
+    all_ds_orc = []
+
     for val_ds in val_datasets:
-        net_pick, net_pick_orc_lvl = ssdm.net_pick_performance(val_ds, net, device=device)
-        new_tids = [val_ds.name + str(i) for i in net_pick['tid'].values]
-        all_ds_net_pick.append(net_pick.assign_coords(tid=new_tids))
-        all_ds_net_pick_orc_lvl.append(net_pick_orc_lvl.assign_coords(tid=new_tids))
-        if verbose:
-            print(f'net pick v-measure on {val_ds}:')
-            print('\t' , net_pick.mean('tid').item(), net_pick_orc_lvl.mean('tid').item())
-            print('__________')
-        # break
-    all_ds_net_pick = ssdm.xr.concat(all_ds_net_pick, 'tid')
-    all_ds_net_pick_orc_lvl = ssdm.xr.concat(all_ds_net_pick_orc_lvl, 'tid')
+        perf = ssdm.net_pick_performance(val_ds, net, device=device)
+        net_pick = perf['net_pick']
+        net_lvl_orc_feat = perf['orc_feat_net_lvl']
+        net_feat_orc_lvl = perf['net_feat_orc_lvl']
+        orc = perf['orc']
+
+        new_tids = [val_ds.name + str(i) for i in net_lvl_orc_feat['tid'].values]
+        all_ds_net_pick_both.append(net_pick.assign_coords(tid=new_tids))
+        all_ds_net_pick_lvl.append(net_lvl_orc_feat.assign_coords(tid=new_tids))
+        all_ds_net_pick_feat.append(net_feat_orc_lvl.assign_coords(tid=new_tids))
+        all_ds_orc.append(orc.assign_coords(tid=new_tids))
+
+    all_ds_net_pick_both = ssdm.xr.concat(all_ds_net_pick_both, 'tid')
+    all_ds_net_pick_lvl = ssdm.xr.concat(all_ds_net_pick_lvl, 'tid')
+    all_ds_net_pick_feat = ssdm.xr.concat(all_ds_net_pick_feat, 'tid')
+    all_ds_orc = ssdm.xr.concat(all_ds_orc, 'tid')
     if verbose:
+        print()
         print(f'net pick v-measure on all val ds combined:')
-        print('\t' , all_ds_net_pick.mean('tid').item(), all_ds_net_pick_orc_lvl.mean('tid').item())
+        print('\tlvl pick gap', all_ds_orc.mean('tid').item() - all_ds_net_pick_lvl.mean('tid').item())
+        print('\tfeat pick gap', all_ds_orc.mean('tid').item() - all_ds_net_pick_feat.mean('tid').item())
+        print('\tboth pick gap', all_ds_orc.mean('tid').item() - all_ds_net_pick_both.mean('tid').item())
         print('===================')
 
-    return all_ds_net_pick, all_ds_net_pick_orc_lvl
+    out = dict(net_pick=all_ds_net_pick_both, net_pick_lvl=all_ds_net_pick_lvl, net_pick_feat=all_ds_net_pick_feat, orc=all_ds_orc)
+    return out
 
 
 def setup_optimizer_adamw(net):
@@ -155,7 +183,7 @@ def setup_optimizer_adamw(net):
     grouped_parameters = [
         {
             "params": [p for n, p in net.named_parameters() if 'bias' not in n],
-            "weight_decay": 2,
+            "weight_decay": 10,
         },
         {
             "params": [p for n, p in net.named_parameters() if 'bias' in n],
@@ -164,12 +192,12 @@ def setup_optimizer_adamw(net):
     ]
     optimizer = optim.AdamW(grouped_parameters)
     lr_scheduler = optim.lr_scheduler.CyclicLR(
-        optimizer, base_lr=2e-7, max_lr=1e-4, cycle_momentum=False, mode='triangular2', step_size_up=3000
+        optimizer, base_lr=1e-7, max_lr=2e-4, cycle_momentum=False, mode='triangular2', step_size_up=2048 * 2
     )
     return optimizer, lr_scheduler
 
 
-def setup_optimizer_sgd(net, step_size=1250, init_lr=1e-3):
+def setup_optimizer_sgd(net, step_size=256, init_lr=1e-4):
     # training details
     grouped_parameters = [
         {
@@ -182,11 +210,11 @@ def setup_optimizer_sgd(net, step_size=1250, init_lr=1e-3):
         },
     ]
     optimizer = optim.SGD(grouped_parameters, lr=init_lr)
-    lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.95) # goes down by ~1k every 135 steps
+    lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.9) # goes down by ~1k every 135 steps
     return optimizer, lr_scheduler
 
 
-def setup_dataset(option='all', perf_margin=0.001):
+def setup_dataset(option='all', perf_margin=0.001, epoch_length=2048):
     if option == 'hmx':
         train_ds = ssdm.hmx.PairDS(split='train', perf_margin=perf_margin)
         val_datasets = [ssdm.hmx.InferDS(split='val')]
@@ -251,7 +279,7 @@ def setup_dataset(option='all', perf_margin=0.001):
         assert False
 
     train_loader = DataLoader(
-        train_ds, batch_size=None, sampler=PermutationSampler(train_ds, 20000),
+        train_ds, batch_size=None, sampler=PermutationSampler(train_ds, epoch_length),
         num_workers=4, pin_memory=True,
     )
     
@@ -275,7 +303,7 @@ class NLvlLoss(torch.nn.Module):
 
 
 class PermutationSampler(Sampler):
-    def __init__(self, data_source, epoch_length=20000):
+    def __init__(self, data_source, epoch_length=2048):
         self.data_source = data_source
         self.epoch_length = epoch_length
 
@@ -294,20 +322,22 @@ if __name__ == '__main__':
     # parser.add_argument('model_id', help='see scanner.AVAL_MODELS')
     parser.add_argument('total_epoch', help='total number of epochs to train')
     parser.add_argument('date', help='just a marker really, can be any text but mmdd is the intension')
-    # parser.add_argument('optimizer', help='Which sgd or adamw')
+    parser.add_argument('margin', help='sampling score margin')
     parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
 
     kwargs = parser.parse_args()
     total_epoch = int(kwargs.total_epoch)
     date = kwargs.date
-    opt = 'sgd'
+    opt = 'adamw'
     etp = 0.01
+    margin = float(kwargs.margin) # 0.001
 
-    model_id, ds = list(itertools.product(
-        ['MultiResSoftmaxB', 'EfficientNetB0'],
-        ['all', 'jsd', 'rwcpop', 'slm', 'hmx', 'all-but-jsd', 'all-but-rwcpop', 'all-but-slm', 'all-but-hmx'],
+    model_id, ds= list(itertools.product(
+        ['MultiResSoftmaxB'],
+        # ['all', 'jsd', 'rwcpop', 'slm', 'hmx', 'all-but-jsd', 'all-but-rwcpop', 'all-but-slm', 'all-but-hmx'],
+        ['all', 'jsd', 'rwcpop', 'slm', 'hmx', 'all-but-slm'],
     ))[int(kwargs.config_idx)]
 
-    main(MODEL_ID=model_id, EPOCH=total_epoch, DATE=date, DS=ds, OPT=opt, ETP=0.01, MARGIN=0.001, net=None)
+    main(MODEL_ID=model_id, EPOCH=total_epoch, DATE=date, DS=ds, OPT=opt, ETP=etp, MARGIN=margin, net=None)
     print('done without failure!')
 

@@ -334,8 +334,8 @@ def net_pick_performance(ds, net, device='cuda', verbose=False, drop_feats=[]):
     orc_feat_scores = score_da.sel(rep_ftype=net_layer_pick_orc_feat.rep_ftype, loc_ftype=net_layer_pick_orc_feat.loc_ftype)
 
     out = dict(net_pick = net_feat_pick_score.isel(layer=net_layer_pick),
-               net_feat_orc_lvl = orc_feat_scores.isel(layer=net_layer_pick_orc_feat),
-               orc_feat_net_lvl = net_feat_pick_score.max('layer'),
+               orc_feat_net_lvl = orc_feat_scores.isel(layer=net_layer_pick_orc_feat),
+               net_feat_orc_lvl = net_feat_pick_score.max('layer'),
                orc = orc_feat_scores.max('layer')
                )
     return out

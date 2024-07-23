@@ -663,7 +663,7 @@ class InferDS(Dataset):
 
 
 class PairDS(Dataset):
-    def __init__(self, ds_module, name=None, split='val', transform=None, perf_margin=0.05):
+    def __init__(self, ds_module, name=None, split='val', transform=None, perf_margin=0.001):
         super().__init__()
         self.ds_module = ds_module
         self.split = split
@@ -701,6 +701,9 @@ class PairDS(Dataset):
         score_rank = self.scores.max('layer').copy()
         for i, sq in enumerate(score_rank):
             score_rank[i] = rankdata(sq).reshape(5,5,1)
+
+        # Highest first, out of a total of 25
+        score_rank = 26 - score_rank
         return score_rank
 
 
@@ -745,14 +748,14 @@ class PairDS(Dataset):
         x1_vmeasure = torch.tensor(x1_vmeasure.values, dtype=torch.float32)[None, :]
         x2_vmeasure = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
         x2_vmeasure = torch.tensor(x2_vmeasure.values, dtype=torch.float32)[None, :]
-        # x1_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
-        # x2_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
+        x1_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
+        x2_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
         datum = {'x1': x1,
                  'x2': x2,
                  'x1_vmeasure': x1_vmeasure,
                  'x2_vmeasure': x2_vmeasure,
-                #  'x1_score_rank': x1_score_rank.item(),
-                #  'x2_score_rank': x2_score_rank.item(),
+                 'x1_rank': x1_score_rank.item(),
+                 'x2_rank': x2_score_rank.item(),
                  'x1_info': f'{rep_a}_{loc_a}',
                  'x2_info': f'{rep_b}_{loc_b}',
                  'track_info': f'{self.name}_{tid}',
@@ -788,12 +791,12 @@ class LvlDS(InferDS):
 
     def get_score_ranks(self):
         from scipy.stats import rankdata
-        self.score_rank = self.scores.max('layer').copy()
-        for i, sq in enumerate(self.score_rank):
-            self.score_rank[i] = rankdata(sq).reshape(5,5,1)
+        score_rank = self.scores.max('layer').copy()
+        for i, sq in enumerate(score_rank):
+            score_rank[i] = rankdata(sq).reshape(5,5,1)
         # Highest first, out of a total of 25
-        self.score_rank = 26 - self.score_rank
-        return self.score_rank
+        score_rank = 26 - score_rank
+        return score_rank
     
     def __getitem__(self, idx):
         if torch.is_tensor(idx):

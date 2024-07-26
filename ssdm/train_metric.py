@@ -84,9 +84,9 @@ def train_contrastive_epoch(ds_loader, net, optimizer, lr_scheduler=None, entro_
     optimizer.zero_grad()
     net.to(device)
     net.train()
-    running_loss_ranking = 0
-    running_loss_nlvl = 0
-    running_ent_loss = 0
+    running_loss_ranking = []
+    running_loss_nlvl = []
+    running_ent_loss = []
     iterator = enumerate(ds_loader)
     if verbose:
         iterator = tqdm(iterator, total=len(ds_loader))
@@ -103,7 +103,6 @@ def train_contrastive_epoch(ds_loader, net, optimizer, lr_scheduler=None, entro_
         
         contrast_label = s['perf_gap'].to(device).sign()
         rank_loss = rank_loss_fn(util_pred[0, None], util_pred[1, None], contrast_label)
-        loss = rank_loss
 
         if (s['x1_rank'] <= 8) or (s['x2_rank'] <= 8):
             if s['x1_rank'] > 8:
@@ -116,15 +115,17 @@ def train_contrastive_epoch(ds_loader, net, optimizer, lr_scheduler=None, entro_
 
             nlvl_loss, entropy = nlvl_loss_fn(nlvl_softmax, vmeasures)
             ent_loss = -entropy * entro_pen
-            nlvl_loss = nlvl_loss
-            loss = loss + nlvl_loss + ent_loss
+            loss = rank_loss + nlvl_loss + ent_loss
 
             # logging
-            running_loss_nlvl += nlvl_loss.item()
-            running_ent_loss += ent_loss.item()
-
-        # logging
-        running_loss_ranking += rank_loss.item()
+            running_loss_nlvl.append(nlvl_loss.item())
+            running_ent_loss.append(ent_loss.item())
+            running_loss_ranking.append(rank_loss.item())
+        else:
+            loss = rank_loss
+            # logging
+            running_loss_ranking.append(rank_loss.item())
+        
         loss.backward()
 
         # Manual batching
@@ -136,9 +137,9 @@ def train_contrastive_epoch(ds_loader, net, optimizer, lr_scheduler=None, entro_
             optimizer.zero_grad()
             if lr_scheduler is not None:
                 lr_scheduler.step()
-    out = dict(rank = running_loss_ranking / len(ds_loader), 
-               lvl = running_loss_nlvl / len(ds_loader),
-               entropy = running_ent_loss / len(ds_loader))
+    out = dict(rank = np.array(running_loss_ranking).mean(), 
+               lvl = np.array(running_loss_nlvl).mean(),
+               entropy = np.array(running_ent_loss).mean())
 
     return out
 
@@ -148,6 +149,7 @@ def eval_net_picking(val_datasets, net, device='cuda', verbose=False):
     all_ds_net_pick_lvl = []
     all_ds_net_pick_feat = []
     all_ds_orc = []
+    all_ds_scores = []
 
     for val_ds in val_datasets:
         perf = ssdm.net_pick_performance(val_ds, net, device=device)
@@ -156,22 +158,35 @@ def eval_net_picking(val_datasets, net, device='cuda', verbose=False):
         net_feat_orc_lvl = perf['net_feat_orc_lvl']
         orc = perf['orc']
 
+        
+
         new_tids = [val_ds.name + str(i) for i in net_lvl_orc_feat['tid'].values]
         all_ds_net_pick_both.append(net_pick.assign_coords(tid=new_tids))
         all_ds_net_pick_lvl.append(net_lvl_orc_feat.assign_coords(tid=new_tids))
         all_ds_net_pick_feat.append(net_feat_orc_lvl.assign_coords(tid=new_tids))
         all_ds_orc.append(orc.assign_coords(tid=new_tids))
+        all_ds_scores.append(val_ds.scores.copy().assign_coords(tid=new_tids))
 
+    
+
+    all_ds_scores = ssdm.xr.concat(all_ds_scores, 'tid')
     all_ds_net_pick_both = ssdm.xr.concat(all_ds_net_pick_both, 'tid')
     all_ds_net_pick_lvl = ssdm.xr.concat(all_ds_net_pick_lvl, 'tid')
     all_ds_net_pick_feat = ssdm.xr.concat(all_ds_net_pick_feat, 'tid')
     all_ds_orc = ssdm.xr.concat(all_ds_orc, 'tid')
+    
+    all_ds_boa_choice = all_ds_scores.mean('tid').argmax(dim=['rep_ftype', 'loc_ftype', 'layer'])
+    all_ds_boa_scores = all_ds_scores.isel(all_ds_boa_choice)
+
     if verbose:
         print()
         print(f'net pick v-measure on all val ds combined:')
-        print('\tlvl pick gap', all_ds_orc.mean('tid').item() - all_ds_net_pick_lvl.mean('tid').item())
-        print('\tfeat pick gap', all_ds_orc.mean('tid').item() - all_ds_net_pick_feat.mean('tid').item())
-        print('\tboth pick gap', all_ds_orc.mean('tid').item() - all_ds_net_pick_both.mean('tid').item())
+        print('\toracle score:',all_ds_orc.mean('tid').item())
+        print('\tlvl pick gap:', all_ds_orc.mean('tid').item() - all_ds_net_pick_lvl.mean('tid').item())
+        print('\tfeat pick gap:', all_ds_orc.mean('tid').item() - all_ds_net_pick_feat.mean('tid').item())
+        print('\tboth pick gap:', all_ds_orc.mean('tid').item() - all_ds_net_pick_both.mean('tid').item())
+        print('\tBoA pick gap:', all_ds_orc.mean('tid').item() - all_ds_boa_scores.mean('tid').item())
+        print('\tBoA choices:', all_ds_boa_scores.mean('tid').rep_ftype.item(), all_ds_boa_scores.mean('tid').loc_ftype.item(), all_ds_boa_scores.mean('tid').layer.item())
         print('===================')
 
     out = dict(net_pick=all_ds_net_pick_both, net_pick_lvl=all_ds_net_pick_lvl, net_pick_feat=all_ds_net_pick_feat, orc=all_ds_orc)
@@ -183,7 +198,7 @@ def setup_optimizer_adamw(net):
     grouped_parameters = [
         {
             "params": [p for n, p in net.named_parameters() if 'bias' not in n],
-            "weight_decay": 10,
+            "weight_decay": 5,
         },
         {
             "params": [p for n, p in net.named_parameters() if 'bias' in n],
@@ -192,7 +207,7 @@ def setup_optimizer_adamw(net):
     ]
     optimizer = optim.AdamW(grouped_parameters)
     lr_scheduler = optim.lr_scheduler.CyclicLR(
-        optimizer, base_lr=1e-7, max_lr=2e-4, cycle_momentum=False, mode='triangular2', step_size_up=2048 * 2
+        optimizer, base_lr=1e-7, max_lr=1e-4, cycle_momentum=False, mode='triangular', step_size_up=2048 * 2
     )
     return optimizer, lr_scheduler
 

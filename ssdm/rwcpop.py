@@ -60,7 +60,9 @@ class Track(base.Track):
 def get_ids(split: str = None, out_type: str = 'list'):
     all_ids = [str(tid) for tid in range(1, 101)]
 
-    if split:
+    if split == 'dev':
+        tids = ['47', '37', '65']
+    elif split:
     # Get different splits: can be train test val
         split_dict = ssdm.create_splits(all_ids, val_ratio=0.15, test_ratio=0.15, random_state=20230327)
         tids = split_dict[split]
@@ -75,6 +77,10 @@ def get_ids(split: str = None, out_type: str = 'list'):
     
 
 class PairDS(base.PairDS):
+    def __init__(self, split='val', transform=None, perf_margin=0.05):
+        super().__init__(ds_module=ssdm.rwcpop, name='rwcpop', split=split, transform=transform, perf_margin=perf_margin)
+
+class PairDSLmeasure(base.PairDSLmeasure):
     def __init__(self, split='val', transform=None, perf_margin=0.05):
         super().__init__(ds_module=ssdm.rwcpop, name='rwcpop', split=split, transform=transform, perf_margin=perf_margin)
 

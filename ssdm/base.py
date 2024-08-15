@@ -469,6 +469,7 @@ class Track(object):
         except PermissionError:
             os.system(f'rm {nc_path}')
             score_da.to_netcdf(nc_path)
+            print(f'(re)computed and saved {self.ds_name} {self.tid} a{anno_id} l score')
         return score_da
 
 
@@ -744,16 +745,16 @@ class PairDS(Dataset):
         )
         x1 = torch.tensor(first_evecs_a, dtype=torch.float32)[None, None, :]
         x2 = torch.tensor(first_evecs_b, dtype=torch.float32)[None, None, :]
-        x1_vmeasure = self.scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
-        x1_vmeasure = torch.tensor(x1_vmeasure.values, dtype=torch.float32)[None, :]
-        x2_vmeasure = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
-        x2_vmeasure = torch.tensor(x2_vmeasure.values, dtype=torch.float32)[None, :]
+        x1_layer_score = self.scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
+        x1_layer_score = torch.tensor(x1_layer_score.values, dtype=torch.float32)[None, :]
+        x2_layer_score = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
+        x2_layer_score = torch.tensor(x2_layer_score.values, dtype=torch.float32)[None, :]
         x1_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
         x2_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
         datum = {'x1': x1,
                  'x2': x2,
-                 'x1_vmeasure': x1_vmeasure,
-                 'x2_vmeasure': x2_vmeasure,
+                 'x1_layer_score': x1_layer_score,
+                 'x2_layer_score': x2_layer_score,
                  'x1_rank': x1_score_rank.item(),
                  'x2_rank': x2_score_rank.item(),
                  'x1_info': f'{rep_a}_{loc_a}',
@@ -764,6 +765,17 @@ class PairDS(Dataset):
         if self.transform:
             datum = self.transform(datum)
         return datum
+
+
+class PairDSLmeasure(PairDS):
+    def __init__(self, ds_module, name=None, split='val', transform=None, perf_margin=0.05):
+        super().__init__(ds_module, name, split, transform, perf_margin)
+
+    def __repr__(self):
+        return f'{self.name}_{self.split if self.split is not None else "full"}_lmeasure'
+    
+    def get_scores(self, score_type='f'):
+        return ssdm.get_lsd_scores(self, heir=True, shuffle=True).sel(m_type=score_type).sortby('tid')
 
 
 class LvlDS(InferDS):

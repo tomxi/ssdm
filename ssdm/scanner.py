@@ -198,6 +198,36 @@ def net_infer_multi_loss(infer_ds=None, net=None, device='cuda', num_workers=4, 
             result_xr.loc[infer_ds.name+tid, rep_feat, loc_feat, 'nlvl'] = nlvl.argmax().item()
     return result_xr.sortby('tid')
 
+
+def net_infer_nlvl_only(infer_ds=None, net=None, device='cuda', num_workers=4, verbose=False): 
+    full_tids = [infer_ds.name + tid for tid in infer_ds.tids]
+    result_coords = dict(
+        tid=full_tids, 
+        rep_ftype=ssdm.AVAL_FEAT_TYPES, loc_ftype=ssdm.AVAL_FEAT_TYPES,
+        layer=list(range(1, 17))
+    )
+    result_xr = xr.DataArray(np.nan, coords=result_coords, dims=result_coords.keys())
+    
+    infer_loader = DataLoader(infer_ds, batch_size=None, shuffle=False, num_workers=num_workers, pin_memory=True)
+    net.to(device)
+    net.eval()
+    with torch.no_grad():
+        if verbose:
+            infer_loader = tqdm(infer_loader)
+        for s in infer_loader:
+            tid, rep_feat, loc_feat = s['info'].split('_')
+            # repf_idx = torch.tensor(ssdm.AVAL_FEAT_TYPES.index(rep_feat)).to(device)
+            # locf_idx = torch.tensor(ssdm.AVAL_FEAT_TYPES.index(loc_feat)).to(device)
+            data = s['data'].to(device)
+            try:
+                utility, nlvl = net(data)
+            except:
+                print(s['info'])
+                raise AssertionError
+            result_xr.loc[infer_ds.name+tid, rep_feat, loc_feat] = nlvl.detach().cpu().numpy().squeeze()
+    return result_xr.sortby('tid')
+
+
 def net_infer_util_only(infer_ds=None, net=None, device='cuda', num_workers=4, verbose=False): 
     full_tids = [infer_ds.name + tid for tid in infer_ds.tids]
     result_coords = dict(
@@ -218,11 +248,14 @@ def net_infer_util_only(infer_ds=None, net=None, device='cuda', num_workers=4, v
             # locf_idx = torch.tensor(ssdm.AVAL_FEAT_TYPES.index(loc_feat)).to(device)
             data = s['data'].to(device)
             try:
-                utility = net(data)
+                net_out = net(data)
             except:
                 print(s['info'])
                 raise AssertionError
-            result_xr.loc[infer_ds.name+tid, rep_feat, loc_feat] = utility.item()
+            try:
+                result_xr.loc[infer_ds.name+tid, rep_feat, loc_feat] = net_out.item()
+            except:
+                result_xr.loc[infer_ds.name+tid, rep_feat, loc_feat] = net_out[0].item()
     return result_xr.sortby('tid')
 
 
@@ -615,6 +648,84 @@ class MultiResSoftmaxB(nn.Module):
         return self.util_head(pre_util_head), self.nlvl_head(pre_nlvl_head)
 
 
+class MultiResSoftmaxUtil(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.expand_evecs = ExpandEvecs()
+        
+        self.convlayers1 = nn.Sequential(
+            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), nn.SiLU()
+        )
+        self.convlayers2 = nn.Sequential(
+            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), nn.SiLU()
+        )
+        self.convlayers3 = nn.Sequential(
+            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), nn.SiLU()
+        )
+        self.convlayers4 = nn.Sequential(
+            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), nn.SiLU()
+        )
+
+        self.maxpool = ConditionalMaxPool2d(kernel_size=2, stride=2)
+        self.adapool_big = nn.AdaptiveMaxPool2d((36, 36))
+        self.adapool_med = nn.AdaptiveMaxPool2d((9, 9))
+        self.adapool_sm = nn.AdaptiveMaxPool2d((3, 3))
+
+        self.util_head = nn.Sequential(
+            nn.Dropout(0.2, inplace=False),
+            nn.Linear(1386, 128, bias=False),
+            nn.SiLU(),
+            nn.Linear(128, 1, bias=False)
+        ) 
+
+        # self.nlvl_head = nn.Sequential(
+        #     nn.Dropout(0.2, inplace=False),
+        #     nn.Linear(22176, 128, bias=False),
+        #     nn.SiLU(),
+        #     nn.Linear(128, 16, bias=True), 
+        #     nn.Softmax(dim=-1)
+        # )
+
+
+    def forward(self, x, rep_f_idx=None, loc_f_idx=None):
+        x = self.expand_evecs(x)
+        x = self.convlayers1(x)
+        x1 = self.convlayers2(self.maxpool(x))
+        x2 = self.convlayers3(self.maxpool(x1))
+        x3 = self.convlayers3(self.maxpool(x2))
+        
+        x_sm = self.adapool_sm(x1) + self.adapool_sm(x2) + self.adapool_sm(x3)
+        x_med = self.adapool_med(x1) + self.adapool_med(x2) + self.adapool_med(x3)
+        x_big = self.adapool_big(x1) + self.adapool_big(x2) + self.adapool_big(x3)
+
+        x_sm_ch_softmax = (x_sm.softmax(1) * x_sm).sum(1)
+        x_med_ch_softmax = (x_med.softmax(1) * x_med).sum(1)
+        x_big_ch_softmax = (x_big.softmax(1) * x_big).sum(1)
+
+        pre_util_head = torch.cat(
+            [torch.flatten(x_sm_ch_softmax, 1), torch.flatten(x_med_ch_softmax, 1), torch.flatten(x_big_ch_softmax, 1)], 
+            1
+        )
+
+        # pre_nlvl_head = torch.cat(
+        #     [torch.flatten(x_sm, 1), torch.flatten(x_med, 1), torch.flatten(x_big, 1)], 
+        #     1
+        # )
+
+        return self.util_head(pre_util_head)
+
+
+
+
+
 # # Produced by chatgpt-4o
 # def replace_batchnorm_with_instancenorm(model):
 #     for name, module in model.named_children():
@@ -657,7 +768,7 @@ AVAL_MODELS = {
     'SQSmall': SQSmall,
     'NewSQSmall': NewSQSmall,
     'MultiRes': MultiRes,
-    'MultiResSoftmax': MultiResSoftmax,
+    'MultiResSoftmaxUtil': MultiResSoftmaxUtil,
     'MultiResSoftmaxB': MultiResSoftmaxB,
     'EfficientNetB0': EfficientNetB0,
 }

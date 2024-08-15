@@ -318,10 +318,11 @@ def get_lsd_scores(
 
 
 def net_pick_performance(ds, net, device='cuda', verbose=False, drop_feats=[]):
-    score_da = ds.scores
+    score_da = ds.scores.copy()
     net_output = scn.net_infer_multi_loss(ds, net, device, verbose=verbose)
     if drop_feats:
         net_output = net_output.drop_sel(rep_ftype=drop_feats, loc_ftype=drop_feats)
+        score_da = score_da.drop_sel(rep_ftype=drop_feats, loc_ftype=drop_feats)
     util_score = net_output.loc[:, :, :, 'util']
     nlvl_pick = net_output.loc[:, :, :, 'nlvl']
     best_util_idx = util_score.argmax(dim=['rep_ftype', 'loc_ftype'])

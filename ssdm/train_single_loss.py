@@ -35,10 +35,10 @@ def main(MODEL_ID='MultiResSoftmaxUtil', EPOCH=7, DATE='YYMMDD', DS='dev', OPT='
     
     if OPT == 'adamw':
         optimizer, lr_scheduler = setup_optimizer_adamw(
-            net, step_size_up=2048 * 8, weight_decay=0.1, base_lr=1e-6, max_lr=1e-3
+            net, step_size_up=2048 * 12, weight_decay=0.1, base_lr=3e-6, max_lr=3e-3
         )
     elif OPT == 'sgd':
-        optimizer, lr_scheduler = setup_optimizer_sgd(net, step_size=2048 * 4, init_lr=5e-4)
+        optimizer, lr_scheduler = setup_optimizer_sgd(net, step_size=2048 * 6, init_lr=2e-3)
     else:
         assert False
 
@@ -137,7 +137,7 @@ def eval_net_picking(val_datasets, net, device='cuda', full=False):
     return out
 
 
-def setup_optimizer_adamw(net, step_size_up=2048, weight_decay=0.1, base_lr=1e-6, max_lr=1e-3):
+def setup_optimizer_adamw(net, step_size_up=2048*2, weight_decay=0.1, base_lr=3e-6, max_lr=3e-3):
     # training details
     grouped_parameters = [
         {
@@ -297,21 +297,22 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Training Tau hats')
     parser.add_argument('total_epoch', help='total number of epochs to train')
     parser.add_argument('date', help='just a marker really, can be any text but mmdd is the intension')
+    parser.add_argument('opt', help='adamw or sgd')
     parser.add_argument('margin', help='sampling score margin')
     parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
 
     kwargs = parser.parse_args()
     total_epoch = int(kwargs.total_epoch)
     date = kwargs.date
-    # opt = 'sgd'
+    opt = kwargs.opt
 
     margin = float(kwargs.margin) # 0.05
 
-    model_id, ds, opt = list(itertools.product(
+    model_id, ds = list(itertools.product(
         ['MultiResSoftmaxUtil'],
         # ['all', 'jsd', 'rwcpop', 'slm', 'hmx', 'all-but-jsd', 'all-but-rwcpop', 'all-but-slm', 'all-but-hmx'],
         ['all', 'jsd', 'rwcpop', 'slm', 'hmx', 'all-but-slm'],
-        ['sgd', 'adamw'],
+        # ['sgd', 'adamw'],
     ))[int(kwargs.config_idx)]
 
     main(MODEL_ID=model_id, EPOCH=total_epoch, DATE=date, DS=ds, OPT=opt, MARGIN=margin, net=None)

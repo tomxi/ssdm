@@ -60,7 +60,9 @@ class Track(base.Track):
 def get_ids(split: str = None, out_type: str = 'list'):
     all_ids = [str(tid) for tid in range(1, 101)]
 
-    if split == 'dev':
+    if split == 'single':
+        tids = ['65']
+    elif split == 'dev':
         tids = ['47', '37', '65']
     elif split:
     # Get different splits: can be train test val

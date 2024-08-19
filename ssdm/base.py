@@ -625,21 +625,13 @@ class InferDS(Dataset):
         return len(self.samples)
 
     def __repr__(self):
-        return f'{self.name}_{self.split if self.split is not None else "full"}_infer'
+        return f'{self.name}_{self.split if self.split is not None else "full"}_lmeasure_infer'
         
-    def get_scores(self, drop_feats=[]):
-        try:
-            return self.scores
-        
-        except AttributeError:
-            a_layer = 2 if self.name == 'jsd' else 0
-            score_da = ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=a_layer).sel(m_type='f').sortby('tid')
-            new_tid = [self.name + tid.item() for tid in score_da.tid]
-            score_da = score_da.assign_coords(tid=new_tid)
-        
-        if drop_feats:
-            score_da = score_da.drop_sel(rep_ftype=drop_feats, loc_ftype=drop_feats)
-        return score_da
+    def get_scores(self, score_type='f'):
+        score_da = ssdm.get_lsd_scores(self, heir=True, shuffle=True).sel(m_type=score_type).sortby('tid')
+        new_tid = [self.name + tid.item() for tid in score_da.tid]
+        return score_da.assign_coords(tid=new_tid)
+
     
     def __getitem__(self, idx):
         if torch.is_tensor(idx):

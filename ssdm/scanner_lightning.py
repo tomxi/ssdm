@@ -11,11 +11,6 @@ from ssdm.scanner import ExpandEvecs, ConditionalMaxPool2d
 from ssdm import AVAL_FEAT_TYPES
 import ssdm
 
-# define any number of nn.Modules (or use your current ones)
-encoder = nn.Sequential(nn.Linear(28 * 28, 64), nn.ReLU(), nn.Linear(64, 3))
-decoder = nn.Sequential(nn.Linear(3, 64), nn.ReLU(), nn.Linear(64, 28 * 28))
-
-
 # define the LightningModule
 class LitUtilModel(L.LightningModule):
     def __init__(self):
@@ -41,17 +36,24 @@ class LitUtilModel(L.LightningModule):
             nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
             nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), nn.SiLU()
         )
+        self.post_big_pool = nn.Sequential(
+            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), nn.SiLU()
+        )
 
         self.maxpool = ConditionalMaxPool2d(kernel_size=2, stride=2)
-        self.adapool_big = nn.AdaptiveMaxPool2d((36, 36))
-        self.adapool_med = nn.AdaptiveMaxPool2d((9, 9))
-        self.adapool_sm = nn.AdaptiveMaxPool2d((3, 3))
+        self.adapool_big = nn.AdaptiveMaxPool2d((32, 32))
+        self.adapool_med = nn.AdaptiveMaxPool2d((16, 16))
+        self.adapool_sm = nn.AdaptiveMaxPool2d((4, 4))
+
+        
 
         self.util_head = nn.Sequential(
             nn.Dropout(0.2, inplace=False),
-            nn.Linear(1386, 128, bias=False),
+            nn.Linear(528, 32, bias=False),
             nn.SiLU(),
-            nn.Linear(128, 1, bias=False)
+            nn.Linear(32, 1, bias=False)
         )
 
 
@@ -60,11 +62,12 @@ class LitUtilModel(L.LightningModule):
         x = self.convlayers1(x)
         x1 = self.convlayers2(self.maxpool(x))
         x2 = self.convlayers3(self.maxpool(x1))
-        x3 = self.convlayers3(self.maxpool(x2))
+        x3 = self.convlayers4(self.maxpool(x2))
         
         x_sm = self.adapool_sm(x1) + self.adapool_sm(x2) + self.adapool_sm(x3)
         x_med = self.adapool_med(x1) + self.adapool_med(x2) + self.adapool_med(x3)
         x_big = self.adapool_big(x1) + self.adapool_big(x2) + self.adapool_big(x3)
+        x_big = self.maxpool(self.post_big_pool(x_big))
 
         x_sm_ch_softmax = (x_sm.softmax(1) * x_sm).sum(1)
         x_med_ch_softmax = (x_med.softmax(1) * x_med).sum(1)
@@ -93,9 +96,8 @@ class LitUtilModel(L.LightningModule):
         # Logging to TensorBoard (if installed) by default
         self.log('ranking loss', loss, on_step=False, on_epoch=True, batch_size=1)
         # self.log('ranking loss offset', loss + 0.1, on_step=False, on_epoch=True, batch_size=1)
-        opt = self.optimizers()
-        lr = opt.param_groups[0]['lr']
-        self.log('learning rate', lr, on_step=False, on_epoch=True, batch_size=1)
+        
+        
         
         return loss
 
@@ -132,8 +134,8 @@ class LitUtilModel(L.LightningModule):
                 "weight_decay": 0.0,
             },
         ]
-        optimizer = optim.SGD(grouped_parameters, lr=2e-2)
-        lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9) # goes down by ~1k every 135 steps
+        optimizer = optim.SGD(grouped_parameters, lr=1e-3)
+        lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
         return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'epoch', 'frequency': 1}]
 
 
@@ -152,14 +154,16 @@ class LitUtilModel(L.LightningModule):
 
     def on_validation_epoch_start(self):
         self.trainer.fit_loop.setup_data()
-        # self.val_ds = self.trainer.val_dataloader().dataset
-        self.val_ds = self.trainer.datamodule.val_infer_ds
+        self.val_ds = self.trainer.datamodule.val_dataloader().dataset
         full_tids = [self.val_ds.name + tid for tid in self.val_ds.tids]
         result_coords = dict(
             tid=full_tids, 
             rep_ftype=AVAL_FEAT_TYPES, loc_ftype=AVAL_FEAT_TYPES,
         )
-        self.val_inference_result = xr.DataArray(np.nan, coords=result_coords, dims=result_coords.keys()).sortby('tid')
+        self.val_inference_result = xr.DataArray(np.nan, 
+                                                 coords=result_coords, 
+                                                 dims=result_coords.keys()
+                                                ).sortby('tid')
 
 
     def validation_step(self, batch, batch_idx):
@@ -174,9 +178,13 @@ class LitUtilModel(L.LightningModule):
         orc_feat_picks = ds_score.argmax(dim=['rep_ftype', 'loc_ftype'])
         boa_feat_picks = ds_score.mean('tid').argmax(dim=['rep_ftype', 'loc_ftype'])
 
-        self.log('net pick', ds_score.isel(net_feat_picks).mean().item())
-        self.log('boa pick', ds_score.isel(boa_feat_picks).mean().item())
-        self.log('orc pick', ds_score.isel(orc_feat_picks).mean().item())
+        self.log('net pick', ds_score.isel(net_feat_picks).mean().item(), sync_dist=True)
+        self.log('boa pick', ds_score.isel(boa_feat_picks).mean().item(), sync_dist=True)
+        self.log('orc pick', ds_score.isel(orc_feat_picks).mean().item(), sync_dist=True)
+        
+        opt = self.optimizers()
+        lr = opt.param_groups[0]['lr']
+        self.log('learning rate', lr, on_step=False, on_epoch=True, batch_size=1)
 
 
 

@@ -289,6 +289,7 @@ def get_lsd_scores(
     anno_col_fn=lambda stack: stack.max(dim='anno_id'), # activated when there are more than 1 annotation for a track
     heir=False,
     beat_sync=True,
+    verbose=False,
     **lsd_score_kwargs,
 ) -> xr.DataArray:    
     score_per_track = []
@@ -296,7 +297,11 @@ def get_lsd_scores(
     if shuffle:
         random.shuffle(tids)
 
-    for tid in tqdm(tids):
+    if verbose:
+        tid_iterator = tqdm(tids)
+    else:
+        tid_iterator = tids
+    for tid in tid_iterator:
         track = ds.ds_module.Track(tid=tid)
         if track.num_annos() == 1:
             if heir:

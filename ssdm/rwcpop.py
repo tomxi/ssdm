@@ -13,7 +13,7 @@ from tqdm import tqdm
 from glob import glob
 
 import librosa
-
+NAME = 'rwcpop'
 class Track(base.Track):
     def __init__(
         self,

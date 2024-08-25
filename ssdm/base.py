@@ -689,6 +689,12 @@ class PairDS(Dataset):
         # return score_da.assign_coords(tid=new_tid)
 
 
+    @property
+    def vmeasures(self):
+        a_layer = 2 if self.name == 'jsd' else 0
+        return ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=a_layer).sel(m_type='f').sortby('tid')
+
+
     def get_score_ranks(self):
         from scipy.stats import rankdata
         score_rank = self.scores.max('layer').copy()
@@ -737,9 +743,9 @@ class PairDS(Dataset):
         )
         x1 = torch.tensor(first_evecs_a, dtype=torch.float32)[None, None, :]
         x2 = torch.tensor(first_evecs_b, dtype=torch.float32)[None, None, :]
-        x1_layer_score = self.scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
+        x1_layer_score = self.vmeasures.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
         x1_layer_score = torch.tensor(x1_layer_score.values, dtype=torch.float32)[None, :]
-        x2_layer_score = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
+        x2_layer_score = self.vmeasures.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
         x2_layer_score = torch.tensor(x2_layer_score.values, dtype=torch.float32)[None, :]
         x1_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
         x2_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
@@ -768,6 +774,9 @@ class PairDSLmeasure(PairDS):
     
     def get_scores(self, score_type='f'):
         return ssdm.get_lsd_scores(self, heir=True, shuffle=True).sel(m_type=score_type).sortby('tid')
+
+    
+    
 
 
 class LvlDS(InferDS):

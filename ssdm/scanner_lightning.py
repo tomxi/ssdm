@@ -236,9 +236,9 @@ class LitMultiModel(L.LightningModule):
         )
         self.nlvl_head = nn.Sequential(
             nn.Dropout(0.2, inplace=False),
-            nn.Linear(528 * 16, 16, bias=False),
+            nn.Linear(528, 32, bias=False),
             nn.SiLU(),
-            nn.Linear(16, 16, bias=True),
+            nn.Linear(32, 16, bias=True),
             nn.Softmax(dim=-1)
         )
         self.lvl_loss_fn = NLvlLoss()
@@ -263,14 +263,10 @@ class LitMultiModel(L.LightningModule):
         mutlires_embeddings = [torch.flatten(x_sm_ch_softmax, 1), 
                                torch.flatten(x_med_ch_softmax, 1), 
                                torch.flatten(x_big_ch_softmax, 1)]
-        
-        mutlires_embeddings_per_layer = [torch.flatten(x_sm, 1), 
-                                         torch.flatten(x_med, 1), 
-                                         torch.flatten(x_big, 1)]
 
-        pre_util_head = torch.cat(mutlires_embeddings, 1)
-        pre_nlvl_head = torch.cat(mutlires_embeddings_per_layer, 1)
-        return self.util_head(pre_util_head), self.nlvl_head(pre_nlvl_head)
+        mutlires_embeddings_flat = torch.cat(mutlires_embeddings, 1)
+        return self.util_head(mutlires_embeddings_flat), self.nlvl_head(mutlires_embeddings_flat)
+
 
     def on_fit_start(self):
         torch.set_float32_matmul_precision('medium')
@@ -283,7 +279,8 @@ class LitMultiModel(L.LightningModule):
             }
         }
         tb_writer.add_custom_scalars(layout)
-    
+
+
     def training_step(self, batch, batch_idx):
         # training_step defines the train loop.
         # it is independent of forward
@@ -312,6 +309,7 @@ class LitMultiModel(L.LightningModule):
         
         return ranking_loss + lvl_loss - scaled_entropy
 
+
     def on_validation_epoch_start(self):
         self.trainer.fit_loop.setup_data()
         self.val_ds = self.trainer.datamodule.val_dataloader().dataset
@@ -324,11 +322,13 @@ class LitMultiModel(L.LightningModule):
                                                  coords=result_coords, 
                                                  dims=result_coords.keys()
                                                 ).sortby('tid')
-    
+
+
     def validation_step(self, batch, batch_idx):
         tid, rep_feat, loc_feat = batch['info'].split('_')
         x, _ = self(batch['data'])
         self.val_inference_result.loc[self.val_ds.name+tid, rep_feat, loc_feat] = x.item()
+
 
     def on_validation_epoch_end(self):
         ds_score = self.val_ds.scores.max('layer').sortby('tid')
@@ -348,7 +348,7 @@ class LitMultiModel(L.LightningModule):
         grouped_parameters = [
             {
                 "params": [p for n, p in self.named_parameters() if 'bias' not in n],
-                "weight_decay": 10,
+                "weight_decay": 1,
             },
             {
                 "params": [p for n, p in self.named_parameters() if 'bias' in n],
@@ -356,15 +356,16 @@ class LitMultiModel(L.LightningModule):
             },
         ]
         optimizer = optim.AdamW(grouped_parameters)
+        step_size_up = 6000
+        print('cyclicLR step_size_up:', step_size_up, self.trainer.estimated_stepping_batches)
         lr_scheduler = optim.lr_scheduler.CyclicLR(
             optimizer, 
             base_lr=1e-6, max_lr=3e-3, 
             cycle_momentum=False, mode='triangular2', 
-            step_size_up=3000
+            step_size_up=4000
         )
 
         return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 1}]
-
 
 
 # New validation dataloaders...
@@ -454,12 +455,7 @@ if __name__ == '__main__':
     kwargs = parser.parse_args()
     margin = float(kwargs.margin) # 0.05
 
-    model_id, ds = list(itertools.product(
-        ['MultiResSoftmaxUtil'],
-        # ['all', 'jsd', 'rwcpop', 'slm', 'hmx', 'all-but-jsd', 'all-but-rwcpop', 'all-but-slm', 'all-but-hmx'],
-        ['jsd', 'rwcpop', 'slm', 'hmx'], # Change this to a list of ds_moodules
-        # ['sgd', 'adamw'],
-    ))[int(kwargs.config_idx)]
+    ds = ['slm', 'jsd', 'rwcpop', 'hmx'][int(kwargs.config_idx)]
 
     tb_logger = L.pytorch.loggers.TensorBoardLogger(save_dir="/scratch/qx244/pl_tb_logs/", name=kwargs.date+ds)
 

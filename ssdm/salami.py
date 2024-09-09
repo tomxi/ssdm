@@ -18,6 +18,7 @@ class Track(base.Track):
         super().__init__(tid, dataset_dir=dataset_dir, output_dir=output_dir, feature_dir=feature_dir)
         self.audio_path = os.path.join(dataset_dir, f'audio/{tid}/audio.mp3')
         self.ds_name = 'slm'
+        self.title = tid
 
     def num_annos(
         self,

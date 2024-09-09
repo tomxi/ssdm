@@ -666,6 +666,7 @@ class PairDS(Dataset):
         self.name = name
         self.tids = self.ds_module.get_ids(self.split)
         self.scores = self.get_scores()
+        self.vmeasures = self.get_vmeasures()
         self.score_ranks = self.get_score_ranks()
         self.score_gaps = self.get_score_gaps()
         self.samples = list(self.score_gaps.keys())
@@ -689,8 +690,7 @@ class PairDS(Dataset):
         # return score_da.assign_coords(tid=new_tid)
 
 
-    @property
-    def vmeasures(self):
+    def get_vmeasures(self):
         a_layer = 2 if self.name == 'jsd' else 0
         return ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=a_layer).sel(m_type='f').sortby('tid')
 

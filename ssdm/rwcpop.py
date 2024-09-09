@@ -28,7 +28,6 @@ class Track(base.Track):
 
         metadata_csv = pd.read_csv(os.path.join(dataset_dir, 'metadata-master/rwc-p.csv'))
         self.metadata = metadata_csv[metadata_csv['Piece No.'] == f'No. {tid}']
-
         self.title = self.metadata['Title'].item()
         self.audio_path = os.path.join(audio_dir, f'{tid}.wav')
 
@@ -38,7 +37,7 @@ class Track(base.Track):
             # create jams file from metadata 
             j = jams.JAMS()
             j.file_metadata.duration = librosa.get_duration(path=self.audio_path)
-            j.file_metadata.title = self.metadata['Title'].item()
+            j.file_metadata.title = self.title
             j.file_metadata.artist = self.metadata['Artist (Vocal)'].item()
 
 

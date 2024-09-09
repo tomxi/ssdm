@@ -265,8 +265,79 @@ class LitMultiModel(L.LightningModule):
             step_size_up=step_size_up
         )
 
-        return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 1}]
+        return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 4}]
 
+
+class LitUtilModel(LitMultiModel):
+    def __init__(self):
+        super().__init__()
+        del self.nlvl_head
+        del self.lvl_loss_fn
+
+
+    def forward(self, x):
+        x = self.expand_evecs(x)
+        x = self.convlayers1(x)
+        x1 = self.convlayers2(self.maxpool(x))
+        x2 = self.convlayers3(self.maxpool(x1))
+        x3 = self.convlayers4(self.maxpool(x2))
+        
+        x_sm = self.adapool_sm(x1) + self.adapool_sm(x2) + self.adapool_sm(x3)
+        x_med = self.adapool_med(x1) + self.adapool_med(x2) + self.adapool_med(x3)
+        x_big = self.adapool_big(x1) + self.adapool_big(x2) + self.adapool_big(x3)
+        x_big = self.maxpool(self.post_big_pool(x_big))
+
+        x_sm_ch_softmax = (x_sm.softmax(1) * x_sm).sum(1)
+        x_med_ch_softmax = (x_med.softmax(1) * x_med).sum(1)
+        x_big_ch_softmax = (x_big.softmax(1) * x_big).sum(1)
+
+        mutlires_embeddings = [torch.flatten(x_sm_ch_softmax, 1), 
+                               torch.flatten(x_med_ch_softmax, 1), 
+                               torch.flatten(x_big_ch_softmax, 1)]
+        return self.util_head(torch.cat(mutlires_embeddings, 1))
+
+
+    def training_step(self, batch, batch_idx):
+        # training_step defines the train loop.
+        # it is independent of forward
+        x = torch.cat([batch['x1'], batch['x2']], 0)
+        contrast_label = batch['perf_gap'].sign()
+        
+        util_est = self(x)
+        ranking_loss = nn.functional.margin_ranking_loss(
+            util_est[0, None], util_est[1, None], 
+            contrast_label, margin=1
+        )
+        self.log('ranking loss', ranking_loss, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
+        return ranking_loss
+
+    def validation_step(self, batch, batch_idx):
+        tid, rep_feat, loc_feat = batch['info'].split('_')
+        x = self(batch['data'])
+        self.trainer.val_predictions.loc[self.val_ds.name+tid, rep_feat, loc_feat] = x.item()
+
+    def configure_optimizers(self):
+        grouped_parameters = [
+            {
+                "params": [p for n, p in self.named_parameters() if 'bias' not in n],
+                "weight_decay": 1,
+            },
+            {
+                "params": [p for n, p in self.named_parameters() if 'bias' in n],
+                "weight_decay": 0.0,
+            },
+        ]
+        optimizer = optim.AdamW(grouped_parameters)
+        step_size_up = 2000
+        print('cyclicLR step_size_up:', step_size_up)
+        lr_scheduler = optim.lr_scheduler.CyclicLR(
+            optimizer, 
+            base_lr=1e-6, max_lr=1e-3, 
+            cycle_momentum=False, mode='triangular2', 
+            step_size_up=step_size_up
+        )
+
+        return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 4}]
 
 # New validation dataloaders...
 class PairDataModule(L.LightningDataModule):
@@ -323,29 +394,6 @@ class PairDataModule(L.LightningDataModule):
         )
     
 
-class DevPairDataModule(PairDataModule):
-    def __init__(self, perf_margin=0.01, split='single'):
-        super().__init__(ds_module=ssdm.rwcpop, perf_margin=perf_margin)
-        self.split = split
-
-
-    def setup(self, stage: str):
-        # Assign train/val datasets for use in dataloaders
-        if stage == "fit":
-            self.train_ds = ssdm.rwcpop.PairDSLmeasure(split=self.split, perf_margin=self.perf_margin) 
-            self.val_infer_ds = ssdm.rwcpop.InferDS(split=self.split)
-
-        if stage == 'validate':
-            self.val_infer_ds = ssdm.rwcpop.InferDS(split=self.split)
-
-        # Assign test dataset for use in dataloader(s)
-        if stage == "test":
-            self.test_infer_ds = ssdm.rwcpop.InferDS(split=self.split)
-
-        if stage == "predict":
-            self.predict_ds = ssdm.rwcpop.InferDS(split=self.split) 
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Training Tau hats')
     parser.add_argument('total_epoch', help='total number of epochs to train')
@@ -359,7 +407,7 @@ if __name__ == '__main__':
     ds = ['hmx', 'slm', 'jsd', 'rwcpop'][int(kwargs.config_idx)]
 
     # initialise the wandb logger and name your wandb project
-    wandb_logger = L.pytorch.loggers.WandbLogger(project='ssdm', name=kwargs.date+ds+kwargs.margin)
+    wandb_logger = L.pytorch.loggers.WandbLogger(project='ssdm', name=kwargs.date+ds+kwargs.margin+'utilonly')
     # add your batch size to the wandb config
     # wandb_logger.experiment.config["date"] = kwargs.date
     # wandb_logger.experiment.config["ds"] = ds
@@ -393,7 +441,7 @@ if __name__ == '__main__':
 
     ds_module_dict = dict(jsd = ssdm.jsd, slm = ssdm.slm, hmx = ssdm.hmx, rwcpop = ssdm.rwcpop)
     dm = PairDataModule(ds_module=ds_module_dict[ds], perf_margin=margin)
-    lit_net = LitMultiModel()
+    lit_net = LitUtilModel()
     wandb_logger.watch(lit_net, log='all')
     trainer.fit(lit_net, datamodule=dm)
     wandb.finish()

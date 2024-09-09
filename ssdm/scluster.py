@@ -50,7 +50,6 @@ def combine_ssms(rep_ssm, loc_path_sim, rec_smooth=7):
     deg_path = np.sum(R_path, axis=1)
     deg_rec = np.sum(Rf, axis=1)
 
-
     mu = deg_path.dot(deg_path + deg_rec) / np.sum((deg_path + deg_rec)**2)
 
     aff_mat = mu * Rf + (1 - mu) * R_path

@@ -16,7 +16,7 @@ class Track(base.Track):
             self,
             tid='0077', 
             feature_dir='/scratch/qx244/data/audio_features_crema_mfcc_openl3_tempogram_yamnet/crema_mfcc_openl3_tempogram_yamnet_features/',
-            dataset_dir='/home/qx244/harmonixset/dataset/',
+            dataset_dir='/scratch/qx244/harmonixset/dataset/',
             output_dir='/vast/qx244/harmonix2/',
                 ):
         super().__init__(tid=tid, feature_dir=feature_dir, output_dir=output_dir, dataset_dir=dataset_dir)

@@ -45,9 +45,9 @@ def scatter_scores(
 
 def anno_meet_mats(track, mode='expand'):
     """
-    mode can be one of {'normal', 'expand', 'refine', 'coarse'}
+    mode can be one of {'normal', 'expand'}
     """
-    _, axs = plt.subplots(1, track.num_annos(), figsize=(5*track.num_annos() + 1, 4))
+    fig, axs = plt.subplots(1, track.num_annos(), figsize=(5*track.num_annos() + 1, 4))
     if isinstance(axs, matplotlib.axes.Axes):
         axs = [axs]
     
@@ -55,7 +55,7 @@ def anno_meet_mats(track, mode='expand'):
         anno_jam = track.ref(mode=mode, anno_id=anno_id)
         quadmesh = librosa.display.specshow(ssdm.anno_to_meet(anno_jam, track.ts()), x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=axs[anno_id])
         plt.colorbar(quadmesh)        
-    return axs
+    return fig, axs
 
 
 def lsd_meet_mat(track, config=dict(), beat_sync=False, layer_to_show=None):
@@ -201,7 +201,7 @@ def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True, fi
     ax.set_title(title)
     if colorbar:
         plt.colorbar(im, shrink=0.8)
-    return ax
+    return fig, ax
 
 
 ## Inspecting model weight tensors

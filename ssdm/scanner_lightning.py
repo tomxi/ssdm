@@ -1,14 +1,13 @@
 import xarray as xr
 import numpy as np
 import torch
-import re
+import re, itertools
 from torch import optim, nn
 from torch.utils.data import DataLoader
 
 import lightning as L
 import wandb
 from lightning.pytorch.callbacks import TQDMProgressBar, ModelCheckpoint, LearningRateMonitor
-# from lightning.pytorch.utilities import rank_zero_only
 import argparse
 
 from ssdm.scanner import ExpandEvecs, ConditionalMaxPool2d
@@ -17,49 +16,85 @@ import ssdm
 
 # My LVL Loss
 class NLvlLoss(torch.nn.Module):
-    def __init__(self, scale_by_target=False):
+    def __init__(self):
         super().__init__()
-        self.scale_by_target = scale_by_target
 
     def forward(self, pred, targets):
         diviation = targets.max() - targets
-        losses = torch.linalg.vecdot(pred, diviation)
-        if self.scale_by_target:
-            losses = losses * targets.max()
-        
-        log_p = torch.log(pred + 1e-9)
+        # losses = torch.linalg.vecdot(pred, diviation)
+        losses = torch.nn.functional.cosine_similarity(pred, diviation, dim=1, eps=1e-7)
+        log_p = torch.log(pred + 1e-7)
         entropy = -torch.sum(pred * log_p, dim=-1)
         return torch.mean(losses), torch.mean(entropy)
-        
+
+
+# Custom Conv2d layer that scales gradients based on the number of filter applications
+class InputSizeAwareConv2d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+        super().__init__()
+        # Wrapping standard Conv2d
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias)
+        self.H_out = None
+        self.W_out = None
+        self._register_gradient_hook(256)
+
+    def forward(self, input):
+        # Perform the forward pass, saving the output dimensions (H_out, W_out)
+        output = self.conv(input)
+        self.H_out, self.W_out = output.size(2), output.size(3)  # Save height and width of the output
+        return output
+
+    def _register_gradient_hook(self, c):    
+        # Register hook to scale the gradient based on the number of filter applications
+        def hook_fn(grad):
+            if self.H_out is not None and self.W_out is not None:
+                # Number of times the filter was applied (H_out * W_out)
+                scaling_factor = self.H_out * self.W_out
+                return grad / scaling_factor * c
+            return grad
+
+        # Apply the hook to the weight gradient
+        self.conv.weight.register_hook(hook_fn)
+        if self.conv.bias is not None:
+            self.conv.bias.register_hook(hook_fn)
+              
 
 class LitMultiModel(L.LightningModule):
-    def __init__(self):
+    def __init__(self, training_loss_mode='util', branch_off='early', norm_cnn_grad=True, entropy_scale=0.1):
         super().__init__()
+        self.training_loss_mode = training_loss_mode # 'util', 'nlvl', 'duo', 'triple'
+        self.branch_off = branch_off # 'early' or 'late'
+        self.norm_cnn_grad = norm_cnn_grad
+        self.entropy_scale = entropy_scale
+        if self.norm_cnn_grad:
+            Conv2d = InputSizeAwareConv2d
+        else:
+            Conv2d = nn.Conv2d
         self.expand_evecs = ExpandEvecs()
         self.convlayers1 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
         )
         self.convlayers2 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
         )
         self.convlayers3 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
         )
         self.convlayers4 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
         )
         self.post_big_pool = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            nn.Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            nn.Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
         )
 
         self.maxpool = ConditionalMaxPool2d(kernel_size=2, stride=2)
@@ -67,20 +102,36 @@ class LitMultiModel(L.LightningModule):
         self.adapool_med = nn.AdaptiveMaxPool2d((16, 16))
         self.adapool_sm = nn.AdaptiveMaxPool2d((4, 4)) 
 
-        self.util_head = nn.Sequential(
-            nn.Dropout(0.2, inplace=False),
-            nn.Linear(528, 32, bias=False),
-            nn.SiLU(),
-            nn.Linear(32, 1, bias=False)
-        )
-        self.nlvl_head = nn.Sequential(
-            nn.Dropout(0.2, inplace=False),
-            nn.Linear(528, 32, bias=False),
-            nn.SiLU(),
-            nn.Linear(32, 16, bias=True),
-            nn.Softmax(dim=-1)
-        )
+        if self.branch_off == 'late':
+            self.shared_linear = nn.Sequential(
+                nn.Dropout(0.2, inplace=False),
+                nn.Linear(528, 64, bias=False),
+                nn.SiLU(),
+            )
+            self.util_head = nn.Linear(64, 1, bias=False)
+            self.nlvl_head = nn.Sequential(
+                nn.Linear(64, 16, bias=True),
+                nn.Softmax(dim=-1)
+            )
+
+        elif self.branch_off == 'early':
+            self.shared_linear = nn.Identity()
+            self.util_head = nn.Sequential(
+                nn.Dropout(0.2, inplace=False),
+                nn.Linear(528, 32, bias=False),
+                nn.SiLU(),
+                nn.Linear(32, 1, bias=False)
+            )
+            self.nlvl_head = nn.Sequential(
+                nn.Dropout(0.2, inplace=False),
+                nn.Linear(528, 32, bias=False),
+                nn.SiLU(),
+                nn.Linear(32, 16, bias=True),
+                nn.Softmax(dim=-1)
+            )
+
         self.lvl_loss_fn = NLvlLoss()
+        self.save_hyperparameters()
 
 
     def forward(self, x):
@@ -99,16 +150,11 @@ class LitMultiModel(L.LightningModule):
         x_med_ch_softmax = (x_med.softmax(1) * x_med).sum(1)
         x_big_ch_softmax = (x_big.softmax(1) * x_big).sum(1)
 
-        mutlires_embeddings = [torch.flatten(x_sm_ch_softmax, 1), 
-                               torch.flatten(x_med_ch_softmax, 1), 
-                               torch.flatten(x_big_ch_softmax, 1)]
-        # mutlires_embeddings_nlvl = [torch.flatten(x_sm, 1), 
-        #                             torch.flatten(x_med, 1), 
-        #                             torch.flatten(x_big, 1)]
-        
-        util = self.util_head(torch.cat(mutlires_embeddings, 1))
-        nlvl = self.nlvl_head(torch.cat(mutlires_embeddings, 1))
-        return util, nlvl
+        multires_embeddings = torch.cat([torch.flatten(x_sm_ch_softmax, 1), 
+                                         torch.flatten(x_med_ch_softmax, 1), 
+                                         torch.flatten(x_big_ch_softmax, 1)], 1)
+        shared_embedding = self.shared_linear(multires_embeddings)
+        return self.util_head(shared_embedding), self.nlvl_head(shared_embedding)
 
 
     def on_fit_start(self):
@@ -126,51 +172,59 @@ class LitMultiModel(L.LightningModule):
             util_est[0, None], util_est[1, None], 
             contrast_label, margin=1
         )
+        self.log('ranking loss', ranking_loss, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
 
-        # Don't do anything when there is no ranking loss. The lvl loss here is just a training crutch.
-        if ranking_loss.view(1) == 0:
-            return None
+        # Compute the lvl loss only on the better sample
+        if 1 in contrast_label:
+            lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[0].view(1, 16), batch['x1_layer_score'].view(1, 16))
         else:
-            # Compute the lvl loss only on the better sample
-            if 1 in contrast_label:
-                lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[0].view(1, 16), batch['x1_layer_score'].view(1, 16))
-            else:
-                lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[1].view(1, 16), batch['x2_layer_score'].view(1, 16))         
-            
-            # Logging to WandB
-            self.log('ranking loss', ranking_loss, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
-            self.log('nlvl loss', lvl_loss, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
-            self.log('entropy', entropy, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
-            
-            ranking_loss_normed = ranking_loss / (ranking_loss.detach() + 1e-2)
-            lvl_loss_normed = lvl_loss / (lvl_loss.detach() + 1e-2)
-            entropy_normed = entropy / (entropy.detach() + 1e-2)
-            return ranking_loss_normed + lvl_loss_normed - entropy_normed
+            lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[1].view(1, 16), batch['x2_layer_score'].view(1, 16))
+        self.log('nlvl loss', lvl_loss, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
+        self.log('entropy', entropy, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
+
+        if self.training_loss_mode == 'util':
+            return ranking_loss
+        elif self.training_loss_mode == 'nlvl':
+            return lvl_loss - entropy * self.entropy_scale
+        elif self.training_loss_mode == 'duo':
+            return ranking_loss + lvl_loss - entropy * self.entropy_scale
+        else:
+            return None
 
 
     def on_validation_epoch_start(self):
         self.trainer.datamodule.setup('validate')
         self.val_ds = self.trainer.datamodule.val_dataloader().dataset
         full_tids = [self.val_ds.name + tid for tid in self.val_ds.tids]
-        result_coords = dict(
+        util_result_coords = dict(
             tid=full_tids, 
             rep_ftype=AVAL_FEAT_TYPES, loc_ftype=AVAL_FEAT_TYPES,
         )
-        self.trainer.val_predictions = xr.DataArray(np.nan, 
-                                                    coords=result_coords, 
-                                                    dims=result_coords.keys()
+        nlvl_result_coords = dict(
+            tid=full_tids, 
+            rep_ftype=AVAL_FEAT_TYPES, loc_ftype=AVAL_FEAT_TYPES,
+            layer=list(range(1,17))
+        )
+        self.trainer.util_predictions = xr.DataArray(np.nan, 
+                                                    coords=util_result_coords, 
+                                                    dims=util_result_coords.keys()
+                                                    ).sortby('tid')
+        self.trainer.nlvl_predictions = xr.DataArray(np.nan, 
+                                                    coords=nlvl_result_coords, 
+                                                    dims=nlvl_result_coords.keys()
                                                     ).sortby('tid')
 
 
     def validation_step(self, batch, batch_idx):
         tid, rep_feat, loc_feat = batch['info'].split('_')
-        x, _ = self(batch['data'])
-        self.trainer.val_predictions.loc[self.val_ds.name+tid, rep_feat, loc_feat] = x.item()
+        util, nlvl = self(batch['data'])
+        self.trainer.util_predictions.loc[self.val_ds.name+tid, rep_feat, loc_feat] = util.item()
+        self.trainer.nlvl_predictions.loc[self.val_ds.name+tid, rep_feat, loc_feat] = nlvl.detach().cpu().numpy().squeeze()
 
 
     def on_validation_epoch_end(self):
         ds_score = self.val_ds.scores.max('layer').sortby('tid')
-        net_feat_picks = self.trainer.val_predictions.argmax(dim=['rep_ftype', 'loc_ftype'])
+        net_feat_picks = self.trainer.util_predictions.argmax(dim=['rep_ftype', 'loc_ftype'])
         orc_feat_picks = ds_score.argmax(dim=['rep_ftype', 'loc_ftype'])
         boa_feat_picks = ds_score.mean('tid').argmax(dim=['rep_ftype', 'loc_ftype'])
         
@@ -192,32 +246,35 @@ class LitMultiModel(L.LightningModule):
         val_wandb_at = wandb.Artifact("validation" + str(wandb.run.id), type="validation predictions")
         val_wandb_table = wandb.Table(columns = [
             'tid', 'title',
-            'track/l_measure', 'track/net_util',
-            'track/annotation',
+            # 'track/l_measure', 'track/net_util',
+            # 'track/annotation',
             'net/score', 'net/feat', 
             'boa/score', 'boa/feat', 
             'orc/score', 'orc/feat', 
+            'orc/feat/best_lvl', 'orc/feat/net_lvl'
         ])
-        
-        for tid in self.trainer.val_predictions.tid:
-            track_lmeasure_plot = wandb.Image(ssdm.viz.heatmap(ds_score.sel(tid=tid))[0])
-            track_net_util_plot = wandb.Image(ssdm.viz.heatmap(self.trainer.val_predictions.sel(tid=tid))[0])
+
+        for tid in self.trainer.util_predictions.tid:
+            # track_lmeasure_plot = wandb.Image(ssdm.viz.heatmap(ds_score.sel(tid=tid))[0])
+            # track_net_util_plot = wandb.Image(ssdm.viz.heatmap(self.trainer.util_predictions.sel(tid=tid))[0])
             track = self.val_ds.ds_module.Track(re.sub('\D', '', tid.item()))
-            track_annotation_plot = wandb.Image(ssdm.viz.anno_meet_mats(track)[0])
-            ssdm.viz.plt.close('all')
+            # track_annotation_plot = wandb.Image(ssdm.viz.anno_meet_mats(track)[0])
+            # ssdm.viz.plt.close('all')
 
             val_wandb_table.add_data(
                 tid.item(), track.title,
-                track_lmeasure_plot, track_net_util_plot,
-                track_annotation_plot,
+                # track_lmeasure_plot, track_net_util_plot,
+                # track_annotation_plot,
                 ds_score.isel(net_feat_picks).sel(tid=tid).item(), 
                 ds_score.isel(net_feat_picks).sel(tid=tid).rep_ftype.item() + '_' + ds_score.isel(net_feat_picks).sel(tid=tid).loc_ftype.item(),
                 ds_score.isel(boa_feat_picks).sel(tid=tid).item(), 
                 ds_score.isel(boa_feat_picks).sel(tid=tid).rep_ftype.item() + '_' + ds_score.isel(boa_feat_picks).sel(tid=tid).loc_ftype.item(),
                 ds_score.isel(orc_feat_picks).sel(tid=tid).item(), 
                 ds_score.isel(orc_feat_picks).sel(tid=tid).rep_ftype.item() + '_' + ds_score.isel(orc_feat_picks).sel(tid=tid).loc_ftype.item(),
+                self.val_ds.scores.isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item(), 
+                self.trainer.nlvl_predictions.isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item()
             )
-        # wandb.log({'validation results': val_wandb_table})
+        wandb.log({'validation results': val_wandb_table})
         val_wandb_at.add(val_wandb_table, "validation predictions")
         wandb.run.log_artifact(val_wandb_at)
         return None
@@ -247,8 +304,12 @@ class LitMultiModel(L.LightningModule):
     def configure_optimizers(self):
         grouped_parameters = [
             {
-                "params": [p for n, p in self.named_parameters() if 'bias' not in n],
+                "params": [p for n, p in self.named_parameters() if 'bias' not in n and 'conv' not in n],
                 "weight_decay": 0.1,
+            },
+            {
+                "params": [p for n, p in self.named_parameters() if 'bias' not in n and 'conv' in n],
+                "weight_decay": 0.001,
             },
             {
                 "params": [p for n, p in self.named_parameters() if 'bias' in n],
@@ -256,16 +317,14 @@ class LitMultiModel(L.LightningModule):
             },
         ]
         optimizer = optim.AdamW(grouped_parameters)
-        step_size_up = 2000
-        print('cyclicLR step_size_up:', step_size_up, self.trainer.estimated_stepping_batches)
         lr_scheduler = optim.lr_scheduler.CyclicLR(
             optimizer, 
-            base_lr=1e-6, max_lr=1e-3, 
+            base_lr=1e-6, max_lr=1e-2, 
             cycle_momentum=False, mode='triangular2', 
-            step_size_up=step_size_up
+            step_size_up=4000
         )
 
-        return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 1}]
+        return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 5}]
 
 
 # New validation dataloaders...
@@ -346,29 +405,54 @@ class DevPairDataModule(PairDataModule):
             self.predict_ds = ssdm.rwcpop.InferDS(split=self.split) 
 
 
+def run_inference(model_path, dataset_id='rwcpop', split='test'):
+    # Run inference on given dataset split with model and log to wandb.
+    ds_module_dict = dict(jsd = ssdm.jsd, slm = ssdm.slm, hmx = ssdm.hmx, rwcpop = ssdm.rwcpop)
+    dm = PairDataModule(ds_module=ds_module_dict[dataset_id], perf_margin=0, val_split=split)
+    lit_net = LitMultiModel.load_from_checkpoint(model_path)
+    wandb_logger = L.pytorch.loggers.WandbLogger(project='ssdm_test', name=dataset_id+'_'+split)
+    validator = L.pytorch.Trainer(
+        num_sanity_val_steps = 0,
+        max_epochs = 1,
+        devices = 1,
+        accelerator = "gpu",
+        logger = wandb_logger
+    )
+    wandb_logger.experiment.config.update(dict(model_path=model_path, applied_to=dataset_id+'_'+split))
+    validator.validate(lit_net, datamodule=dm)
+    wandb.finish()
+    # Check validator.util_predictions and validator.nlvl_predictions for xr dataarrays storing all results
+    return validator 
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Training Tau hats')
-    parser.add_argument('total_epoch', help='total number of epochs to train')
     parser.add_argument('date', help='just a marker really, can be any text but mmdd is the intension')
-    parser.add_argument('margin', help='sampling score margin')
-    parser.add_argument('num_device')
     parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
     kwargs = parser.parse_args()
-    margin = float(kwargs.margin)
 
-    ds = ['hmx', 'slm', 'jsd', 'rwcpop'][int(kwargs.config_idx)]
+    loss_mode, ds, branch_off = list(itertools.product(
+        ['duo', 'nlvl'],
+        ['hmx', 'slm', 'jsd', 'rwcpop'],
+        ['late'],
+    ))[int(kwargs.config_idx)]
+
+    if ds in ['hmx', 'slm']:
+        margin = 0.06
+    elif ds in ['jsd', 'rwcpop']:
+        margin = 0.03
+    else:
+        # Default specified by the script
+        margin = 0.1
 
     # initialise the wandb logger and name your wandb project
-    wandb_logger = L.pytorch.loggers.WandbLogger(project='ssdm', name=kwargs.date+ds+kwargs.margin)
-    # add your batch size to the wandb config
-    # wandb_logger.experiment.config["date"] = kwargs.date
-    # wandb_logger.experiment.config["ds"] = ds
-    # wandb_logger.experiment.config["margin"] = margin
-    # wandb_logger.experiment.config["num_devices"] = kwargs.num_device
+    wandb_logger = L.pytorch.loggers.WandbLogger(project='ssdm', name=kwargs.date[-4:]+ds+str(margin)+loss_mode)
+    # Log things
+    wandb_logger.experiment.config.update(dict(margin=margin, ds=ds))
 
     checkpoint_callback = ModelCheckpoint(
         monitor='net pick',  # The metric to monitor
-        dirpath=f'checkpoints/{ds}/',  # Directory to save the checkpoints
+        dirpath=f'checkpoints/{ds}{margin}{loss_mode}{branch_off}/',  # Directory to save the checkpoints
         filename='{epoch:02d}-{net pick:.4f}',  # Naming convention for checkpoints
         save_top_k=5,  # Save only the best model based on the monitored metric
         mode='max',  # Mode to determine if a lower or higher metric is better
@@ -376,24 +460,29 @@ if __name__ == '__main__':
     )
 
     trainer = L.pytorch.Trainer(
-        num_sanity_val_steps = -1,
-        max_epochs = int(kwargs.total_epoch),
-        devices = int(kwargs.num_device),
+        num_sanity_val_steps = 0,
+        max_epochs = 70,
+        max_steps = 3000 * 1000,
+        devices = 1,
         accelerator = "gpu",
         accumulate_grad_batches = 32,
         logger = wandb_logger,
-        log_every_n_steps = 32,
-        gradient_clip_val = 1,
+        log_every_n_steps = 1,
         val_check_interval = 0.25,
-        callbacks = [TQDMProgressBar(refresh_rate=1000),
+        callbacks = [TQDMProgressBar(refresh_rate=500),
                      checkpoint_callback,
-                     LearningRateMonitor(logging_interval='step', log_momentum=True, log_weight_decay=True),
+                     LearningRateMonitor(logging_interval='step', log_weight_decay=True),
                     ]
     )
 
     ds_module_dict = dict(jsd = ssdm.jsd, slm = ssdm.slm, hmx = ssdm.hmx, rwcpop = ssdm.rwcpop)
     dm = PairDataModule(ds_module=ds_module_dict[ds], perf_margin=margin)
-    lit_net = LitMultiModel()
+    lit_net = LitMultiModel(
+        training_loss_mode=loss_mode, 
+        branch_off=branch_off,
+        norm_cnn_grad=True,
+        entropy_scale=0.05,
+    )
     wandb_logger.watch(lit_net, log='all')
     trainer.fit(lit_net, datamodule=dm)
     wandb.finish()

@@ -615,14 +615,15 @@ class InferDS(Dataset):
         self.tids = ds_module.get_ids(self.split)
         self.tids.sort()
         self.scores = self.get_scores()
-        all_samples = list(itertools.product(
-            self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES
-        ))
-        self.samples = ['_'.join(sid_list) for sid_list in all_samples]
-        self.samples.sort()
+        self.vmeasures = self.get_vmeasures()
+        # all_samples = list(itertools.product(
+        #     self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES
+        # ))
+        # self.samples = ['_'.join(sid_list) for sid_list in all_samples]
+        # self.samples.sort()
                     
     def __len__(self):
-        return len(self.samples)
+        return len(self.tids)
 
     def __repr__(self):
         return f'{self.name}_{self.split if self.split is not None else "full"}_lmeasure_infer'
@@ -631,23 +632,35 @@ class InferDS(Dataset):
         score_da = ssdm.get_lsd_scores(self, heir=True, shuffle=True).sel(m_type=score_type).sortby('tid')
         new_tid = [self.name + tid.item() for tid in score_da.tid]
         return score_da.assign_coords(tid=new_tid)
-
     
+    def get_vmeasures(self):
+        a_layer = 2 if self.name == 'jsd' else 0
+        score_da = ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=a_layer).sel(m_type='f').sortby('tid')
+        new_tid = [self.name + tid.item() for tid in score_da.tid]
+        return score_da.assign_coords(tid=new_tid)
+
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        samp_info = self.samples[idx]
-        tid, rep_feat, loc_feat = samp_info.split('_')
+        # samp_info = self.samples[idx]
+        # tid, rep_feat, loc_feat = samp_info.split('_')
+        tid = self.tids[idx]
 
-        first_evecs = self.ds_module.Track(tid=tid).embedded_rec_mat(
-            feat_combo=dict(rep_ftype=rep_feat, loc_ftype=loc_feat), 
-            lap_norm='random_walk', beat_sync=True,
-            recompute=False
-        )
-        data = torch.tensor(first_evecs, dtype=torch.float32)[None, None, :]
-        datum = {'data': data,
-                 'info': samp_info}
+        data_list = []
+        feat_pair_list = []
+        for rep_feat in ssdm.AVAL_FEAT_TYPES:
+            for loc_feat in ssdm.AVAL_FEAT_TYPES:
+                first_evecs = self.ds_module.Track(tid=tid).embedded_rec_mat(
+                    feat_combo=dict(rep_ftype=rep_feat, loc_ftype=loc_feat), 
+                    lap_norm='random_walk', beat_sync=True,
+                    recompute=False
+                )
+                data_list.append(torch.tensor(first_evecs, dtype=torch.float32)[None, None, :])
+                feat_pair_list.append(f'{rep_feat}_{loc_feat}')
+        datum = {'data': torch.cat(data_list, dim=0),
+                 'info': tid,
+                 'feat_order': feat_pair_list}
 
         if self.transform:
             datum = self.transform(datum)

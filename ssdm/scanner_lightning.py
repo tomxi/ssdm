@@ -60,7 +60,7 @@ class InputSizeAwareConv2d(nn.Module):
               
 
 class LitMultiModel(L.LightningModule):
-    def __init__(self, training_loss_mode='util', branch_off='early', norm_cnn_grad=True, entropy_scale=0.1):
+    def __init__(self, training_loss_mode='util', branch_off='early', norm_cnn_grad=True, entropy_scale=0.01):
         super().__init__()
         self.training_loss_mode = training_loss_mode # 'util', 'nlvl', 'duo', 'triple'
         self.branch_off = branch_off # 'early' or 'late'
@@ -216,14 +216,18 @@ class LitMultiModel(L.LightningModule):
 
 
     def validation_step(self, batch, batch_idx):
-        tid, rep_feat, loc_feat = batch['info'].split('_')
+        tid = batch['info']
         util, nlvl = self(batch['data'])
-        self.trainer.util_predictions.loc[self.val_ds.name+tid, rep_feat, loc_feat] = util.item()
-        self.trainer.nlvl_predictions.loc[self.val_ds.name+tid, rep_feat, loc_feat] = nlvl.detach().cpu().numpy().squeeze()
+        util = util.cpu().numpy().squeeze()
+        nlvl = nlvl.cpu().numpy().squeeze()
+        for i, feat_pair in enumerate(batch['feat_order']):
+            rep_feat, loc_feat = feat_pair.split('_')
+            self.trainer.util_predictions.loc[self.val_ds.name+tid, rep_feat, loc_feat] = util[i]
+            self.trainer.nlvl_predictions.loc[self.val_ds.name+tid, rep_feat, loc_feat] = nlvl[i]
 
 
     def on_validation_epoch_end(self):
-        ds_score = self.val_ds.scores.max('layer').sortby('tid')
+        ds_score = self.val_ds.scores.max('layer').sortby('tid').squeeze()
         net_feat_picks = self.trainer.util_predictions.argmax(dim=['rep_ftype', 'loc_ftype'])
         orc_feat_picks = ds_score.argmax(dim=['rep_ftype', 'loc_ftype'])
         boa_feat_picks = ds_score.mean('tid').argmax(dim=['rep_ftype', 'loc_ftype'])
@@ -258,6 +262,7 @@ class LitMultiModel(L.LightningModule):
             # track_lmeasure_plot = wandb.Image(ssdm.viz.heatmap(ds_score.sel(tid=tid))[0])
             # track_net_util_plot = wandb.Image(ssdm.viz.heatmap(self.trainer.util_predictions.sel(tid=tid))[0])
             track = self.val_ds.ds_module.Track(re.sub('\D', '', tid.item()))
+            # orc_feat_picks.pop('metric', None)
             # track_annotation_plot = wandb.Image(ssdm.viz.anno_meet_mats(track)[0])
             # ssdm.viz.plt.close('all')
 
@@ -271,7 +276,7 @@ class LitMultiModel(L.LightningModule):
                 ds_score.isel(boa_feat_picks).sel(tid=tid).rep_ftype.item() + '_' + ds_score.isel(boa_feat_picks).sel(tid=tid).loc_ftype.item(),
                 ds_score.isel(orc_feat_picks).sel(tid=tid).item(), 
                 ds_score.isel(orc_feat_picks).sel(tid=tid).rep_ftype.item() + '_' + ds_score.isel(orc_feat_picks).sel(tid=tid).loc_ftype.item(),
-                self.val_ds.scores.isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item(), 
+                self.val_ds.vmeasures.squeeze().isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item(), 
                 self.trainer.nlvl_predictions.isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item()
             )
         wandb.log({'validation results': val_wandb_table})
@@ -309,7 +314,7 @@ class LitMultiModel(L.LightningModule):
             },
             {
                 "params": [p for n, p in self.named_parameters() if 'bias' not in n and 'conv' in n],
-                "weight_decay": 0.001,
+                "weight_decay": 0.005,
             },
             {
                 "params": [p for n, p in self.named_parameters() if 'bias' in n],
@@ -324,7 +329,7 @@ class LitMultiModel(L.LightningModule):
             step_size_up=4000
         )
 
-        return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 5}]
+        return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 4}]
 
 
 # New validation dataloaders...
@@ -461,7 +466,7 @@ if __name__ == '__main__':
 
     trainer = L.pytorch.Trainer(
         num_sanity_val_steps = 0,
-        max_epochs = 70,
+        max_epochs = 50,
         max_steps = 3000 * 1000,
         devices = 1,
         accelerator = "gpu",
@@ -471,7 +476,7 @@ if __name__ == '__main__':
         val_check_interval = 0.25,
         callbacks = [TQDMProgressBar(refresh_rate=500),
                      checkpoint_callback,
-                     LearningRateMonitor(logging_interval='step', log_weight_decay=True),
+                     LearningRateMonitor(logging_interval='step'),
                     ]
     )
 
@@ -481,7 +486,7 @@ if __name__ == '__main__':
         training_loss_mode=loss_mode, 
         branch_off=branch_off,
         norm_cnn_grad=True,
-        entropy_scale=0.05,
+        entropy_scale=0.01,
     )
     wandb_logger.watch(lit_net, log='all')
     trainer.fit(lit_net, datamodule=dm)

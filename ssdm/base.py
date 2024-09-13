@@ -631,13 +631,13 @@ class InferDS(Dataset):
     def get_scores(self, score_type='f'):
         score_da = ssdm.get_lsd_scores(self, heir=True, shuffle=True).sel(m_type=score_type).sortby('tid')
         new_tid = [self.name + tid.item() for tid in score_da.tid]
-        return score_da.assign_coords(tid=new_tid)
+        return score_da.assign_coords(tid=new_tid).squeeze()
     
     def get_vmeasures(self):
         a_layer = 2 if self.name == 'jsd' else 0
         score_da = ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=a_layer).sel(m_type='f').sortby('tid')
         new_tid = [self.name + tid.item() for tid in score_da.tid]
-        return score_da.assign_coords(tid=new_tid)
+        return score_da.assign_coords(tid=new_tid).squeeze()
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
@@ -698,14 +698,14 @@ class PairDS(Dataset):
 
     def get_scores(self):
         a_layer = 2 if self.name == 'jsd' else 0
-        return ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=a_layer).sel(m_type='f').sortby('tid')
+        return ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=a_layer).sel(m_type='f').sortby('tid').squeeze()
         # new_tid = [self.name + tid.item() for tid in score_da.tid]
         # return score_da.assign_coords(tid=new_tid)
 
 
     def get_vmeasures(self):
         a_layer = 2 if self.name == 'jsd' else 0
-        return ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=a_layer).sel(m_type='f').sortby('tid')
+        return ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=a_layer).sel(m_type='f').sortby('tid').squeeze()
 
 
     def get_score_ranks(self):
@@ -756,9 +756,9 @@ class PairDS(Dataset):
         )
         x1 = torch.tensor(first_evecs_a, dtype=torch.float32)[None, None, :]
         x2 = torch.tensor(first_evecs_b, dtype=torch.float32)[None, None, :]
-        x1_layer_score = self.vmeasures.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
+        x1_layer_score = self.scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
         x1_layer_score = torch.tensor(x1_layer_score.values, dtype=torch.float32)[None, :]
-        x2_layer_score = self.vmeasures.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
+        x2_layer_score = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
         x2_layer_score = torch.tensor(x2_layer_score.values, dtype=torch.float32)[None, :]
         x1_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
         x2_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
@@ -771,7 +771,7 @@ class PairDS(Dataset):
                  'x1_info': f'{rep_a}_{loc_a}',
                  'x2_info': f'{rep_b}_{loc_b}',
                  'track_info': f'{self.name}_{tid}',
-                 'perf_gap': torch.tensor(self.score_gaps[samp_info], dtype=torch.float32)[None, None]
+                 'perf_gap': torch.tensor(self.score_gaps[samp_info], dtype=torch.float32)[None, None],
                  }
         if self.transform:
             datum = self.transform(datum)

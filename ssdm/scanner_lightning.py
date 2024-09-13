@@ -174,11 +174,20 @@ class LitMultiModel(L.LightningModule):
         )
         self.log('ranking loss', ranking_loss, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
 
-        # Compute the lvl loss only on the better sample
-        if 1 in contrast_label:
+        # Compute the lvl loss only on samples with good feature segmentations
+        lvl_loss_accumulator = 0
+        entropy_accumulator = 0
+        if batch['x1_rank'] <= 8:
             lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[0].view(1, 16), batch['x1_layer_score'].view(1, 16))
-        else:
+            lvl_loss_accumulator += lvl_loss
+            entropy_accumulator += entropy
+        if batch['x2_rank'] <= 8:
             lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[1].view(1, 16), batch['x2_layer_score'].view(1, 16))
+            lvl_loss_accumulator += lvl_loss
+            entropy_accumulator += entropy
+        lvl_loss = lvl_loss_accumulator
+        entropy = entropy_accumulator
+
         self.log('nlvl loss', lvl_loss, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
         self.log('entropy', entropy, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
 
@@ -217,35 +226,60 @@ class LitMultiModel(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         tid = batch['info']
-        util, nlvl = self(batch['data'])
-        util = util.cpu().numpy().squeeze()
-        nlvl = nlvl.cpu().numpy().squeeze()
+        # # HACK FOR DEBUGGING...
+        # if '2' in tid:
+        #     return None
+        
         for i, feat_pair in enumerate(batch['feat_order']):
             rep_feat, loc_feat = feat_pair.split('_')
-            self.trainer.util_predictions.loc[self.val_ds.name+tid, rep_feat, loc_feat] = util[i]
-            self.trainer.nlvl_predictions.loc[self.val_ds.name+tid, rep_feat, loc_feat] = nlvl[i]
+            util, nlvl = self(batch['data'][i][None, :])
+            self.trainer.util_predictions.loc[self.val_ds.name+tid, rep_feat, loc_feat] = util.cpu().numpy().squeeze()
+            self.trainer.nlvl_predictions.loc[self.val_ds.name+tid, rep_feat, loc_feat] = nlvl.cpu().numpy().squeeze()
 
 
     def on_validation_epoch_end(self):
-        ds_score = self.val_ds.scores.max('layer').sortby('tid').squeeze()
+        self.trainer.util_predictions = self.trainer.util_predictions.dropna(dim="tid")
+        self.trainer.nlvl_predictions = self.trainer.nlvl_predictions.dropna(dim="tid")
+        tid_subset = self.trainer.util_predictions.tid
+        ds_score = self.val_ds.scores.sel(tid=tid_subset).max('layer').sortby('tid').squeeze()
+        
         net_feat_picks = self.trainer.util_predictions.argmax(dim=['rep_ftype', 'loc_ftype'])
         orc_feat_picks = ds_score.argmax(dim=['rep_ftype', 'loc_ftype'])
         boa_feat_picks = ds_score.mean('tid').argmax(dim=['rep_ftype', 'loc_ftype'])
         
-        # Logging average scores
-        net_pick = ds_score.isel(net_feat_picks).mean().item()
-        boa_pick = ds_score.isel(boa_feat_picks).mean().item()
-        orc_pick = ds_score.isel(orc_feat_picks).mean().item()
-        self.log('net pick', net_pick, sync_dist=True)
-        self.log('boa pick', boa_pick, sync_dist=True)
-        self.log('orc pick', orc_pick, sync_dist=True)
+        # Logging average utility scores
+        net_pick = ds_score.isel(net_feat_picks)
+        boa_pick = ds_score.isel(boa_feat_picks)
+        orc_pick = ds_score.isel(orc_feat_picks)
+        self.log('net pick', net_pick.mean().item(), sync_dist=True)
+        self.log('net_feat orc_lvl', net_pick.mean().item(), sync_dist=True)
+        self.log('boa_feat orc_lvl', boa_pick.mean().item(), sync_dist=True)
+        self.log('orc_feat orc_lvl', orc_pick.mean().item(), sync_dist=True)
+        self.log('net_feat orc_lvl std', net_pick.std().item(), sync_dist=True)
+        self.log('boa_feat orc_lvl std', boa_pick.std().item(), sync_dist=True)
+        self.log('orc_feat orc_lvl std', orc_pick.std().item(), sync_dist=True)
         # print('net, boa, orc:', net_pick, boa_pick, orc_pick)
 
+        # Now let's do nlvl picks for the ORC and BoA picks
+        lvl_scores = self.val_ds.scores.sel(tid=tid_subset).isel(orc_feat_picks)
+        net_lvl_picks = self.trainer.nlvl_predictions.isel(orc_feat_picks).argmax(dim=['layer'])
+        orc_lvl_picks = lvl_scores.argmax(dim=['layer'])
+        boa_lvl_picks = lvl_scores.mean('tid').argmax(dim=['layer'])
+        net_pick_lvl_score = lvl_scores.isel(net_lvl_picks)
+        boa_pick_lvl_score = lvl_scores.isel(boa_lvl_picks)
+        orc_pick_lvl_score = lvl_scores.isel(orc_lvl_picks)
+        self.log('net_lvl orc_feat', net_pick_lvl_score.mean().item(), sync_dist=True)
+        self.log('boa_lvl orc_feat', boa_pick_lvl_score.mean().item(), sync_dist=True)
+        self.log('orc_lvl orc_feat', orc_pick_lvl_score.mean().item(), sync_dist=True)
+        self.log('net_lvl orc_feat std', net_pick_lvl_score.std().item(), sync_dist=True)
+        self.log('boa_lvl orc_feat std', boa_pick_lvl_score.std().item(), sync_dist=True)
+        self.log('orc_lvl orc_feat std', orc_pick_lvl_score.std().item(), sync_dist=True)
+
         # Log table to wandb
-        self.log_wandb_table(ds_score, net_feat_picks, boa_feat_picks, orc_feat_picks)
+        self.log_wandb_table(tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks)
 
 
-    def log_wandb_table(self, ds_score, net_feat_picks, boa_feat_picks, orc_feat_picks):
+    def log_wandb_table(self, tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks):
         # Logging to wandb table
         val_wandb_at = wandb.Artifact("validation" + str(wandb.run.id), type="validation predictions")
         val_wandb_table = wandb.Table(columns = [
@@ -255,14 +289,15 @@ class LitMultiModel(L.LightningModule):
             'net/score', 'net/feat', 
             'boa/score', 'boa/feat', 
             'orc/score', 'orc/feat', 
-            'orc/feat/best_lvl', 'orc/feat/net_lvl'
+            'orc/feat/best_lvl', 'orc/feat/net_lvl',
         ])
+
+        ds_score = self.val_ds.scores.sel(tid=tid_subset).max('layer').sortby('tid').squeeze()
 
         for tid in self.trainer.util_predictions.tid:
             # track_lmeasure_plot = wandb.Image(ssdm.viz.heatmap(ds_score.sel(tid=tid))[0])
             # track_net_util_plot = wandb.Image(ssdm.viz.heatmap(self.trainer.util_predictions.sel(tid=tid))[0])
             track = self.val_ds.ds_module.Track(re.sub('\D', '', tid.item()))
-            # orc_feat_picks.pop('metric', None)
             # track_annotation_plot = wandb.Image(ssdm.viz.anno_meet_mats(track)[0])
             # ssdm.viz.plt.close('all')
 
@@ -276,7 +311,7 @@ class LitMultiModel(L.LightningModule):
                 ds_score.isel(boa_feat_picks).sel(tid=tid).rep_ftype.item() + '_' + ds_score.isel(boa_feat_picks).sel(tid=tid).loc_ftype.item(),
                 ds_score.isel(orc_feat_picks).sel(tid=tid).item(), 
                 ds_score.isel(orc_feat_picks).sel(tid=tid).rep_ftype.item() + '_' + ds_score.isel(orc_feat_picks).sel(tid=tid).loc_ftype.item(),
-                self.val_ds.vmeasures.squeeze().isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item(), 
+                self.val_ds.scores.sel(tid=tid_subset).squeeze().isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item(), 
                 self.trainer.nlvl_predictions.isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item()
             )
         wandb.log({'validation results': val_wandb_table})
@@ -433,6 +468,7 @@ def run_inference(model_path, dataset_id='rwcpop', split='test'):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Training Tau hats')
     parser.add_argument('date', help='just a marker really, can be any text but mmdd is the intension')
+    parser.add_argument('num_gpu', help='number of gpus to setup trainer')
     parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
     kwargs = parser.parse_args()
 
@@ -443,9 +479,9 @@ if __name__ == '__main__':
     ))[int(kwargs.config_idx)]
 
     if ds in ['hmx', 'slm']:
-        margin = 0.06
+        margin = 0.1
     elif ds in ['jsd', 'rwcpop']:
-        margin = 0.03
+        margin = 0.05
     else:
         # Default specified by the script
         margin = 0.1
@@ -466,11 +502,11 @@ if __name__ == '__main__':
 
     trainer = L.pytorch.Trainer(
         num_sanity_val_steps = 0,
-        max_epochs = 50,
+        max_epochs = 100,
         max_steps = 3000 * 1000,
-        devices = 1,
+        devices = int(kwargs.num_gpu),
         accelerator = "gpu",
-        accumulate_grad_batches = 32,
+        accumulate_grad_batches = 16,
         logger = wandb_logger,
         log_every_n_steps = 1,
         val_check_interval = 0.25,

@@ -1,6 +1,7 @@
 import xarray as xr
 import numpy as np
 import torch
+from torch.utils.data import ConcatDataset
 import re, itertools
 from torch import optim, nn
 from torch.utils.data import DataLoader
@@ -14,6 +15,8 @@ import argparse
 from ssdm.scanner import ExpandEvecs, ConditionalMaxPool2d
 from ssdm import AVAL_FEAT_TYPES
 import ssdm
+
+ds_module_dict = dict(jsd = ssdm.jsd, slm = ssdm.slm, hmx = ssdm.hmx, rwcpop = ssdm.rwcpop)
 
 # My LVL Loss
 class NLvlLoss(torch.nn.Module):
@@ -61,7 +64,7 @@ class InputSizeAwareConv2d(nn.Module):
               
 
 class LitMultiModel(L.LightningModule):
-    def __init__(self, training_loss_mode='util', branch_off='early', norm_cnn_grad=True, entropy_scale=0.01):
+    def __init__(self, training_loss_mode='duo', branch_off='early', norm_cnn_grad=True, entropy_scale=0.01):
         super().__init__()
         self.training_loss_mode = training_loss_mode # 'util', 'nlvl', 'duo', 'triple'
         self.branch_off = branch_off # 'early' or 'late'
@@ -205,37 +208,42 @@ class LitMultiModel(L.LightningModule):
     def on_validation_epoch_start(self):
         self.trainer.datamodule.setup('validate')
         self.val_ds = self.trainer.datamodule.val_dataloader().dataset
-        full_tids = [self.val_ds.name + tid for tid in self.val_ds.tids]
-        util_result_coords = dict(
-            tid=full_tids, 
+        # full_tids = [self.val_ds.name + tid for tid in self.val_ds.tids]
+        self.util_result_coords = dict(
+            tid=[], 
             rep_ftype=AVAL_FEAT_TYPES, loc_ftype=AVAL_FEAT_TYPES,
         )
-        nlvl_result_coords = dict(
-            tid=full_tids, 
+        self.nlvl_result_coords = dict(
+            tid=[], 
             rep_ftype=AVAL_FEAT_TYPES, loc_ftype=AVAL_FEAT_TYPES,
             layer=list(range(1,17))
         )
         self.trainer.util_predictions = xr.DataArray(np.nan, 
-                                                    coords=util_result_coords, 
-                                                    dims=util_result_coords.keys()
+                                                    coords=self.util_result_coords, 
+                                                    dims=self.util_result_coords.keys()
                                                     ).sortby('tid')
         self.trainer.nlvl_predictions = xr.DataArray(np.nan, 
-                                                    coords=nlvl_result_coords, 
-                                                    dims=nlvl_result_coords.keys()
+                                                    coords=self.nlvl_result_coords, 
+                                                    dims=self.nlvl_result_coords.keys()
                                                     ).sortby('tid')
 
 
     def validation_step(self, batch, batch_idx):
-        tid = batch['info']
-        # # HACK FOR DEBUGGING...
-        # if '2' in tid:
-        #     return None
+        full_tid = batch['info']
+        track_result_coords = self.util_result_coords.copy()
+        track_result_coords.update(tid=[full_tid])
+        track_util_result = xr.DataArray(np.nan, coords=track_result_coords, dims=track_result_coords.keys())
+        track_result_coords.update(layer=list(range(1,17)))
+        track_nlvl_result = xr.DataArray(np.nan, coords=track_result_coords, dims=track_result_coords.keys())
         
         for i, feat_pair in enumerate(batch['feat_order']):
             rep_feat, loc_feat = feat_pair.split('_')
             util, nlvl = self(batch['data'][i][None, :])
-            self.trainer.util_predictions.loc[self.val_ds.name+tid, rep_feat, loc_feat] = util.cpu().numpy().squeeze()
-            self.trainer.nlvl_predictions.loc[self.val_ds.name+tid, rep_feat, loc_feat] = nlvl.cpu().numpy().squeeze()
+            track_util_result.loc[full_tid, rep_feat, loc_feat] = util.cpu().numpy().squeeze()
+            track_nlvl_result.loc[full_tid, rep_feat, loc_feat] = nlvl.cpu().numpy().squeeze()
+        
+        self.trainer.util_predictions = xr.concat([self.trainer.util_predictions, track_util_result], dim="tid")
+        self.trainer.nlvl_predictions = xr.concat([self.trainer.nlvl_predictions, track_nlvl_result], dim="tid")
 
 
     def on_validation_epoch_end(self):
@@ -301,7 +309,8 @@ class LitMultiModel(L.LightningModule):
         for tid in self.trainer.util_predictions.tid:
             # track_lmeasure_plot = wandb.Image(ssdm.viz.heatmap(ds_score.sel(tid=tid))[0])
             # track_net_util_plot = wandb.Image(ssdm.viz.heatmap(self.trainer.util_predictions.sel(tid=tid))[0])
-            track = self.val_ds.ds_module.Track(re.sub('\D', '', tid.item()))
+            ds_module = ds_module_dict[re.sub('\d', '', tid.item())]
+            track = ds_module.Track(re.sub('\D', '', tid.item()))
             # track_annotation_plot = wandb.Image(ssdm.viz.anno_meet_mats(track)[0])
             # ssdm.viz.plt.close('all')
 
@@ -323,27 +332,6 @@ class LitMultiModel(L.LightningModule):
         wandb.run.log_artifact(val_wandb_at)
         return None
 
-
-    def predict_step(self, batch, batch_idx):
-        tid, rep_feat, loc_feat = batch['info'].split('_')
-        x, nlvl = self(batch['data'])
-        self.trainer.prediction.loc[self.predict_ds.name+tid, rep_feat, loc_feat] = x.item()
-        return nlvl.squeeze()
-
-
-    def on_predict_start(self):
-        self.trainer.datamodule.setup('predict')
-        self.predict_ds = self.trainer.datamodule.predict_dataloader().dataset
-        full_tids = [self.predict_ds.name + tid for tid in self.predict_ds.tids]
-        result_coords = dict(
-            tid=full_tids, 
-            rep_ftype=AVAL_FEAT_TYPES, loc_ftype=AVAL_FEAT_TYPES,
-        )
-        self.trainer.prediction = xr.DataArray(np.nan, 
-                                             coords=result_coords, 
-                                             dims=result_coords.keys()
-                                            ).sortby('tid')
-
     
     def configure_optimizers(self):
         grouped_parameters = [
@@ -363,12 +351,12 @@ class LitMultiModel(L.LightningModule):
         optimizer = optim.AdamW(grouped_parameters)
         lr_scheduler = optim.lr_scheduler.CyclicLR(
             optimizer, 
-            base_lr=1e-6, max_lr=1e-2, 
+            base_lr=1e-5, max_lr=1e-2, 
             cycle_momentum=False, mode='triangular2', 
-            step_size_up=4000
+            step_size_up=2000
         )
 
-        return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 4}]
+        return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 2}]
 
 
 # New validation dataloaders...
@@ -449,6 +437,47 @@ class DevPairDataModule(PairDataModule):
             self.predict_ds = ssdm.rwcpop.InferDS(split=self.split) 
 
 
+class HybridPairDM(L.LightningDataModule):
+    def __init__(self, ds_modules=[ssdm.rwcpop], perf_margin=0.05, val_split='val', num_loader_workers=4):
+        super().__init__()
+        self.perf_margin = perf_margin
+        self.ds_modules = ds_modules
+        self.val_split = val_split
+        self.num_loader_workers = num_loader_workers
+
+    def setup(self, stage: str):
+        # Assign train/val datasets for use in dataloaders
+        if stage == "fit":
+            train_ds_list, val_ds_list, score_list = [], [], []
+            for ds_module in self.ds_modules:
+                train_ds_list.append(ds_module.PairDSLmeasure(split='train', perf_margin=self.perf_margin))
+                val_ds_list.append(ds_module.InferDS(split=self.val_split))
+                score_list.append(val_ds_list[-1].scores)
+            self.train_ds = ConcatDataset(train_ds_list)
+            self.val_infer_ds = ConcatDataset(val_ds_list)
+            self.val_infer_ds.scores = xr.concat(score_list, dim='tid')
+
+        if stage == 'validate':
+            val_ds_list, score_list = [], []
+            for ds_module in self.ds_modules:
+                val_ds_list.append(ds_module.InferDS(split=self.val_split))
+                score_list.append(val_ds_list[-1].scores)
+            self.val_infer_ds = ConcatDataset(val_ds_list)
+            self.val_infer_ds.scores = xr.concat(score_list, dim='tid')
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_ds, batch_size=None, shuffle=True,
+            num_workers=self.num_loader_workers, pin_memory=True,
+        )
+    
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_infer_ds, batch_size=None, shuffle=False,
+            num_workers=self.num_loader_workers, pin_memory=True,
+        )
+
+
 def run_inference(model_path, dataset_id='rwcpop', split='test'):
     # Run inference on given dataset split with model and log to wandb.
     ds_module_dict = dict(jsd = ssdm.jsd, slm = ssdm.slm, hmx = ssdm.hmx, rwcpop = ssdm.rwcpop)
@@ -478,11 +507,11 @@ if __name__ == '__main__':
 
     loss_mode, ds, branch_off = list(itertools.product(
         ['duo', 'nlvl'],
-        ['hmx', 'slm', 'jsd', 'rwcpop'],
+        ['all', 'hmx', 'slm', 'jsd'],
         ['late'],
     ))[int(kwargs.config_idx)]
 
-    if ds in ['hmx', 'slm']:
+    if ds in ['hmx', 'slm', 'all']:
         margin = 0.1
     elif ds in ['jsd', 'rwcpop']:
         margin = 0.05
@@ -511,7 +540,7 @@ if __name__ == '__main__':
         max_steps = 3000 * 1000,
         devices = int(kwargs.num_gpu),
         accelerator = "gpu",
-        accumulate_grad_batches = 16,
+        accumulate_grad_batches = 32,
         logger = wandb_logger,
         log_every_n_steps = 1,
         val_check_interval = 0.25,
@@ -521,8 +550,10 @@ if __name__ == '__main__':
                     ]
     )
 
-    ds_module_dict = dict(jsd = ssdm.jsd, slm = ssdm.slm, hmx = ssdm.hmx, rwcpop = ssdm.rwcpop)
-    dm = PairDataModule(ds_module=ds_module_dict[ds], perf_margin=margin)
+    if ds == 'all':
+        dm = HybridPairDM(ds_modules=[ds_module_dict[ds] for ds in ds_module_dict], perf_margin=margin)
+    else:
+        dm = PairDataModule(ds_module=ds_module_dict[ds], perf_margin=margin)
     lit_net = LitMultiModel(
         training_loss_mode=loss_mode, 
         branch_off=branch_off,

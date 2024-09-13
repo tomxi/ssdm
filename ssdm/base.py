@@ -659,7 +659,7 @@ class InferDS(Dataset):
                 data_list.append(torch.tensor(first_evecs, dtype=torch.float32)[None, None, :])
                 feat_pair_list.append(f'{rep_feat}_{loc_feat}')
         datum = {'data': torch.cat(data_list, dim=0),
-                 'info': tid,
+                 'info': self.name+tid,
                  'feat_order': feat_pair_list}
 
         if self.transform:
@@ -787,9 +787,6 @@ class PairDSLmeasure(PairDS):
     
     def get_scores(self, score_type='f'):
         return ssdm.get_lsd_scores(self, heir=True, shuffle=True).sel(m_type=score_type).sortby('tid')
-
-    
-    
 
 
 class LvlDS(InferDS):

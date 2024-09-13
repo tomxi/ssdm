@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 
 import lightning as L
 import wandb
+from lightning.pytorch.utilities import rank_zero_only
 from lightning.pytorch.callbacks import TQDMProgressBar, ModelCheckpoint, LearningRateMonitor
 import argparse
 
@@ -175,8 +176,8 @@ class LitMultiModel(L.LightningModule):
         self.log('ranking loss', ranking_loss, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
 
         # Compute the lvl loss only on samples with good feature segmentations
-        lvl_loss_accumulator = 0
-        entropy_accumulator = 0
+        lvl_loss_accumulator = torch.tensor([0.0], device=ranking_loss.device)
+        entropy_accumulator = torch.tensor([0.0], device=ranking_loss.device)
         if batch['x1_rank'] <= 8:
             lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[0].view(1, 16), batch['x1_layer_score'].view(1, 16))
             lvl_loss_accumulator += lvl_loss
@@ -274,9 +275,12 @@ class LitMultiModel(L.LightningModule):
         self.log('net_lvl orc_feat std', net_pick_lvl_score.std().item(), sync_dist=True)
         self.log('boa_lvl orc_feat std', boa_pick_lvl_score.std().item(), sync_dist=True)
         self.log('orc_lvl orc_feat std', orc_pick_lvl_score.std().item(), sync_dist=True)
-
+    
         # Log table to wandb
-        self.log_wandb_table(tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks)
+        try:
+            self.log_wandb_table(tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks)
+        except:
+            print('could not log to wandb')
 
 
     def log_wandb_table(self, tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks):
@@ -489,7 +493,8 @@ if __name__ == '__main__':
     # initialise the wandb logger and name your wandb project
     wandb_logger = L.pytorch.loggers.WandbLogger(project='ssdm', name=kwargs.date[-4:]+ds+str(margin)+loss_mode)
     # Log things
-    wandb_logger.experiment.config.update(dict(margin=margin, ds=ds))
+    if rank_zero_only.rank == 0:
+        wandb_logger.experiment.config.update(dict(margin=margin, ds=ds))
 
     checkpoint_callback = ModelCheckpoint(
         monitor='net pick',  # The metric to monitor

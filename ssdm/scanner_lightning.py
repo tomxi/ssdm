@@ -228,6 +228,11 @@ class LitMultiModel(L.LightningModule):
             lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[1].view(1, 16), batch['x2_layer_score'].view(1, 16))
             lvl_loss_accumulator += lvl_loss
             entropy_accumulator += entropy
+        if batch['x2_rank'] > 8 and batch['x1_rank'] > 8: # This is a hack loop to makesure DDP doesn't complain about unsued parameters
+            lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[0].view(1, 16), batch['x1_layer_score'].view(1, 16))
+            lvl_loss_accumulator += lvl_loss * 1e-7
+            entropy_accumulator += entropy * 1e-7
+
         lvl_loss = lvl_loss_accumulator
         entropy = entropy_accumulator
 
@@ -286,8 +291,8 @@ class LitMultiModel(L.LightningModule):
 
 
     def on_validation_epoch_end(self):
-        self.trainer.util_predictions = self.trainer.util_predictions.dropna(dim="tid")
-        self.trainer.nlvl_predictions = self.trainer.nlvl_predictions.dropna(dim="tid")
+        self.trainer.util_predictions = self.trainer.util_predictions.dropna(dim="tid").sortby('tid')
+        self.trainer.nlvl_predictions = self.trainer.nlvl_predictions.dropna(dim="tid").sortby('tid')
         tid_subset = self.trainer.util_predictions.tid
         ds_score = self.val_ds.scores.sel(tid=tid_subset).max('layer').sortby('tid').squeeze()
         
@@ -309,7 +314,7 @@ class LitMultiModel(L.LightningModule):
         # print('net, boa, orc:', net_pick, boa_pick, orc_pick)
 
         # Now let's do nlvl picks for the ORC and BoA picks
-        lvl_scores = self.val_ds.vmeasures.sel(tid=tid_subset).isel(orc_feat_picks)
+        lvl_scores = self.val_ds.vmeasures.sel(tid=tid_subset).isel(orc_feat_picks).sortby('tid')
         net_lvl_picks = self.trainer.nlvl_predictions.isel(orc_feat_picks).argmax(dim=['layer'])
         orc_lvl_picks = lvl_scores.argmax(dim=['layer'])
         boa_lvl_picks = lvl_scores.mean('tid').argmax(dim=['layer'])

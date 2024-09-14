@@ -12,14 +12,53 @@ from lightning.pytorch.utilities import rank_zero_only
 from lightning.pytorch.callbacks import TQDMProgressBar, ModelCheckpoint, LearningRateMonitor
 import argparse
 
-from ssdm.scanner import ExpandEvecs, ConditionalMaxPool2d
-from ssdm import AVAL_FEAT_TYPES
 import ssdm
+from ssdm import AVAL_FEAT_TYPES
 
 ds_module_dict = dict(jsd = ssdm.jsd, slm = ssdm.slm, hmx = ssdm.hmx, rwcpop = ssdm.rwcpop)
 
+## Evec Layer
+class ExpandEvecs(nn.Module):
+    def __init__(self, max_lvl=16):
+        super().__init__()
+        self.max_lvl=max_lvl
+
+    def forward(self, evecs):
+        with torch.set_grad_enabled(False):
+            lras = []
+            if self.max_lvl == None:
+                self.max_lvl = evecs.shape[-1]
+            for lvl in range(self.max_lvl):
+                first_evecs = evecs[:, :, :, :lvl + 1]
+                lras.append(torch.matmul(first_evecs, first_evecs.transpose(-1, -2)))
+
+            cube = torch.cat(lras, dim=1)
+        return cube
+
+## MaxPool that doesn't pool to 1
+class ConditionalMaxPool2d(nn.Module):
+    def __init__(self, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False):
+        super(ConditionalMaxPool2d, self).__init__()
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
+        self.ceil_mode = ceil_mode
+
+    def forward(self, x):
+        # Get the height and width of the input
+        height, width = x.shape[2], x.shape[3]
+
+        # Check if both dimensions are greater than 4
+        if height > 4 and width > 4:
+            # Apply max pooling
+            return nn.functional.max_pool2d(x, self.kernel_size, self.stride, self.padding, self.dilation, self.ceil_mode)
+        else:
+            # Return the input unchanged
+            return x
+
 # My LVL Loss
-class NLvlLoss(torch.nn.Module):
+class NLvlLoss(nn.Module):
     def __init__(self):
         super().__init__()
 
@@ -270,7 +309,7 @@ class LitMultiModel(L.LightningModule):
         # print('net, boa, orc:', net_pick, boa_pick, orc_pick)
 
         # Now let's do nlvl picks for the ORC and BoA picks
-        lvl_scores = self.val_ds.scores.sel(tid=tid_subset).isel(orc_feat_picks)
+        lvl_scores = self.val_ds.vmeasures.sel(tid=tid_subset).isel(orc_feat_picks)
         net_lvl_picks = self.trainer.nlvl_predictions.isel(orc_feat_picks).argmax(dim=['layer'])
         orc_lvl_picks = lvl_scores.argmax(dim=['layer'])
         boa_lvl_picks = lvl_scores.mean('tid').argmax(dim=['layer'])
@@ -389,23 +428,27 @@ class PairDataModule(L.LightningDataModule):
         if stage == "predict":
             self.predict_ds = self.ds_module.InferDS(split=self.predict_split) 
 
+
     def train_dataloader(self):
         return DataLoader(
             self.train_ds, batch_size=None, shuffle=True,
             num_workers=self.num_loader_workers, pin_memory=True,
         )
-    
+
+
     def val_dataloader(self):
         return DataLoader(
             self.val_infer_ds, batch_size=None, shuffle=False,
             num_workers=self.num_loader_workers, pin_memory=True,
         )
-    
+
+
     def test_dataloader(self):
         return DataLoader(
             self.test_infer_ds, batch_size=None, shuffle=False,
             num_workers=self.num_loader_workers, pin_memory=True,
         )
+
 
     def predict_dataloader(self):
         return DataLoader(
@@ -448,22 +491,26 @@ class HybridPairDM(L.LightningDataModule):
     def setup(self, stage: str):
         # Assign train/val datasets for use in dataloaders
         if stage == "fit":
-            train_ds_list, val_ds_list, score_list = [], [], []
+            train_ds_list, val_ds_list, score_list, vmeasure_list = [], [], [], []
             for ds_module in self.ds_modules:
                 train_ds_list.append(ds_module.PairDSLmeasure(split='train', perf_margin=self.perf_margin))
                 val_ds_list.append(ds_module.InferDS(split=self.val_split))
                 score_list.append(val_ds_list[-1].scores)
+                vmeasure_list.append(val_ds_list[-1].vmeasures)
             self.train_ds = ConcatDataset(train_ds_list)
             self.val_infer_ds = ConcatDataset(val_ds_list)
             self.val_infer_ds.scores = xr.concat(score_list, dim='tid')
+            self.val_infer_ds.vmeasures = xr.concat(vmeasure_list, dim='tid')
 
         if stage == 'validate':
-            val_ds_list, score_list = [], []
+            val_ds_list, score_list, vmeasure_list = [], [], []
             for ds_module in self.ds_modules:
                 val_ds_list.append(ds_module.InferDS(split=self.val_split))
                 score_list.append(val_ds_list[-1].scores)
+                vmeasure_list.append(val_ds_list[-1].vmeasures)
             self.val_infer_ds = ConcatDataset(val_ds_list)
             self.val_infer_ds.scores = xr.concat(score_list, dim='tid')
+            self.val_infer_ds.vmeasures = xr.concat(vmeasure_list, dim='tid')
 
     def train_dataloader(self):
         return DataLoader(
@@ -507,7 +554,7 @@ if __name__ == '__main__':
 
     loss_mode, ds, branch_off = list(itertools.product(
         ['duo', 'nlvl'],
-        ['all', 'hmx', 'slm', 'jsd'],
+        ['all', 'slm', 'jsd', 'rwcpop', 'hmx'],
         ['late'],
     ))[int(kwargs.config_idx)]
 
@@ -529,15 +576,14 @@ if __name__ == '__main__':
         monitor='net pick',  # The metric to monitor
         dirpath=f'checkpoints/{ds}{margin}{loss_mode}{branch_off}/',  # Directory to save the checkpoints
         filename='{epoch:02d}-{net pick:.4f}',  # Naming convention for checkpoints
-        save_top_k=5,  # Save only the best model based on the monitored metric
+        save_top_k=10,  # Save only the best model based on the monitored metric
         mode='max',  # Mode to determine if a lower or higher metric is better
         save_last=True  # Optionally save the last epoch model as well
     )
 
     trainer = L.pytorch.Trainer(
-        num_sanity_val_steps = 0,
         max_epochs = 100,
-        max_steps = 3000 * 1000,
+        max_steps = 300 * 1000,
         devices = int(kwargs.num_gpu),
         accelerator = "gpu",
         accumulate_grad_batches = 32,
@@ -545,9 +591,8 @@ if __name__ == '__main__':
         log_every_n_steps = 1,
         val_check_interval = 0.25,
         callbacks = [TQDMProgressBar(refresh_rate=500),
-                     checkpoint_callback,
                      LearningRateMonitor(logging_interval='step'),
-                    ]
+                     checkpoint_callback]
     )
 
     if ds == 'all':
@@ -558,9 +603,9 @@ if __name__ == '__main__':
         training_loss_mode=loss_mode, 
         branch_off=branch_off,
         norm_cnn_grad=True,
-        entropy_scale=0.01,
+        entropy_scale=0.05,
     )
-    wandb_logger.watch(lit_net, log='all')
+    wandb_logger.watch(lit_net, log='all', log_graph=False)
     trainer.fit(lit_net, datamodule=dm)
     wandb.finish()
     print('done without failure!')

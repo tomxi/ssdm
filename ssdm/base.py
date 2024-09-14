@@ -756,9 +756,9 @@ class PairDS(Dataset):
         )
         x1 = torch.tensor(first_evecs_a, dtype=torch.float32)[None, None, :]
         x2 = torch.tensor(first_evecs_b, dtype=torch.float32)[None, None, :]
-        x1_layer_score = self.scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
+        x1_layer_score = self.vmeasures.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
         x1_layer_score = torch.tensor(x1_layer_score.values, dtype=torch.float32)[None, :]
-        x2_layer_score = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
+        x2_layer_score = self.vmeasures.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
         x2_layer_score = torch.tensor(x2_layer_score.values, dtype=torch.float32)[None, :]
         x1_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
         x2_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)

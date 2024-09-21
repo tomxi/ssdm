@@ -590,7 +590,7 @@ if __name__ == '__main__':
         monitor='net pick',  # The metric to monitor
         dirpath=f'checkpoints/{ds}{margin}{loss_mode}{branch_off}/',  # Directory to save the checkpoints
         filename='{epoch:02d}-{net pick:.4f}',  # Naming convention for checkpoints
-        save_top_k=10,  # Save only the best model based on the monitored metric
+        save_top_k=15,  # Save only the best model based on the monitored metric
         mode='max',  # Mode to determine if a lower or higher metric is better
         save_last=True  # Optionally save the last epoch model as well
     )
@@ -602,7 +602,6 @@ if __name__ == '__main__':
         accelerator = "gpu",
         accumulate_grad_batches = 32,
         logger = wandb_logger,
-        log_every_n_steps = 1,
         callbacks = [TQDMProgressBar(refresh_rate=500),
                      LearningRateMonitor(logging_interval='step'),
                      checkpoint_callback]

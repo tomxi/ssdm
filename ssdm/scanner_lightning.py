@@ -5,6 +5,8 @@ from torch.utils.data import ConcatDataset
 import re, itertools
 from torch import optim, nn
 from torch.utils.data import DataLoader
+from sklearn.metrics import roc_auc_score
+import scipy.stats as ss
 
 import lightning as L
 import wandb
@@ -35,6 +37,7 @@ class ExpandEvecs(nn.Module):
             cube = torch.cat(lras, dim=1)
         return cube
 
+
 ## MaxPool that doesn't pool to 1
 class ConditionalMaxPool2d(nn.Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False):
@@ -56,6 +59,7 @@ class ConditionalMaxPool2d(nn.Module):
         else:
             # Return the input unchanged
             return x
+
 
 # My LVL Loss
 class NLvlLoss(nn.Module):
@@ -100,60 +104,70 @@ class InputSizeAwareConv2d(nn.Module):
         self.conv.weight.register_hook(hook_fn)
         if self.conv.bias is not None:
             self.conv.bias.register_hook(hook_fn)
-              
+
 
 class LitMultiModel(L.LightningModule):
-    def __init__(self, training_loss_mode='duo', branch_off='early', norm_cnn_grad=True, entropy_scale=0.01):
+    def __init__(self, training_loss_mode='duo', branch_off='early', norm_cnn_grad=True, entropy_scale=0.01, x_conv_filters=1):
         super().__init__()
         self.training_loss_mode = training_loss_mode # 'util', 'nlvl', 'duo', 'triple'
         self.branch_off = branch_off # 'early' or 'late'
         self.norm_cnn_grad = norm_cnn_grad
         self.entropy_scale = entropy_scale
+        self.expand_evecs = ExpandEvecs()
         if self.norm_cnn_grad:
             Conv2d = InputSizeAwareConv2d
         else:
             Conv2d = nn.Conv2d
-        self.expand_evecs = ExpandEvecs()
+
+        n = x_conv_filters
         self.convlayers1 = nn.Sequential(
             Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
             Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+            Conv2d(32, 16 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16 * n, affine=True, eps=1e-3), nn.SiLU()
         )
         self.convlayers2 = nn.Sequential(
-            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+            Conv2d(16 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32 * n, 16 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16 * n, affine=True, eps=1e-3), nn.SiLU()
         )
         self.convlayers3 = nn.Sequential(
-            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+            Conv2d(16 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32 * n, 16 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16 * n, affine=True, eps=1e-3), nn.SiLU()
         )
         self.convlayers4 = nn.Sequential(
-            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+            Conv2d(16 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32 * n, 16 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16 * n, affine=True, eps=1e-3), nn.SiLU()
         )
-        self.post_big_pool = nn.Sequential(
-            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+        self.convlayers5 = nn.Sequential(
+            Conv2d(16 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32 * n, 16 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16 * n, affine=True, eps=1e-3), nn.SiLU()
         )
 
         self.maxpool = ConditionalMaxPool2d(kernel_size=2, stride=2)
-        self.adapool_big = nn.AdaptiveMaxPool2d((32, 32))
-        self.adapool_med = nn.AdaptiveMaxPool2d((16, 16))
-        self.adapool_sm = nn.AdaptiveMaxPool2d((4, 4)) 
+        self.adapool_big = nn.AdaptiveMaxPool2d((25, 25))
+        self.adapool_med = nn.AdaptiveMaxPool2d((15, 15))
+        self.adapool_sm = nn.AdaptiveMaxPool2d((5, 5))
 
         if self.branch_off == 'late':
             self.shared_linear = nn.Sequential(
                 nn.Dropout(0.2, inplace=False),
-                nn.Linear(528, 64, bias=False),
+                nn.Linear(875, 64, bias=False),
                 nn.SiLU(),
             )
-            self.util_head = nn.Linear(64, 1, bias=False)
+            self.util_head = nn.Sequential(
+                nn.Linear(64, 16, bias=False),
+                nn.SiLU(),
+                nn.Linear(16, 16, bias=False),
+                nn.SiLU(),
+                nn.Linear(16, 1, bias=False),
+            )
             self.nlvl_head = nn.Sequential(
-                nn.Linear(64, 16, bias=True),
+                nn.Linear(64, 16, bias=False),
+                nn.SiLU(),
+                nn.Linear(16, 16, bias=True),
                 nn.Softmax(dim=-1)
             )
 
@@ -161,13 +175,13 @@ class LitMultiModel(L.LightningModule):
             self.shared_linear = nn.Identity()
             self.util_head = nn.Sequential(
                 nn.Dropout(0.2, inplace=False),
-                nn.Linear(528, 32, bias=False),
+                nn.Linear(875, 32, bias=False),
                 nn.SiLU(),
                 nn.Linear(32, 1, bias=False)
             )
             self.nlvl_head = nn.Sequential(
                 nn.Dropout(0.2, inplace=False),
-                nn.Linear(528, 32, bias=False),
+                nn.Linear(875, 32, bias=False),
                 nn.SiLU(),
                 nn.Linear(32, 16, bias=True),
                 nn.Softmax(dim=-1)
@@ -179,15 +193,15 @@ class LitMultiModel(L.LightningModule):
 
     def forward(self, x):
         x = self.expand_evecs(x)
-        x = self.convlayers1(x)
-        x1 = self.convlayers2(self.maxpool(x))
-        x2 = self.convlayers3(self.maxpool(x1))
-        x3 = self.convlayers4(self.maxpool(x2))
+        x1 = self.convlayers1(x)
+        x2 = self.convlayers2(self.maxpool(x1))
+        x3 = self.convlayers3(self.maxpool(x2))
+        x4 = self.convlayers4(self.maxpool(x3))
+        x5 = self.convlayers5(self.maxpool(x4))
         
-        x_sm = self.adapool_sm(x1) + self.adapool_sm(x2) + self.adapool_sm(x3)
-        x_med = self.adapool_med(x1) + self.adapool_med(x2) + self.adapool_med(x3)
-        x_big = self.adapool_big(x1) + self.adapool_big(x2) + self.adapool_big(x3)
-        x_big = self.maxpool(self.post_big_pool(x_big))
+        x_sm = self.adapool_sm(x1) + self.adapool_sm(x2) + self.adapool_sm(x3) + self.adapool_sm(x4) + self.adapool_sm(x5)
+        x_med = self.adapool_med(x1) + self.adapool_med(x2) + self.adapool_med(x3) + self.adapool_med(x4) + self.adapool_med(x5)
+        x_big = self.adapool_big(x1) + self.adapool_big(x2) + self.adapool_big(x3) + self.adapool_big(x4) + self.adapool_big(x5)
 
         x_sm_ch_softmax = (x_sm.softmax(1) * x_sm).sum(1)
         x_med_ch_softmax = (x_med.softmax(1) * x_med).sum(1)
@@ -230,8 +244,8 @@ class LitMultiModel(L.LightningModule):
             entropy_accumulator += entropy
         if batch['x2_rank'] > 8 and batch['x1_rank'] > 8: # This is a hack loop to makesure DDP doesn't complain about unsued parameters
             lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[0].view(1, 16), batch['x1_layer_score'].view(1, 16))
-            lvl_loss_accumulator += lvl_loss * 1e-7
-            entropy_accumulator += entropy * 1e-7
+            lvl_loss_accumulator += lvl_loss * 0.
+            entropy_accumulator += entropy * 0.
 
         lvl_loss = lvl_loss_accumulator
         entropy = entropy_accumulator
@@ -240,9 +254,9 @@ class LitMultiModel(L.LightningModule):
         self.log('entropy', entropy, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
 
         if self.training_loss_mode == 'util':
-            return ranking_loss
+            return ranking_loss + lvl_loss * 0.
         elif self.training_loss_mode == 'nlvl':
-            return lvl_loss - entropy * self.entropy_scale
+            return ranking_loss * 0. + lvl_loss - entropy * self.entropy_scale
         elif self.training_loss_mode == 'duo':
             return ranking_loss + lvl_loss - entropy * self.entropy_scale
         else:
@@ -274,6 +288,7 @@ class LitMultiModel(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         full_tid = batch['info']
+        
         track_result_coords = self.util_result_coords.copy()
         track_result_coords.update(tid=[full_tid])
         track_util_result = xr.DataArray(np.nan, coords=track_result_coords, dims=track_result_coords.keys())
@@ -285,9 +300,16 @@ class LitMultiModel(L.LightningModule):
             util, nlvl = self(batch['data'][i][None, :])
             track_util_result.loc[full_tid, rep_feat, loc_feat] = util.cpu().numpy().squeeze()
             track_nlvl_result.loc[full_tid, rep_feat, loc_feat] = nlvl.cpu().numpy().squeeze()
-        
+
+        track_lmeasure = self.val_ds.scores.sel(tid=full_tid).max('layer').squeeze().to_numpy().flatten()
+        # track_good_combos = [track_lmeasure.max() - l <= 0.02 for l in track_lmeasure]
+        track_good_combos = [r <= 5 for r in ss.rankdata(track_lmeasure)]
+        track_util_output = track_util_result.loc[full_tid].squeeze().to_numpy().flatten()
+        roc_auc = roc_auc_score(track_good_combos, track_util_output)
+        self.log('val roc_auc', roc_auc, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
         self.trainer.util_predictions = xr.concat([self.trainer.util_predictions, track_util_result], dim="tid")
         self.trainer.nlvl_predictions = xr.concat([self.trainer.nlvl_predictions, track_nlvl_result], dim="tid")
+        return roc_auc
 
 
     def on_validation_epoch_end(self):
@@ -313,31 +335,16 @@ class LitMultiModel(L.LightningModule):
         self.log('orc_feat orc_lvl std', orc_pick.std().item(), sync_dist=True)
         # print('net, boa, orc:', net_pick, boa_pick, orc_pick)
 
-        # Now let's do nlvl picks for the ORC and BoA picks
-        lvl_scores = self.val_ds.vmeasures.sel(tid=tid_subset).isel(orc_feat_picks).sortby('tid')
-        net_lvl_picks = self.trainer.nlvl_predictions.isel(orc_feat_picks).argmax(dim=['layer'])
-        orc_lvl_picks = lvl_scores.argmax(dim=['layer'])
-        boa_lvl_picks = lvl_scores.mean('tid').argmax(dim=['layer'])
-        net_pick_lvl_score = lvl_scores.isel(net_lvl_picks)
-        boa_pick_lvl_score = lvl_scores.isel(boa_lvl_picks)
-        orc_pick_lvl_score = lvl_scores.isel(orc_lvl_picks)
-        self.log('net_lvl orc_feat', net_pick_lvl_score.mean().item(), sync_dist=True)
-        self.log('boa_lvl orc_feat', boa_pick_lvl_score.mean().item(), sync_dist=True)
-        self.log('orc_lvl orc_feat', orc_pick_lvl_score.mean().item(), sync_dist=True)
-        self.log('net_lvl orc_feat std', net_pick_lvl_score.std().item(), sync_dist=True)
-        self.log('boa_lvl orc_feat std', boa_pick_lvl_score.std().item(), sync_dist=True)
-        self.log('orc_lvl orc_feat std', orc_pick_lvl_score.std().item(), sync_dist=True)
-    
         # Log table to wandb
-        try:
-            self.log_wandb_table(tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks)
-        except:
-            print('could not log to wandb')
+        if rank_zero_only.rank == 0:
+            try:
+                self.log_wandb_table(tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks)
+            except:
+                print('could not log to wandb')
 
 
     def log_wandb_table(self, tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks):
         # Logging to wandb table
-        val_wandb_at = wandb.Artifact("validation" + str(wandb.run.id), type="validation predictions")
         val_wandb_table = wandb.Table(columns = [
             'tid', 'title',
             # 'track/l_measure', 'track/net_util',
@@ -345,7 +352,8 @@ class LitMultiModel(L.LightningModule):
             'net/score', 'net/feat', 
             'boa/score', 'boa/feat', 
             'orc/score', 'orc/feat', 
-            'orc/feat/best_lvl', 'orc/feat/net_lvl',
+            'best_lvl', 'net_lvl',
+            'util AUCROC'
         ])
 
         ds_score = self.val_ds.scores.sel(tid=tid_subset).max('layer').sortby('tid').squeeze()
@@ -356,7 +364,11 @@ class LitMultiModel(L.LightningModule):
             ds_module = ds_module_dict[re.sub('\d', '', tid.item())]
             track = ds_module.Track(re.sub('\D', '', tid.item()))
             # track_annotation_plot = wandb.Image(ssdm.viz.anno_meet_mats(track)[0])
-            # ssdm.viz.plt.close('all')
+            ssdm.viz.plt.close('all')
+            
+            track_lmeasure = ds_score.sel(tid=tid).to_numpy().flatten()
+            track_good_combos = [r <= 5 for r in ss.rankdata(track_lmeasure)]
+            track_util_output = self.trainer.util_predictions.sel(tid=tid).to_numpy().flatten()     
 
             val_wandb_table.add_data(
                 tid.item(), track.title,
@@ -369,23 +381,22 @@ class LitMultiModel(L.LightningModule):
                 ds_score.isel(orc_feat_picks).sel(tid=tid).item(), 
                 ds_score.isel(orc_feat_picks).sel(tid=tid).rep_ftype.item() + '_' + ds_score.isel(orc_feat_picks).sel(tid=tid).loc_ftype.item(),
                 self.val_ds.scores.sel(tid=tid_subset).squeeze().isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item(), 
-                self.trainer.nlvl_predictions.isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item()
+                self.trainer.nlvl_predictions.isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item(),
+                roc_auc_score(track_good_combos, track_util_output)
             )
         wandb.log({'validation results': val_wandb_table})
-        val_wandb_at.add(val_wandb_table, "validation predictions")
-        wandb.run.log_artifact(val_wandb_at)
+
+        nlvl_outputs = self.trainer.nlvl_predictions.isel(orc_feat_picks).squeeze().to_numpy()
+        wandb.log({'nlvl ouputs': wandb.Image(nlvl_outputs)})
+
         return None
 
     
     def configure_optimizers(self):
         grouped_parameters = [
             {
-                "params": [p for n, p in self.named_parameters() if 'bias' not in n and 'conv' not in n],
-                "weight_decay": 0.1,
-            },
-            {
-                "params": [p for n, p in self.named_parameters() if 'bias' not in n and 'conv' in n],
-                "weight_decay": 0.005,
+                "params": [p for n, p in self.named_parameters() if 'bias' not in n],
+                "weight_decay": 0.05,
             },
             {
                 "params": [p for n, p in self.named_parameters() if 'bias' in n],
@@ -397,10 +408,10 @@ class LitMultiModel(L.LightningModule):
             optimizer, 
             base_lr=1e-5, max_lr=1e-2, 
             cycle_momentum=False, mode='triangular2', 
-            step_size_up=2000
+            step_size_up=3000
         )
 
-        return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 2}]
+        return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 1}]
 
 
 # New validation dataloaders...
@@ -530,16 +541,18 @@ class HybridPairDM(L.LightningDataModule):
         )
 
 
-def run_inference(model_path, dataset_id='rwcpop', split='test'):
+def run_inference(model_path, dataset_id='rwcpop', split='test', project='ssdm_test'):
     # Run inference on given dataset split with model and log to wandb.
     ds_module_dict = dict(jsd = ssdm.jsd, slm = ssdm.slm, hmx = ssdm.hmx, rwcpop = ssdm.rwcpop)
-    dm = PairDataModule(ds_module=ds_module_dict[dataset_id], perf_margin=0, val_split=split)
+    if dataset_id == 'all':
+        dm = HybridPairDM(ds_modules=[ds_module_dict[ds] for ds in ds_module_dict], perf_margin=0)
+    else:
+        dm = PairDataModule(ds_module=ds_module_dict[dataset_id], perf_margin=0, val_split=split)
     lit_net = LitMultiModel.load_from_checkpoint(model_path)
-    wandb_logger = L.pytorch.loggers.WandbLogger(project='ssdm_test', name=dataset_id+'_'+split)
+    wandb_logger = L.pytorch.loggers.WandbLogger(project=project, name=dataset_id+'_'+split)
     validator = L.pytorch.Trainer(
         num_sanity_val_steps = 0,
         max_epochs = 1,
-        devices = 1,
         accelerator = "gpu",
         logger = wandb_logger
     )
@@ -551,28 +564,24 @@ def run_inference(model_path, dataset_id='rwcpop', split='test'):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Training Tau hats')
+    parser = argparse.ArgumentParser(description='Training Util Model')
     parser.add_argument('date', help='just a marker really, can be any text but mmdd is the intension')
     parser.add_argument('num_gpu', help='number of gpus to setup trainer')
     parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
     kwargs = parser.parse_args()
 
-    loss_mode, ds, branch_off = list(itertools.product(
-        ['duo', 'nlvl'],
-        ['all', 'slm', 'jsd', 'rwcpop', 'hmx'],
-        ['late'],
+    margin, ets, filter_multiple = list(itertools.product(
+        [0.03, 0.08, 0],
+        [0.05],
+        [1, 2],
     ))[int(kwargs.config_idx)]
 
-    if ds in ['hmx', 'slm', 'all']:
-        margin = 0.1
-    elif ds in ['jsd', 'rwcpop']:
-        margin = 0.05
-    else:
-        # Default specified by the script
-        margin = 0.1
+    loss_mode = 'duo'
+    ds = 'all'
+    branch_off = 'late'
 
     # initialise the wandb logger and name your wandb project
-    wandb_logger = L.pytorch.loggers.WandbLogger(project='ssdm', name=kwargs.date[-4:]+ds+str(margin)+loss_mode)
+    wandb_logger = L.pytorch.loggers.WandbLogger(project='ssdm3', name=kwargs.date[-4:]+ds+str(margin)+loss_mode+'_m'+str(filter_multiple)+'_ets'+str(ets))
     # Log things
     if rank_zero_only.rank == 0:
         wandb_logger.experiment.config.update(dict(margin=margin, ds=ds))
@@ -587,14 +596,13 @@ if __name__ == '__main__':
     )
 
     trainer = L.pytorch.Trainer(
-        max_epochs = 100,
-        max_steps = 300 * 1000,
+        max_epochs = 30,
+        max_steps = 50 * 1000,
         devices = int(kwargs.num_gpu),
         accelerator = "gpu",
         accumulate_grad_batches = 32,
         logger = wandb_logger,
         log_every_n_steps = 1,
-        val_check_interval = 0.25,
         callbacks = [TQDMProgressBar(refresh_rate=500),
                      LearningRateMonitor(logging_interval='step'),
                      checkpoint_callback]
@@ -608,7 +616,8 @@ if __name__ == '__main__':
         training_loss_mode=loss_mode, 
         branch_off=branch_off,
         norm_cnn_grad=True,
-        entropy_scale=0.05,
+        entropy_scale=ets,
+        x_conv_filters=filter_multiple,
     )
     wandb_logger.watch(lit_net, log='all', log_graph=False)
     trainer.fit(lit_net, datamodule=dm)

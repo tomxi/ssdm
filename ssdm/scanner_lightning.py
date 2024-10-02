@@ -15,7 +15,6 @@ from lightning.pytorch.callbacks import TQDMProgressBar, ModelCheckpoint, Learni
 import argparse
 
 import ssdm
-from ssdm import AVAL_FEAT_TYPES
 
 ds_module_dict = dict(jsd = ssdm.jsd, slm = ssdm.slm, hmx = ssdm.hmx, rwcpop = ssdm.rwcpop)
 
@@ -83,7 +82,7 @@ class InputSizeAwareConv2d(nn.Module):
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias)
         self.H_out = None
         self.W_out = None
-        self._register_gradient_hook(256)
+        self._register_gradient_hook()
 
     def forward(self, input):
         # Perform the forward pass, saving the output dimensions (H_out, W_out)
@@ -91,13 +90,13 @@ class InputSizeAwareConv2d(nn.Module):
         self.H_out, self.W_out = output.size(2), output.size(3)  # Save height and width of the output
         return output
 
-    def _register_gradient_hook(self, c):    
+    def _register_gradient_hook(self):    
         # Register hook to scale the gradient based on the number of filter applications
         def hook_fn(grad):
             if self.H_out is not None and self.W_out is not None:
                 # Number of times the filter was applied (H_out * W_out)
                 scaling_factor = self.H_out * self.W_out
-                return grad / scaling_factor * c
+                return grad / scaling_factor
             return grad
 
         # Apply the hook to the weight gradient
@@ -121,40 +120,60 @@ class LitMultiModel(L.LightningModule):
 
         n = x_conv_filters
         self.convlayers1 = nn.Sequential(
-            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32, 16 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16 * n, affine=True, eps=1e-3), nn.SiLU()
+            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU()
         )
         self.convlayers2 = nn.Sequential(
-            Conv2d(16 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32 * n, 16 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16 * n, affine=True, eps=1e-3), nn.SiLU()
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU()
         )
         self.convlayers3 = nn.Sequential(
-            Conv2d(16 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32 * n, 16 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16 * n, affine=True, eps=1e-3), nn.SiLU()
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU()
         )
         self.convlayers4 = nn.Sequential(
-            Conv2d(16 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32 * n, 16 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16 * n, affine=True, eps=1e-3), nn.SiLU()
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU()
         )
         self.convlayers5 = nn.Sequential(
-            Conv2d(16 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32 * n, 32 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32 * n, affine=True, eps=1e-3), nn.SiLU(),
-            Conv2d(32 * n, 16 * n, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16 * n, affine=True, eps=1e-3), nn.SiLU()
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU()
         )
 
         self.maxpool = ConditionalMaxPool2d(kernel_size=2, stride=2)
-        self.adapool_big = nn.AdaptiveMaxPool2d((25, 25))
-        self.adapool_med = nn.AdaptiveMaxPool2d((15, 15))
-        self.adapool_sm = nn.AdaptiveMaxPool2d((5, 5))
+        self.adapool_big = nn.AdaptiveMaxPool2d((24, 24))
+        self.adapool_med = nn.AdaptiveMaxPool2d((12, 12))
+        self.adapool_sm = nn.AdaptiveMaxPool2d((6, 6))
+
+        self.post_big_pool = nn.Sequential(
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            self.maxpool,
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), nn.SiLU(),
+            self.maxpool,
+        )
+        self.post_med_pool = nn.Sequential(
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), nn.SiLU(),
+            self.maxpool,
+        )
+        self.post_sm_pool = nn.Sequential(
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
+            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True), nn.SiLU(),
+        )
 
         if self.branch_off == 'late':
             self.shared_linear = nn.Sequential(
                 nn.Dropout(0.2, inplace=False),
-                nn.Linear(875, 64, bias=False),
+                nn.Linear(108, 64, bias=False),
                 nn.SiLU(),
             )
             self.util_head = nn.Sequential(
@@ -175,13 +194,13 @@ class LitMultiModel(L.LightningModule):
             self.shared_linear = nn.Identity()
             self.util_head = nn.Sequential(
                 nn.Dropout(0.2, inplace=False),
-                nn.Linear(875, 32, bias=False),
+                nn.Linear(108, 32, bias=False),
                 nn.SiLU(),
                 nn.Linear(32, 1, bias=False)
             )
             self.nlvl_head = nn.Sequential(
                 nn.Dropout(0.2, inplace=False),
-                nn.Linear(875, 32, bias=False),
+                nn.Linear(108, 32, bias=False),
                 nn.SiLU(),
                 nn.Linear(32, 16, bias=True),
                 nn.Softmax(dim=-1)
@@ -202,6 +221,10 @@ class LitMultiModel(L.LightningModule):
         x_sm = self.adapool_sm(x1) + self.adapool_sm(x2) + self.adapool_sm(x3) + self.adapool_sm(x4) + self.adapool_sm(x5)
         x_med = self.adapool_med(x1) + self.adapool_med(x2) + self.adapool_med(x3) + self.adapool_med(x4) + self.adapool_med(x5)
         x_big = self.adapool_big(x1) + self.adapool_big(x2) + self.adapool_big(x3) + self.adapool_big(x4) + self.adapool_big(x5)
+
+        x_sm = self.post_sm_pool(x_sm)
+        x_med = self.post_med_pool(x_med)
+        x_big = self.post_big_pool(x_big)
 
         x_sm_ch_softmax = (x_sm.softmax(1) * x_sm).sum(1)
         x_med_ch_softmax = (x_med.softmax(1) * x_med).sum(1)
@@ -244,8 +267,8 @@ class LitMultiModel(L.LightningModule):
             entropy_accumulator += entropy
         if batch['x2_rank'] > 8 and batch['x1_rank'] > 8: # This is a hack loop to makesure DDP doesn't complain about unsued parameters
             lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[0].view(1, 16), batch['x1_layer_score'].view(1, 16))
-            lvl_loss_accumulator += lvl_loss * 0.
-            entropy_accumulator += entropy * 0.
+            lvl_loss_accumulator += lvl_loss * 1e-8
+            entropy_accumulator += entropy * 1e-8
 
         lvl_loss = lvl_loss_accumulator
         entropy = entropy_accumulator
@@ -254,9 +277,9 @@ class LitMultiModel(L.LightningModule):
         self.log('entropy', entropy, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
 
         if self.training_loss_mode == 'util':
-            return ranking_loss + lvl_loss * 0.
+            return ranking_loss + lvl_loss * 1e-8
         elif self.training_loss_mode == 'nlvl':
-            return ranking_loss * 0. + lvl_loss - entropy * self.entropy_scale
+            return ranking_loss * 1e-8 + lvl_loss - entropy * self.entropy_scale
         elif self.training_loss_mode == 'duo':
             return ranking_loss + lvl_loss - entropy * self.entropy_scale
         else:
@@ -269,18 +292,18 @@ class LitMultiModel(L.LightningModule):
         # full_tids = [self.val_ds.name + tid for tid in self.val_ds.tids]
         self.util_result_coords = dict(
             tid=[], 
-            rep_ftype=AVAL_FEAT_TYPES, loc_ftype=AVAL_FEAT_TYPES,
+            rep_ftype=self.val_ds.AVAL_FEAT_TYPES, loc_ftype=self.val_ds.AVAL_FEAT_TYPES,
         )
         self.nlvl_result_coords = dict(
             tid=[], 
-            rep_ftype=AVAL_FEAT_TYPES, loc_ftype=AVAL_FEAT_TYPES,
+            rep_ftype=self.val_ds.AVAL_FEAT_TYPES, loc_ftype=self.val_ds.AVAL_FEAT_TYPES,
             layer=list(range(1,17))
         )
-        self.trainer.util_predictions = xr.DataArray(np.nan, 
+        self.val_util_predictions = xr.DataArray(np.nan, 
                                                     coords=self.util_result_coords, 
                                                     dims=self.util_result_coords.keys()
                                                     ).sortby('tid')
-        self.trainer.nlvl_predictions = xr.DataArray(np.nan, 
+        self.val_nlvl_predictions = xr.DataArray(np.nan, 
                                                     coords=self.nlvl_result_coords, 
                                                     dims=self.nlvl_result_coords.keys()
                                                     ).sortby('tid')
@@ -301,24 +324,46 @@ class LitMultiModel(L.LightningModule):
             track_util_result.loc[full_tid, rep_feat, loc_feat] = util.cpu().numpy().squeeze()
             track_nlvl_result.loc[full_tid, rep_feat, loc_feat] = nlvl.cpu().numpy().squeeze()
 
-        track_lmeasure = self.val_ds.scores.sel(tid=full_tid).max('layer').squeeze().to_numpy().flatten()
-        # track_good_combos = [track_lmeasure.max() - l <= 0.02 for l in track_lmeasure]
-        track_good_combos = [r <= 5 for r in ss.rankdata(track_lmeasure)]
         track_util_output = track_util_result.loc[full_tid].squeeze().to_numpy().flatten()
-        roc_auc = roc_auc_score(track_good_combos, track_util_output)
-        self.log('val roc_auc', roc_auc, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
-        self.trainer.util_predictions = xr.concat([self.trainer.util_predictions, track_util_result], dim="tid")
-        self.trainer.nlvl_predictions = xr.concat([self.trainer.nlvl_predictions, track_nlvl_result], dim="tid")
-        return roc_auc
+        try:
+            roc_auc = self.get_util_roc_auc(full_tid, track_util_output)
+            self.log('val roc_auc', roc_auc, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
+        except:
+            print('roc failed')
+        self.val_util_predictions = xr.concat([self.val_util_predictions, track_util_result], dim="tid")
+        self.val_nlvl_predictions = xr.concat([self.val_nlvl_predictions, track_nlvl_result], dim="tid")
+        return None
+
+    
+    def get_util_roc_auc(self, full_tid, track_util_output):
+        track_lmeasure = self.val_ds.scores.sel(tid=full_tid).max('layer').squeeze().to_numpy().flatten()
+        track_good_combos = [track_lmeasure.max() - l <= 0.02 for l in track_lmeasure]
+        try:
+            # Some tracks are degenerate, and has only 1 class in track_good_combos. roc_auc not defined in such cases.
+            return roc_auc_score(track_good_combos, track_util_output)
+        except:
+            print(full_tid, 'failed roc_auc due to single class')
+            return 0.5
 
 
     def on_validation_epoch_end(self):
-        self.trainer.util_predictions = self.trainer.util_predictions.dropna(dim="tid").sortby('tid')
-        self.trainer.nlvl_predictions = self.trainer.nlvl_predictions.dropna(dim="tid").sortby('tid')
-        tid_subset = self.trainer.util_predictions.tid
+        self.val_util_predictions = self.val_util_predictions.dropna(dim="tid").sortby('tid')
+        self.val_nlvl_predictions = self.val_nlvl_predictions.dropna(dim="tid").sortby('tid')
+
+        if self.trainer.world_size > 1:
+            # Gather xarray.DataArray objects from all ranks
+            gathered_val_util_predictions = [None] * self.trainer.world_size
+            gathered_val_nlvl_predictions = [None] * self.trainer.world_size
+            torch.distributed.all_gather_object(gathered_val_util_predictions, self.val_util_predictions)
+            torch.distributed.all_gather_object(gathered_val_nlvl_predictions, self.val_nlvl_predictions)
+            self.val_util_predictions = xr.concat(gathered_val_util_predictions, dim='tid').sortby('tid')
+            self.val_nlvl_predictions = xr.concat(gathered_val_nlvl_predictions, dim='tid').sortby('tid')
+
+        
+        tid_subset = self.val_util_predictions.tid
         ds_score = self.val_ds.scores.sel(tid=tid_subset).max('layer').sortby('tid').squeeze()
         
-        net_feat_picks = self.trainer.util_predictions.argmax(dim=['rep_ftype', 'loc_ftype'])
+        net_feat_picks = self.val_util_predictions.argmax(dim=['rep_ftype', 'loc_ftype'])
         orc_feat_picks = ds_score.argmax(dim=['rep_ftype', 'loc_ftype'])
         boa_feat_picks = ds_score.mean('tid').argmax(dim=['rep_ftype', 'loc_ftype'])
         
@@ -334,13 +379,14 @@ class LitMultiModel(L.LightningModule):
         self.log('boa_feat orc_lvl std', boa_pick.std().item(), sync_dist=True)
         self.log('orc_feat orc_lvl std', orc_pick.std().item(), sync_dist=True)
         # print('net, boa, orc:', net_pick, boa_pick, orc_pick)
+        nlvl_outputs = self.val_nlvl_predictions.isel(orc_feat_picks).squeeze().to_numpy()
 
         # Log table to wandb
-        if rank_zero_only.rank == 0:
-            try:
-                self.log_wandb_table(tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks)
-            except:
-                print('could not log to wandb')
+        try:
+            wandb.log({'nlvl ouputs': wandb.Image(nlvl_outputs)})
+            self.log_wandb_table(tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks)
+        except:
+            print('could not log to wandb')
 
 
     def log_wandb_table(self, tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks):
@@ -358,17 +404,14 @@ class LitMultiModel(L.LightningModule):
 
         ds_score = self.val_ds.scores.sel(tid=tid_subset).max('layer').sortby('tid').squeeze()
 
-        for tid in self.trainer.util_predictions.tid:
+        for tid in self.val_util_predictions.tid:
             # track_lmeasure_plot = wandb.Image(ssdm.viz.heatmap(ds_score.sel(tid=tid))[0])
-            # track_net_util_plot = wandb.Image(ssdm.viz.heatmap(self.trainer.util_predictions.sel(tid=tid))[0])
+            # track_net_util_plot = wandb.Image(ssdm.viz.heatmap(self.val_util_predictions.sel(tid=tid))[0])
             ds_module = ds_module_dict[re.sub('\d', '', tid.item())]
             track = ds_module.Track(re.sub('\D', '', tid.item()))
             # track_annotation_plot = wandb.Image(ssdm.viz.anno_meet_mats(track)[0])
             ssdm.viz.plt.close('all')
-            
-            track_lmeasure = ds_score.sel(tid=tid).to_numpy().flatten()
-            track_good_combos = [r <= 5 for r in ss.rankdata(track_lmeasure)]
-            track_util_output = self.trainer.util_predictions.sel(tid=tid).to_numpy().flatten()     
+            track_util_output = self.val_util_predictions.sel(tid=tid).to_numpy().flatten()
 
             val_wandb_table.add_data(
                 tid.item(), track.title,
@@ -381,14 +424,10 @@ class LitMultiModel(L.LightningModule):
                 ds_score.isel(orc_feat_picks).sel(tid=tid).item(), 
                 ds_score.isel(orc_feat_picks).sel(tid=tid).rep_ftype.item() + '_' + ds_score.isel(orc_feat_picks).sel(tid=tid).loc_ftype.item(),
                 self.val_ds.scores.sel(tid=tid_subset).squeeze().isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item(), 
-                self.trainer.nlvl_predictions.isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item(),
-                roc_auc_score(track_good_combos, track_util_output)
+                self.val_nlvl_predictions.isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item(),
+                self.get_util_roc_auc(tid, track_util_output)
             )
         wandb.log({'validation results': val_wandb_table})
-
-        nlvl_outputs = self.trainer.nlvl_predictions.isel(orc_feat_picks).squeeze().to_numpy()
-        wandb.log({'nlvl ouputs': wandb.Image(nlvl_outputs)})
-
         return None
 
     
@@ -396,7 +435,327 @@ class LitMultiModel(L.LightningModule):
         grouped_parameters = [
             {
                 "params": [p for n, p in self.named_parameters() if 'bias' not in n],
-                "weight_decay": 0.05,
+                "weight_decay": 0.005,
+            },
+            {
+                "params": [p for n, p in self.named_parameters() if 'bias' in n],
+                "weight_decay": 0.0,
+            },
+        ]
+        optimizer = optim.AdamW(grouped_parameters)
+        lr_scheduler = optim.lr_scheduler.CyclicLR(
+            optimizer, 
+            base_lr=2e-6, max_lr=1e-2, 
+            cycle_momentum=False, mode='triangular2', 
+            step_size_up=5000
+        )
+
+        return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 2}]
+
+
+class LitMultiModel914n(L.LightningModule):
+    def __init__(self, training_loss_mode='duo', branch_off='early', norm_cnn_grad=True, entropy_scale=0.01):
+        super().__init__()
+        self.training_loss_mode = training_loss_mode # 'util', 'nlvl', 'duo', 'triple'
+        self.branch_off = branch_off # 'early' or 'late'
+        self.norm_cnn_grad = norm_cnn_grad
+        self.entropy_scale = entropy_scale
+        if self.norm_cnn_grad:
+            Conv2d = InputSizeAwareConv2d
+        else:
+            Conv2d = nn.Conv2d
+        self.expand_evecs = ExpandEvecs()
+        self.convlayers1 = nn.Sequential(
+            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+        )
+        self.convlayers2 = nn.Sequential(
+            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+        )
+        self.convlayers3 = nn.Sequential(
+            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+        )
+        self.convlayers4 = nn.Sequential(
+            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+        )
+        self.post_big_pool = nn.Sequential(
+            Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True, eps=1e-3), nn.SiLU(),
+            Conv2d(32, 16, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(16, affine=True, eps=1e-3), nn.SiLU()
+        )
+
+        self.maxpool = ConditionalMaxPool2d(kernel_size=2, stride=2)
+        self.adapool_big = nn.AdaptiveMaxPool2d((32, 32))
+        self.adapool_med = nn.AdaptiveMaxPool2d((16, 16))
+        self.adapool_sm = nn.AdaptiveMaxPool2d((4, 4)) 
+
+        if self.branch_off == 'late':
+            self.shared_linear = nn.Sequential(
+                nn.Dropout(0.2, inplace=False),
+                nn.Linear(528, 64, bias=False),
+                nn.SiLU(),
+            )
+            self.util_head = nn.Linear(64, 1, bias=False)
+            self.nlvl_head = nn.Sequential(
+                nn.Linear(64, 16, bias=True),
+                nn.Softmax(dim=-1)
+            )
+
+        elif self.branch_off == 'early':
+            self.shared_linear = nn.Identity()
+            self.util_head = nn.Sequential(
+                nn.Dropout(0.2, inplace=False),
+                nn.Linear(528, 32, bias=False),
+                nn.SiLU(),
+                nn.Linear(32, 1, bias=False)
+            )
+            self.nlvl_head = nn.Sequential(
+                nn.Dropout(0.2, inplace=False),
+                nn.Linear(528, 32, bias=False),
+                nn.SiLU(),
+                nn.Linear(32, 16, bias=True),
+                nn.Softmax(dim=-1)
+            )
+
+        self.lvl_loss_fn = NLvlLoss()
+        self.save_hyperparameters()
+
+
+    def forward(self, x):
+        x = self.expand_evecs(x)
+        x = self.convlayers1(x)
+        x1 = self.convlayers2(self.maxpool(x))
+        x2 = self.convlayers3(self.maxpool(x1))
+        x3 = self.convlayers4(self.maxpool(x2))
+        
+        x_sm = self.adapool_sm(x1) + self.adapool_sm(x2) + self.adapool_sm(x3)
+        x_med = self.adapool_med(x1) + self.adapool_med(x2) + self.adapool_med(x3)
+        x_big = self.adapool_big(x1) + self.adapool_big(x2) + self.adapool_big(x3)
+        x_big = self.maxpool(self.post_big_pool(x_big))
+
+        x_sm_ch_softmax = (x_sm.softmax(1) * x_sm).sum(1)
+        x_med_ch_softmax = (x_med.softmax(1) * x_med).sum(1)
+        x_big_ch_softmax = (x_big.softmax(1) * x_big).sum(1)
+
+        multires_embeddings = torch.cat([torch.flatten(x_sm_ch_softmax, 1), 
+                                         torch.flatten(x_med_ch_softmax, 1), 
+                                         torch.flatten(x_big_ch_softmax, 1)], 1)
+        shared_embedding = self.shared_linear(multires_embeddings)
+        return self.util_head(shared_embedding), self.nlvl_head(shared_embedding)
+
+
+    def on_fit_start(self):
+        torch.set_float32_matmul_precision('medium')
+
+
+    def training_step(self, batch, batch_idx):
+        # training_step defines the train loop.
+        # it is independent of forward
+        x = torch.cat([batch['x1'], batch['x2']], 0)
+        contrast_label = batch['perf_gap'].sign()
+        
+        util_est, nlvl_est = self(x)
+        ranking_loss = nn.functional.margin_ranking_loss(
+            util_est[0, None], util_est[1, None], 
+            contrast_label, margin=1
+        )
+        self.log('ranking loss', ranking_loss, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
+
+        # Compute the lvl loss only on samples with good feature segmentations
+        lvl_loss_accumulator = torch.tensor([0.0], device=ranking_loss.device)
+        entropy_accumulator = torch.tensor([0.0], device=ranking_loss.device)
+        if batch['x1_rank'] <= 8:
+            lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[0].view(1, 16), batch['x1_layer_score'].view(1, 16))
+            lvl_loss_accumulator += lvl_loss
+            entropy_accumulator += entropy
+        if batch['x2_rank'] <= 8:
+            lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[1].view(1, 16), batch['x2_layer_score'].view(1, 16))
+            lvl_loss_accumulator += lvl_loss
+            entropy_accumulator += entropy
+        if batch['x2_rank'] > 8 and batch['x1_rank'] > 8: # This is a hack loop to makesure DDP doesn't complain about unsued parameters
+            lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[0].view(1, 16), batch['x1_layer_score'].view(1, 16))
+            lvl_loss_accumulator += lvl_loss * 1e-8
+            entropy_accumulator += entropy * 1e-8
+
+        lvl_loss = lvl_loss_accumulator
+        entropy = entropy_accumulator
+
+        self.log('nlvl loss', lvl_loss, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
+        self.log('entropy', entropy, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
+
+        if self.training_loss_mode == 'util':
+            return ranking_loss + lvl_loss * 1e-8
+        elif self.training_loss_mode == 'nlvl':
+            return ranking_loss * 1e-8 + lvl_loss - entropy * self.entropy_scale
+        elif self.training_loss_mode == 'duo':
+            return ranking_loss + lvl_loss - entropy * self.entropy_scale
+        else:
+            return None
+
+
+    def on_validation_epoch_start(self):
+        self.trainer.datamodule.setup('validate')
+        self.val_ds = self.trainer.datamodule.val_dataloader().dataset
+        # full_tids = [self.val_ds.name + tid for tid in self.val_ds.tids]
+        self.util_result_coords = dict(
+            tid=[], 
+            rep_ftype=self.val_ds.AVAL_FEAT_TYPES, loc_ftype=self.val_ds.AVAL_FEAT_TYPES,
+        )
+        self.nlvl_result_coords = dict(
+            tid=[], 
+            rep_ftype=self.val_ds.AVAL_FEAT_TYPES, loc_ftype=self.val_ds.AVAL_FEAT_TYPES,
+            layer=list(range(1,17))
+        )
+        self.val_util_predictions = xr.DataArray(np.nan, 
+                                                    coords=self.util_result_coords, 
+                                                    dims=self.util_result_coords.keys()
+                                                    ).sortby('tid')
+        self.val_nlvl_predictions = xr.DataArray(np.nan, 
+                                                    coords=self.nlvl_result_coords, 
+                                                    dims=self.nlvl_result_coords.keys()
+                                                    ).sortby('tid')
+
+
+    def validation_step(self, batch, batch_idx):
+        full_tid = batch['info']
+        
+        track_result_coords = self.util_result_coords.copy()
+        track_result_coords.update(tid=[full_tid])
+        track_util_result = xr.DataArray(np.nan, coords=track_result_coords, dims=track_result_coords.keys())
+        track_result_coords.update(layer=list(range(1,17)))
+        track_nlvl_result = xr.DataArray(np.nan, coords=track_result_coords, dims=track_result_coords.keys())
+        
+        for i, feat_pair in enumerate(batch['feat_order']):
+            rep_feat, loc_feat = feat_pair.split('_')
+            util, nlvl = self(batch['data'][i][None, :])
+            track_util_result.loc[full_tid, rep_feat, loc_feat] = util.cpu().numpy().squeeze()
+            track_nlvl_result.loc[full_tid, rep_feat, loc_feat] = nlvl.cpu().numpy().squeeze()
+
+        try:
+            track_util_output = track_util_result.loc[full_tid].squeeze().to_numpy().flatten()
+            roc_auc = self.get_util_roc_auc(full_tid, track_util_output)
+            self.log('val roc_auc', roc_auc, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
+        except:
+            pass
+        self.val_util_predictions = xr.concat([self.val_util_predictions, track_util_result], dim="tid")
+        self.val_nlvl_predictions = xr.concat([self.val_nlvl_predictions, track_nlvl_result], dim="tid")
+        return None
+
+    
+    def get_util_roc_auc(self, full_tid, track_util_output):
+        track_lmeasure = self.val_ds.scores.sel(tid=full_tid).max('layer').squeeze().to_numpy().flatten()
+        track_good_combos = [track_lmeasure.max() - l <= 0.02 for l in track_lmeasure]
+        # track_good_combos = [r <= 6 for r in ss.rankdata(track_lmeasure)]
+        try:
+            # Some tracks are degenerate, and has only 1 class in track_good_combos. roc_auc not defined in such cases.
+            return roc_auc_score(track_good_combos, track_util_output)
+        except:
+            print(full_tid, 'failed roc_auc due to single class')
+            return 0.5
+
+
+    def on_validation_epoch_end(self):
+        self.val_util_predictions = self.val_util_predictions.dropna(dim="tid").sortby('tid')
+        self.val_nlvl_predictions = self.val_nlvl_predictions.dropna(dim="tid").sortby('tid')
+
+        if self.trainer.world_size > 1:
+            # Gather xarray.DataArray objects from all ranks
+            gathered_val_util_predictions = [None] * self.trainer.world_size
+            gathered_val_nlvl_predictions = [None] * self.trainer.world_size
+            torch.distributed.all_gather_object(gathered_val_util_predictions, self.val_util_predictions)
+            torch.distributed.all_gather_object(gathered_val_nlvl_predictions, self.val_nlvl_predictions)
+            self.val_util_predictions = xr.concat(gathered_val_util_predictions, dim='tid').sortby('tid')
+            self.val_nlvl_predictions = xr.concat(gathered_val_nlvl_predictions, dim='tid').sortby('tid')
+        
+        tid_subset = self.val_util_predictions.tid
+        if self.val_ds.name in ['spam']:
+            return self.val_util_predictions
+        ds_score = self.val_ds.scores.sel(tid=tid_subset).max('layer').sortby('tid').squeeze()
+        
+        net_feat_picks = self.val_util_predictions.argmax(dim=['rep_ftype', 'loc_ftype'])
+        orc_feat_picks = ds_score.argmax(dim=['rep_ftype', 'loc_ftype'])
+        boa_feat_picks = ds_score.mean('tid').argmax(dim=['rep_ftype', 'loc_ftype'])
+        
+        # Logging average utility scores
+        net_pick = ds_score.isel(net_feat_picks)
+        boa_pick = ds_score.isel(boa_feat_picks)
+        orc_pick = ds_score.isel(orc_feat_picks)
+        self.log('net pick', net_pick.mean().item(), sync_dist=True)
+        self.log('net_feat orc_lvl', net_pick.mean().item(), sync_dist=True)
+        self.log('boa_feat orc_lvl', boa_pick.mean().item(), sync_dist=True)
+        self.log('orc_feat orc_lvl', orc_pick.mean().item(), sync_dist=True)
+        self.log('net_feat orc_lvl std', net_pick.std().item(), sync_dist=True)
+        self.log('boa_feat orc_lvl std', boa_pick.std().item(), sync_dist=True)
+        self.log('orc_feat orc_lvl std', orc_pick.std().item(), sync_dist=True)
+        # print('net, boa, orc:', net_pick, boa_pick, orc_pick)
+        nlvl_outputs = self.val_nlvl_predictions.isel(orc_feat_picks).squeeze().to_numpy()
+        # Log table to wandb
+        try:
+            self.trainer.logger.experiment.log({'nlvl ouputs': wandb.Image(nlvl_outputs)})
+            self.log_wandb_table(tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks)
+        except:
+            print('could not log to wandb')
+        
+        return self.val_util_predictions
+
+
+    def log_wandb_table(self, tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks):
+        # Logging to wandb table
+        val_wandb_table = wandb.Table(columns = [
+            'tid', 'title',
+            # 'track/l_measure', 'track/net_util',
+            # 'track/annotation',
+            'net/score', 'net/feat', 
+            'boa/score', 'boa/feat', 
+            'orc/score', 'orc/feat', 
+            'best_lvl', 'net_lvl',
+            'util AUCROC'
+        ])
+
+        ds_score = self.val_ds.scores.sel(tid=tid_subset).max('layer').sortby('tid').squeeze()
+
+        for tid in self.val_util_predictions.tid:
+            # track_lmeasure_plot = wandb.Image(ssdm.viz.heatmap(ds_score.sel(tid=tid))[0])
+            # track_net_util_plot = wandb.Image(ssdm.viz.heatmap(self.val_util_predictions.sel(tid=tid))[0])
+            ds_module = ds_module_dict[re.sub('\d', '', tid.item())]
+            track = ds_module.Track(re.sub('\D', '', tid.item()))
+            # track_annotation_plot = wandb.Image(ssdm.viz.anno_meet_mats(track)[0])
+            ssdm.viz.plt.close('all')
+            track_util_output = self.val_util_predictions.sel(tid=tid).to_numpy().flatten()
+
+            val_wandb_table.add_data(
+                tid.item(), track.title,
+                # track_lmeasure_plot, track_net_util_plot,
+                # track_annotation_plot,
+                ds_score.isel(net_feat_picks).sel(tid=tid).item(), 
+                ds_score.isel(net_feat_picks).sel(tid=tid).rep_ftype.item() + '_' + ds_score.isel(net_feat_picks).sel(tid=tid).loc_ftype.item(),
+                ds_score.isel(boa_feat_picks).sel(tid=tid).item(), 
+                ds_score.isel(boa_feat_picks).sel(tid=tid).rep_ftype.item() + '_' + ds_score.isel(boa_feat_picks).sel(tid=tid).loc_ftype.item(),
+                ds_score.isel(orc_feat_picks).sel(tid=tid).item(), 
+                ds_score.isel(orc_feat_picks).sel(tid=tid).rep_ftype.item() + '_' + ds_score.isel(orc_feat_picks).sel(tid=tid).loc_ftype.item(),
+                self.val_ds.scores.sel(tid=tid_subset).squeeze().isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item(), 
+                self.val_nlvl_predictions.isel(orc_feat_picks).sel(tid=tid).idxmax('layer').item(),
+                self.get_util_roc_auc(tid, track_util_output)
+            )
+        self.trainer.logger.experiment.log({'validation results': val_wandb_table})
+        return None
+    
+    def configure_optimizers(self):
+        grouped_parameters = [
+            {
+                "params": [p for n, p in self.named_parameters() if 'bias' not in n and 'conv' not in n],
+                "weight_decay": 0.1,
+            },
+            {
+                "params": [p for n, p in self.named_parameters() if 'bias' not in n and 'conv' in n],
+                "weight_decay": 0.005,
             },
             {
                 "params": [p for n, p in self.named_parameters() if 'bias' in n],
@@ -411,7 +770,7 @@ class LitMultiModel(L.LightningModule):
             step_size_up=3000
         )
 
-        return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 1}]
+        return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 3}]
 
 
 # New validation dataloaders...
@@ -517,6 +876,7 @@ class HybridPairDM(L.LightningDataModule):
             self.val_infer_ds = ConcatDataset(val_ds_list)
             self.val_infer_ds.scores = xr.concat(score_list, dim='tid')
             self.val_infer_ds.vmeasures = xr.concat(vmeasure_list, dim='tid')
+            self.val_infer_ds.AVAL_FEAT_TYPES = val_ds_list[0].AVAL_FEAT_TYPES
 
         if stage == 'validate':
             val_ds_list, score_list, vmeasure_list = [], [], []
@@ -527,6 +887,9 @@ class HybridPairDM(L.LightningDataModule):
             self.val_infer_ds = ConcatDataset(val_ds_list)
             self.val_infer_ds.scores = xr.concat(score_list, dim='tid')
             self.val_infer_ds.vmeasures = xr.concat(vmeasure_list, dim='tid')
+            self.val_infer_ds.AVAL_FEAT_TYPES = val_ds_list[0].AVAL_FEAT_TYPES
+        
+        
 
     def train_dataloader(self):
         return DataLoader(
@@ -543,7 +906,7 @@ class HybridPairDM(L.LightningDataModule):
 
 def run_inference(model_path, dataset_id='rwcpop', split='test', project='ssdm_test'):
     # Run inference on given dataset split with model and log to wandb.
-    ds_module_dict = dict(jsd = ssdm.jsd, slm = ssdm.slm, hmx = ssdm.hmx, rwcpop = ssdm.rwcpop)
+    # ds_module_dict = dict(jsd = ssdm.jsd, slm = ssdm.slm, hmx = ssdm.hmx, rwcpop = ssdm.rwcpop)
     if dataset_id == 'all':
         dm = HybridPairDM(ds_modules=[ds_module_dict[ds] for ds in ds_module_dict], perf_margin=0)
     else:
@@ -563,6 +926,14 @@ def run_inference(model_path, dataset_id='rwcpop', split='test', project='ssdm_t
     return validator 
 
 
+def debug_trinity(name='debug'):
+    wandb_logger = L.pytorch.loggers.WandbLogger(project='debug', name=name)
+    dm = HybridPairDM(ds_modules=[ds_module_dict[ds] for ds in ds_module_dict], perf_margin=0.05)
+    model = LitMultiModel(training_loss_mode='duo', branch_off='late', entropy_scale=0.05)
+    trainer = L.pytorch.Trainer(max_epochs=1, logger=wandb_logger)
+    return trainer, model, dm
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Training Util Model')
     parser.add_argument('date', help='just a marker really, can be any text but mmdd is the intension')
@@ -570,14 +941,15 @@ if __name__ == '__main__':
     parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
     kwargs = parser.parse_args()
 
-    margin, ets, filter_multiple = list(itertools.product(
-        [0.03, 0.08, 0],
+    margin, ets, filter_multiple, ds = list(itertools.product(
         [0.05],
-        [1, 2],
+        [0.05],
+        [1],
+        ['all', 'hmx', 'jsd', 'rwcpop', 'slm'],
     ))[int(kwargs.config_idx)]
 
     loss_mode = 'duo'
-    ds = 'all'
+    # ds = 'rwcpop'
     branch_off = 'late'
 
     # initialise the wandb logger and name your wandb project
@@ -587,21 +959,22 @@ if __name__ == '__main__':
         wandb_logger.experiment.config.update(dict(margin=margin, ds=ds))
 
     checkpoint_callback = ModelCheckpoint(
-        monitor='net pick',  # The metric to monitor
+        monitor='val roc_auc',  # The metric to monitor
         dirpath=f'checkpoints/{ds}{margin}{loss_mode}{branch_off}/',  # Directory to save the checkpoints
-        filename='{epoch:02d}-{net pick:.4f}',  # Naming convention for checkpoints
+        filename='{epoch:02d}-{val roc_auc:.4f}',  # Naming convention for checkpoints
         save_top_k=15,  # Save only the best model based on the monitored metric
         mode='max',  # Mode to determine if a lower or higher metric is better
         save_last=True  # Optionally save the last epoch model as well
     )
 
     trainer = L.pytorch.Trainer(
-        max_epochs = 30,
-        max_steps = 50 * 1000,
+        max_epochs = 50,
+        max_steps = 5000 * 1000,
         devices = int(kwargs.num_gpu),
         accelerator = "gpu",
-        accumulate_grad_batches = 32,
+        accumulate_grad_batches = 8,
         logger = wandb_logger,
+        val_check_interval = 0.2,
         callbacks = [TQDMProgressBar(refresh_rate=500),
                      LearningRateMonitor(logging_interval='step'),
                      checkpoint_callback]

@@ -16,5 +16,8 @@ from . import harmonix as hmx
 from . import salami as slm
 from . import jsd
 from . import rwcpop
+from . import spam
+
+from . import scanner_lightning as scl
 
 from .expand_hier import expand_hierarchy

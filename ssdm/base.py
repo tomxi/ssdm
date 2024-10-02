@@ -244,7 +244,7 @@ class Track(object):
         return ssm
     
     
-    def path_sim(self, feature='mfcc', distance='sqeuclidean', add_noise=True, n_steps=6, delay=2, sigma_percentile=95, recompute=False, beat_sync=False): 
+    def path_sim(self, feature='mfcc', distance='sqeuclidean', add_noise=True, n_steps=6, delay=2, sigma_percentile=95, recompute=True, beat_sync=False): 
         path_sim_info_str = f'pathsim_{feature}_{distance}'
         feat_info_str = f'ns{n_steps}xd{delay}xap{sigma_percentile}{"_n" if add_noise else ""}{"_bsync" if beat_sync else ""}'
         pathsim_path = os.path.join(
@@ -306,6 +306,7 @@ class Track(object):
                                  beat_sync=beat_sync,
                                  add_noise=config['add_noise'],
                                  n_steps = config['n_steps'],
+                                 recompute=recompute,
                                  delay=config['delay'])
         
         if path_sim.shape[0] != rep_ssm.shape[0] - 1:
@@ -314,7 +315,7 @@ class Track(object):
 
 
     def embedded_rec_mat(self, feat_combo=dict(), lap_norm='random_walk', beat_sync=True, recompute=False):
-        beat_suffix = {"_bsync" if beat_sync else ""}
+        beat_suffix = "_bsync" if beat_sync else ""
         save_path = os.path.join(self.output_dir, f'evecs/{self.tid}_rep{feat_combo["rep_ftype"]}_loc{feat_combo["loc_ftype"]}_{lap_norm}{beat_suffix}.npy')
         if not recompute:
             try:
@@ -322,7 +323,7 @@ class Track(object):
             except:
                 recompute = True
         
-        rec_mat = self.combined_rec_mat(config_update=feat_combo, beat_sync=beat_sync)
+        rec_mat = self.combined_rec_mat(config_update=feat_combo, beat_sync=beat_sync, recompute=recompute)
         degree_matrix = np.diag(np.sum(rec_mat, axis=1))
         unnormalized_laplacian = degree_matrix - rec_mat
         # Compute the Random Walk normalized Laplacian matrix
@@ -616,6 +617,7 @@ class InferDS(Dataset):
         self.tids.sort()
         self.scores = self.get_scores()
         self.vmeasures = self.get_vmeasures()
+        self.AVAL_FEAT_TYPES = ssdm.AVAL_FEAT_TYPES
         # all_samples = list(itertools.product(
         #     self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES
         # ))
@@ -649,8 +651,8 @@ class InferDS(Dataset):
 
         data_list = []
         feat_pair_list = []
-        for rep_feat in ssdm.AVAL_FEAT_TYPES:
-            for loc_feat in ssdm.AVAL_FEAT_TYPES:
+        for rep_feat in self.AVAL_FEAT_TYPES:
+            for loc_feat in self.AVAL_FEAT_TYPES:
                 first_evecs = self.ds_module.Track(tid=tid).embedded_rec_mat(
                     feat_combo=dict(rep_ftype=rep_feat, loc_ftype=loc_feat), 
                     lap_norm='random_walk', beat_sync=True,

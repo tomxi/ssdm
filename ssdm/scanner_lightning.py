@@ -279,9 +279,9 @@ class LitMultiModel(L.LightningModule):
         if self.training_loss_mode == 'util':
             return ranking_loss + lvl_loss * 1e-8
         elif self.training_loss_mode == 'nlvl':
-            return ranking_loss * 1e-8 + lvl_loss - entropy * self.entropy_scale
+            return ranking_loss * 1e-8 + lvl_loss + torch.exp(-entropy)
         elif self.training_loss_mode == 'duo':
-            return ranking_loss + lvl_loss - entropy * self.entropy_scale
+            return ranking_loss + lvl_loss + torch.exp(-entropy)
         else:
             return None
 
@@ -325,14 +325,11 @@ class LitMultiModel(L.LightningModule):
             track_nlvl_result.loc[full_tid, rep_feat, loc_feat] = nlvl.cpu().numpy().squeeze()
 
         track_util_output = track_util_result.loc[full_tid].squeeze().to_numpy().flatten()
-        try:
-            roc_auc = self.get_util_roc_auc(full_tid, track_util_output)
-            self.log('val roc_auc', roc_auc, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
-        except:
-            print('roc failed')
+        roc_auc = self.get_util_roc_auc(full_tid, track_util_output)
+        self.log('val roc_auc', roc_auc, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
         self.val_util_predictions = xr.concat([self.val_util_predictions, track_util_result], dim="tid")
         self.val_nlvl_predictions = xr.concat([self.val_nlvl_predictions, track_nlvl_result], dim="tid")
-        return None
+        return roc_auc
 
     
     def get_util_roc_auc(self, full_tid, track_util_output):
@@ -445,7 +442,7 @@ class LitMultiModel(L.LightningModule):
         optimizer = optim.AdamW(grouped_parameters)
         lr_scheduler = optim.lr_scheduler.CyclicLR(
             optimizer, 
-            base_lr=2e-6, max_lr=1e-2, 
+            base_lr=1e-6, max_lr=5e-3, 
             cycle_momentum=False, mode='triangular2', 
             step_size_up=5000
         )
@@ -746,7 +743,8 @@ class LitMultiModel914n(L.LightningModule):
             )
         self.trainer.logger.experiment.log({'validation results': val_wandb_table})
         return None
-    
+
+
     def configure_optimizers(self):
         grouped_parameters = [
             {
@@ -943,7 +941,7 @@ if __name__ == '__main__':
 
     margin, ets, filter_multiple, ds = list(itertools.product(
         [0.05],
-        [0.05],
+        [0.1],
         [1],
         ['all', 'hmx', 'jsd', 'rwcpop', 'slm'],
     ))[int(kwargs.config_idx)]
@@ -968,8 +966,8 @@ if __name__ == '__main__':
     )
 
     trainer = L.pytorch.Trainer(
-        max_epochs = 50,
-        max_steps = 5000 * 1000,
+        max_epochs = 30,
+        max_steps = 300 * 1000,
         devices = int(kwargs.num_gpu),
         accelerator = "gpu",
         accumulate_grad_batches = 8,

@@ -267,8 +267,8 @@ class LitMultiModel(L.LightningModule):
             entropy_accumulator += entropy
         if batch['x2_rank'] > 8 and batch['x1_rank'] > 8: # This is a hack loop to makesure DDP doesn't complain about unsued parameters
             lvl_loss, entropy = self.lvl_loss_fn(nlvl_est[0].view(1, 16), batch['x1_layer_score'].view(1, 16))
-            lvl_loss_accumulator += lvl_loss * 1e-8
-            entropy_accumulator += entropy * 1e-8
+            lvl_loss_accumulator += lvl_loss * 0.0
+            entropy_accumulator += entropy * 0.0
 
         lvl_loss = lvl_loss_accumulator
         entropy = entropy_accumulator
@@ -277,11 +277,11 @@ class LitMultiModel(L.LightningModule):
         self.log('entropy', entropy, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
 
         if self.training_loss_mode == 'util':
-            return ranking_loss + lvl_loss * 1e-8
+            return ranking_loss + lvl_loss * 0.0
         elif self.training_loss_mode == 'nlvl':
-            return ranking_loss * 1e-8 + lvl_loss + torch.exp(-entropy)
+            return ranking_loss * 0.0 + lvl_loss - entropy * self.entropy_scale
         elif self.training_loss_mode == 'duo':
-            return ranking_loss + lvl_loss + torch.exp(-entropy)
+            return ranking_loss + lvl_loss - entropy * self.entropy_scale
         else:
             return None
 
@@ -442,7 +442,7 @@ class LitMultiModel(L.LightningModule):
         optimizer = optim.AdamW(grouped_parameters)
         lr_scheduler = optim.lr_scheduler.CyclicLR(
             optimizer, 
-            base_lr=1e-6, max_lr=5e-3, 
+            base_lr=1e-6, max_lr=1e-2, 
             cycle_momentum=False, mode='triangular2', 
             step_size_up=5000
         )
@@ -694,12 +694,9 @@ class LitMultiModel914n(L.LightningModule):
         # print('net, boa, orc:', net_pick, boa_pick, orc_pick)
         nlvl_outputs = self.val_nlvl_predictions.isel(orc_feat_picks).squeeze().to_numpy()
         # Log table to wandb
-        try:
+        if self.global_rank == 0:
             self.trainer.logger.experiment.log({'nlvl ouputs': wandb.Image(nlvl_outputs)})
-            self.log_wandb_table(tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks)
-        except:
-            print('could not log to wandb')
-        
+            self.log_wandb_table(tid_subset, net_feat_picks, boa_feat_picks, orc_feat_picks)        
         return self.val_util_predictions
 
 
@@ -941,7 +938,7 @@ if __name__ == '__main__':
 
     margin, ets, filter_multiple, ds = list(itertools.product(
         [0.05],
-        [0.1],
+        [0.05],
         [1],
         ['all', 'hmx', 'jsd', 'rwcpop', 'slm'],
     ))[int(kwargs.config_idx)]

@@ -104,9 +104,12 @@ class InputSizeAwareConv2d(nn.Module):
         if self.conv.bias is not None:
             self.conv.bias.register_hook(hook_fn)
 
+class StructureTransformer(L.LightningModule):
+    def __init__(self):
+        pass
 
 class LitMultiModel(L.LightningModule):
-    def __init__(self, training_loss_mode='duo', branch_off='early', norm_cnn_grad=True, entropy_scale=0.01, x_conv_filters=1):
+    def __init__(self, training_loss_mode='duo', branch_off='early', norm_cnn_grad=True, entropy_scale=0.01):
         super().__init__()
         self.training_loss_mode = training_loss_mode # 'util', 'nlvl', 'duo', 'triple'
         self.branch_off = branch_off # 'early' or 'late'
@@ -118,7 +121,6 @@ class LitMultiModel(L.LightningModule):
         else:
             Conv2d = nn.Conv2d
 
-        n = x_conv_filters
         self.convlayers1 = nn.Sequential(
             Conv2d(16, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
             Conv2d(32, 32, kernel_size=5, padding='same', groups=16, bias=False), nn.InstanceNorm2d(32, affine=True), nn.SiLU(),
@@ -936,11 +938,10 @@ if __name__ == '__main__':
     parser.add_argument('config_idx', help='which config to use. it will get printed, but see .py file for the list itself')
     kwargs = parser.parse_args()
 
-    margin, ets, filter_multiple, ds = list(itertools.product(
+    margin, ets, ds = list(itertools.product(
         [0.05],
         [0.05],
-        [1],
-        ['all', 'hmx', 'jsd', 'rwcpop', 'slm'],
+        ['all', 'hmx', 'slm', 'rwcpop', 'jsd'],
     ))[int(kwargs.config_idx)]
 
     loss_mode = 'duo'
@@ -948,7 +949,7 @@ if __name__ == '__main__':
     branch_off = 'late'
 
     # initialise the wandb logger and name your wandb project
-    wandb_logger = L.pytorch.loggers.WandbLogger(project='ssdm3', name=kwargs.date[-4:]+ds+str(margin)+loss_mode+'_m'+str(filter_multiple)+'_ets'+str(ets))
+    wandb_logger = L.pytorch.loggers.WandbLogger(project='ssdm3', name=kwargs.date[-4:]+ds+str(margin)+loss_mode+'_ets'+str(ets))
     # Log things
     if rank_zero_only.rank == 0:
         wandb_logger.experiment.config.update(dict(margin=margin, ds=ds))
@@ -984,7 +985,6 @@ if __name__ == '__main__':
         branch_off=branch_off,
         norm_cnn_grad=True,
         entropy_scale=ets,
-        x_conv_filters=filter_multiple,
     )
     wandb_logger.watch(lit_net, log='all', log_graph=False)
     trainer.fit(lit_net, datamodule=dm)

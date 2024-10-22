@@ -125,7 +125,7 @@ def path_ref(track, **path_ref_args):
 
 
 # Visualize a multi level segmentation jams.Annotation
-def multi_seg(multi_seg, hier_depth=None):
+def multi_seg(multi_seg, hier_depth=None, figsize=(10, 2.4), **eval_kwargs):
     ## From ADOBE musicsection
     def plot_levels(inters, labels, figsize):
         """Plots the given hierarchy."""
@@ -134,19 +134,19 @@ def multi_seg(multi_seg, hier_depth=None):
         if N == 1:
             axs = [axs]
         for level in range(N):
-            display.segments(np.asarray(inters[level]), labels[level], ax=axs[level])
+            display.segments(np.asarray(inters[level]), labels[level], ax=axs[level], edgecolor='white', **eval_kwargs)
             axs[level].set_yticks([0.5])
-            axs[level].set_yticklabels([N - level])
+            axs[level].set_yticklabels([level + 1])
             axs[level].set_xticks([])
         axs[0].xaxis.tick_top()
         fig.subplots_adjust(top=0.8)  # Otherwise savefig cuts the top
         
         return fig, axs
 
-    def plot_segmentation(seg, figsize=(10, 2.4)):
+    def plot_segmentation(seg, figsize=figsize):
         inters = []
         labels = []
-        for level in seg[::-1]:
+        for level in seg:
             inters.append(level[0])
             labels.append(level[1])
 

@@ -26,6 +26,29 @@ class Track(base.Track):
         return len(self.jam().search(namespace='segment_salami_function'))
 
 
+    def ref(self, mode='expand', ts_mode='beat', anno_id=0):
+        anno_layers = []
+        # print('haha')
+        if mode == 'function':
+            namespaces = ['segment_salami_function']
+        else:
+            namespaces = ['segment_salami_upper', 'segment_salami_lower']
+
+        for n in namespaces:
+            anno = self.jam().search(namespace=n)
+            anno_layers.append(base.fill_out_anno(
+                anno[anno_id], self.ts(mode=ts_mode)
+            ))
+
+        if mode == 'expand':
+            expanded_layers = []
+            for l in anno_layers:
+                # print(l)
+                expanded_layers += base.expand_hierarchy(l, dataset=self.ds_name, always_include=False)
+            return ssdm.openseg2multi(expanded_layers)
+        elif mode == 'normal':
+            return ssdm.openseg2multi(anno_layers)
+
     def adobe(
         self,
     ) -> jams.Annotation:

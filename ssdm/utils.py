@@ -6,7 +6,7 @@ from torch import nn
 
 from sklearn import preprocessing, cluster
 from sklearn.model_selection import train_test_split
-from scipy import sparse
+from scipy import sparse, stats
 from tqdm import tqdm
 
 import random, os
@@ -34,6 +34,8 @@ def anno_to_meet(
     anno: jams.Annotation,  # multi-layer
     ts: list,
     num_layers: int = None,
+    mode: str = 'max',
+    row_normalize: bool = False,
 ) -> np.array:
     """
     returns a square mat that's the meet matrix
@@ -67,13 +69,27 @@ def anno_to_meet(
             le.fit_transform([l if len(l) > 0 else 'NL' for l in lvl_label])
         )
 
-    # put meet mat of each level of hierarchy in axis=0           
-    for l in range(num_layers):
-        meet_mat_per_level[l] = np.equal.outer(hier_encoded_labels[l], hier_encoded_labels[l]).astype('float') * (l + 1)
-
-    # get the deepest level matched
-    return np.max(meet_mat_per_level, axis=0)
-
+    if mode == 'max':
+        # put meet mat of each level of hierarchy in axis=0           
+        for l in range(num_layers):
+            meet_mat_per_level[l] = np.equal.outer(hier_encoded_labels[l], hier_encoded_labels[l]).astype('float') * (l + 1)
+            if row_normalize:
+                meet_mat_per_level[l] /= meet_mat_per_level[l].sum(axis=0)
+        # get the deepest level matched
+        return np.max(meet_mat_per_level, axis=0)
+    elif mode == 'mean':
+        for l in range(num_layers):
+            meet_mat_per_level[l] = np.equal.outer(hier_encoded_labels[l], hier_encoded_labels[l]).astype('float')
+            if row_normalize:
+                meet_mat_per_level[l] /= meet_mat_per_level[l].sum(axis=0)
+        return np.mean(meet_mat_per_level, axis=0)
+    else:
+        for l in range(num_layers):
+            meet_mat_per_level[l] = np.equal.outer(hier_encoded_labels[l], hier_encoded_labels[l]).astype('float')
+            if row_normalize:
+                meet_mat_per_level[l] /= meet_mat_per_level[l].sum(axis=0)
+        return meet_mat_per_level
+       
 
 def meet_mat_no_diag(track, rec_mode='expand', diag_mode='refine', anno_id=0):
     diag_block = ssdm.anno_to_meet(track.ref(mode=diag_mode, anno_id=anno_id), ts=track.ts())
@@ -179,15 +195,16 @@ def quantize(data, quantize_method='percentile', quant_bins=8):
         # print(bins)
         quant_data_flat = np.digitize(data.flatten(), bins=bins, right=False)
     elif quantize_method == 'kmeans':
-        kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins)
+        kmeans_clusterer = cluster.KMeans(n_clusters=quant_bins, n_init=50, max_iter=500)
         quantized_non_zeros = kmeans_clusterer.fit_predict(data[data>0][:, None])
         # make sure the kmeans group are sorted with asending centroid and relabel
-        new_ccenter_order = np.argsort(kmeans_clusterer.cluster_centers_.flatten())
-        nco = new_ccenter_order[new_ccenter_order]
+        
+        nco = stats.rankdata(kmeans_clusterer.cluster_centers_.flatten())
+        # print(kmeans_clusterer.cluster_centers_, nco)
         quantized_non_zeros = np.array([nco[g] for g in quantized_non_zeros], dtype=int)
 
         quant_data = np.zeros(data.shape)
-        quant_data[data>0] = quantized_non_zeros + 1
+        quant_data[data>0] = quantized_non_zeros
         quant_data_flat = quant_data.flatten()
     elif quantize_method is None:
         quant_data_flat = data.flatten()

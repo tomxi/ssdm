@@ -148,34 +148,21 @@ class Track(object):
 
 
     def ref(self, mode='expand', ts_mode='beat', anno_id=0):
-        try:
-            seg_anns = self.jam().search(namespace='segment_salami_upper')
-            assert len(seg_anns) != 0
-        except:
-            seg_anns = self.jam().search(namespace='segment_open')
-            assert len(seg_anns) != 0
+        # try:
+        #     seg_anns = self.jam().search(namespace='segment_salami_upper')
+        #     assert len(seg_anns) != 0
+        # except:
+        seg_anns = self.jam().search(namespace='segment_open')
+        assert len(seg_anns) != 0
 
-        def fill_out_anno(anno, ts):
-            anno_start_time = anno.data[0].time
-            anno_end_time = anno.data[-1].time + anno.data[-1].duration
-
-            last_frame_time = ts[-1]
-            if anno_start_time != 0:
-                anno.append(value='NL', time=0, 
-                            duration=anno_start_time, confidence=1
-                        )
-            if anno_end_time < last_frame_time:
-                anno.append(value='NL', time=anno_end_time, 
-                            duration=last_frame_time - anno_end_time, confidence=1
-                        )
-            return anno
+        
 
         anno = fill_out_anno(seg_anns[anno_id], self.ts(mode=ts_mode))
         if mode == 'expand':
-            return ssdm.openseg2multi(expand_hierarchy(anno, dataset=self.ds_name, always_include=True))
+            return ssdm.openseg2multi(expand_hierarchy(anno, dataset=self.ds_name, always_include=False))
         elif mode == 'normal':
             if self.ds_name == 'jsd':
-                return ssdm.openseg2multi([expand_hierarchy(anno, dataset=self.ds_name, always_include=True)[-1]])
+                return ssdm.openseg2multi([expand_hierarchy(anno, dataset=self.ds_name, always_include=False)[-1]])
             else:
                 return ssdm.openseg2multi([anno])
 
@@ -868,3 +855,17 @@ def delay_embed(
         delay=delay
     )
 
+def fill_out_anno(anno, ts):
+        anno_start_time = anno.data[0].time
+        anno_end_time = anno.data[-1].time + anno.data[-1].duration
+
+        last_frame_time = ts[-1]
+        if anno_start_time != 0:
+            anno.append(value='NL', time=0, 
+                        duration=anno_start_time, confidence=1
+                    )
+        if anno_end_time < last_frame_time:
+            anno.append(value='NL', time=anno_end_time, 
+                        duration=last_frame_time - anno_end_time, confidence=1
+                    )
+        return anno

@@ -130,7 +130,7 @@ def multi_seg(multi_seg, hier_depth=None, figsize=(10, 2.4), **eval_kwargs):
     def plot_levels(inters, labels, figsize):
         """Plots the given hierarchy."""
         N = len(inters)
-        fig, axs = plt.subplots(N, figsize=figsize) # add 1 for time axis
+        fig, axs = plt.subplots(N, figsize=figsize) 
         if N == 1:
             axs = [axs]
         for level in range(N):
@@ -138,6 +138,9 @@ def multi_seg(multi_seg, hier_depth=None, figsize=(10, 2.4), **eval_kwargs):
             axs[level].set_yticks([0.5])
             axs[level].set_yticklabels([level + 1])
             axs[level].set_xticks([])
+            axs[level].yaxis.tick_right()
+            axs[level].yaxis.set_label_position("right")
+
         axs[0].xaxis.tick_top()
         fig.subplots_adjust(top=0.8)  # Otherwise savefig cuts the top
         
@@ -151,7 +154,7 @@ def multi_seg(multi_seg, hier_depth=None, figsize=(10, 2.4), **eval_kwargs):
             labels.append(level[1])
 
         fig, axs = plot_levels(inters, labels, figsize)
-        fig.text(0.08, 0.47, 'Segmentation Levels', va='center', rotation='vertical')
+        # fig.text(0.08, 0.47, 'Segmentation Levels', va='center', rotation='vertical')
         return fig, axs
 
     hier = ssdm.multi2hier(multi_seg)[:hier_depth]

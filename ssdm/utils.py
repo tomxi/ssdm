@@ -32,20 +32,28 @@ mir_eval.segment.validate_structure = noop4
 
 def anno_to_meet(
     anno: jams.Annotation,  # multi-layer
-    ts: list,
+    bs: list,
     num_layers: int = None,
     mode: str = 'max',
-    row_normalize: bool = False,
+    normalize: bool = False,
+    density: bool = False,
 ) -> np.array:
     """
     returns a square mat that's the meet matrix
+    The matrix sums to len(ts) * len(ts), ie it's entry mean is 1 if normalized.
     """
+    ts = (bs[1:] + bs[:-1]) / 2 # Take mid-point of segment
     #sample the annotation first and input cleaning:
     sampled_anno = anno.to_samples(ts)
     if num_layers is None:
         num_layers = len(sampled_anno[0])
     n_frames = len(ts)
     
+    # Create the area matrix as the outer product of seg_dur with itself, for normalization
+    if density:
+        seg_dur = bs[1:] - bs[:-1]
+        area_matrix = np.outer(seg_dur, seg_dur)
+
     # initialize a 3d array to store all the meet matrices for each layer
     meet_mat_per_level = np.zeros((num_layers, n_frames, n_frames))
 
@@ -73,27 +81,33 @@ def anno_to_meet(
         # put meet mat of each level of hierarchy in axis=0           
         for l in range(num_layers):
             meet_mat_per_level[l] = np.equal.outer(hier_encoded_labels[l], hier_encoded_labels[l]).astype('float') * (l + 1)
-            if row_normalize:
-                meet_mat_per_level[l] /= meet_mat_per_level[l].sum(axis=0)
+            if normalize:
+                meet_mat_per_level[l] /= meet_mat_per_level[l].sum()
+                if density:
+                    meet_mat_per_level[l] /= area_matrix
         # get the deepest level matched
         return np.max(meet_mat_per_level, axis=0)
     elif mode == 'mean':
         for l in range(num_layers):
             meet_mat_per_level[l] = np.equal.outer(hier_encoded_labels[l], hier_encoded_labels[l]).astype('float')
-            if row_normalize:
-                meet_mat_per_level[l] /= meet_mat_per_level[l].sum(axis=0)
+            if normalize:
+                meet_mat_per_level[l] /= meet_mat_per_level[l].sum()
+                if density:
+                    meet_mat_per_level[l] /= area_matrix
         return np.mean(meet_mat_per_level, axis=0)
     else:
         for l in range(num_layers):
             meet_mat_per_level[l] = np.equal.outer(hier_encoded_labels[l], hier_encoded_labels[l]).astype('float')
-            if row_normalize:
-                meet_mat_per_level[l] /= meet_mat_per_level[l].sum(axis=0)
+            if normalize:
+                meet_mat_per_level[l] /= meet_mat_per_level[l].sum()
+                if density:
+                    meet_mat_per_level[l] /= area_matrix
         return meet_mat_per_level
        
 
 def meet_mat_no_diag(track, rec_mode='expand', diag_mode='refine', anno_id=0):
-    diag_block = ssdm.anno_to_meet(track.ref(mode=diag_mode, anno_id=anno_id), ts=track.ts())
-    full_rec = ssdm.anno_to_meet(track.ref(mode=rec_mode, anno_id=anno_id), ts=track.ts())
+    diag_block = ssdm.anno_to_meet(track.ref(mode=diag_mode, anno_id=anno_id), bs=track.ts())
+    full_rec = ssdm.anno_to_meet(track.ref(mode=rec_mode, anno_id=anno_id), bs=track.ts())
     return (diag_block == 0) * full_rec
 
 

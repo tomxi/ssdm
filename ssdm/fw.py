@@ -10,7 +10,7 @@ from .utils import quantize, laplacian, anno_to_meet
 
 multi2lmm = anno_to_meet
 
-def hb2betas(hb, trim=True):
+def hb2betas(hb, trim=False):
     itvls = hb2intervals(hb)
     if trim:
         return [mir_eval.util.intervals_to_boundaries(i)[1:-1] for i in itvls]
@@ -55,7 +55,7 @@ def boundary_kde(boundaries, bw=0.25):
 
 # Building a KDE with boundaries, then sample the KDE 
 # using either sr or using a set of specified sampling points
-def boundary_salience(hier_intervals, trim=True, bw=0.25, sr=10, ts=None):
+def boundary_salience(hier_intervals, trim=False, bw=0.25, sr=10, ts=None):
     mir_eval.hierarchy.validate_hier_intervals(hier_intervals)
     # Get the start and end time of the whole anno
     start = hier_intervals[0][0][0]
@@ -84,7 +84,7 @@ def boundary_salience(hier_intervals, trim=True, bw=0.25, sr=10, ts=None):
     return boundary_salience_mat, ts
 
 
-def multi2bsm(multi_anno, trim=True, bw=0.25, sr=10, ts=None):
+def multi2bsm(multi_anno, trim=False, bw=0.25, sr=10, ts=None):
     itvls, lbls = multi2mireval(multi_anno)
     return boundary_salience(itvls, trim=trim, bw=bw, sr=sr, ts=ts)
 
@@ -195,7 +195,7 @@ def hb2multi(rated_b, lstar_d=None, monotonic_label=False):
 
 
 # More formatting
-def multi2hb_bsm(multi_anno, trim=True, bw=0.25, sr=10, **pickbsm_kwargs):
+def multi2hb_bsm(multi_anno, trim=False, bw=0.25, sr=10, **pickbsm_kwargs):
     bsm, ts = multi2bsm(multi_anno, trim=trim, bw=bw, sr=sr)
     full_bs = pick_bsm2hb(
         bsm, ts, **pickbsm_kwargs
@@ -206,14 +206,14 @@ def multi2hb_bsm(multi_anno, trim=True, bw=0.25, sr=10, **pickbsm_kwargs):
     return full_bs
 
 
-def multi2hb(multi_anno, trim=True):
+def multi2hb(multi_anno, trim=False):
     if trim:
         return lstars2hb(multi2lstars(multi_anno)[0])
     else:
         return lstars2hb(*multi2lstars(multi_anno))
 
 
-def hb2bsm(rated_b, trim=True, bw=0.25, sr=10, ts=None):
+def hb2bsm(rated_b, trim=False, bw=0.25, sr=10, ts=None):
     return multi2bsm(hb2multi(rated_b), trim=trim, bw=bw, sr=sr, ts=ts)
 
 

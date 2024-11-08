@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import librosa
 import matplotlib
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 from mir_eval import display
 import ssdm
@@ -9,7 +10,8 @@ import ssdm.formatting
 import ssdm.scluster as sc
 import holoviews as hv
 
-import json
+import itertools
+from cycler import cycler
 import torch
 from tqdm import tqdm
 
@@ -70,6 +72,7 @@ def lsd_meet_mat(track, config=dict(), beat_sync=False, layer_to_show=None):
     fig.colorbar(quadmesh, ax=ax)      
     return fig, ax
 
+
 def rec_mat(track, blocky=False, rec_diag=None, ax=None, **ssm_config):
     """
     blocky: bool = False, # if true, use low rank appoximation,
@@ -101,6 +104,7 @@ def rec_mat(track, blocky=False, rec_diag=None, ax=None, **ssm_config):
     else:
         return librosa.display.specshow(rec_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
 
+
 def path_sim(track, quant_bins=None, **path_sim_config):
     path_sim = track.path_sim(**path_sim_config)
 
@@ -111,6 +115,7 @@ def path_sim(track, quant_bins=None, **path_sim_config):
     fig, ax = plt.subplots(figsize=(6, 2))
     ax.plot(track.ts()[1:], path_sim)
     return fig, ax
+
 
 def path_ref(track, **path_ref_args):
     """
@@ -124,8 +129,116 @@ def path_ref(track, **path_ref_args):
     return fig, ax
 
 
+def assign_label_styles(labels, **kwargs):
+    labels = labels.copy()
+    unique_labels = []
+    while labels:
+        l = labels.pop()
+        if isinstance(l, list):
+            labels.extend(l)  
+        elif l not in unique_labels:
+            unique_labels.append(l)
+    unique_labels.sort()
+
+    if len(unique_labels) <= 80:
+        hatch_cycler = cycler(hatch=['',  '..', 'xx', 'O.',  '*',  '\\O', 'oo', 'xxO'])
+        fc_cycler = cycler(color=plt.get_cmap('tab10').colors)
+        p_cycler = hatch_cycler * fc_cycler
+    else:
+        hatch_cycler = cycler(hatch=['', 'oo', 'xx', 'O.', '*', '..', '\\', '\\O',
+                                     '--', 'oo--', 'xx--', 'O.--', '*--', '\\--', '\\O--'
+                                    ])
+        fc_cycler = cycler(color=plt.get_cmap('tab20').colors)
+        p_cycler = itertools.cycle(hatch_cycler * fc_cycler)
+    
+    seg_map=dict()
+    for lab, properties in zip(unique_labels, p_cycler):
+        style = {
+            k: v
+            for k, v in properties.items()
+            if k in ["color", "facecolor", "edgecolor", "linewidth", "hatch"]
+        }
+        # Swap color -> facecolor here so we preserve edgecolor on rects
+        if 'color' in style:
+            style.setdefault("facecolor", style["color"])
+            style.pop("color", None)
+        seg_map[lab] = dict(linewidth=1, edgecolor='white')
+        seg_map[lab].update(style)
+        seg_map[lab].update(kwargs)
+        seg_map[lab]["label"] = lab
+    return seg_map
+
+
+def segments(
+    intervals,
+    labels,
+    ax=None,
+    text=False,
+    style_map=None,
+):
+    if ax is None:
+        fig = plt.gcf(); ax = fig.gca()
+        ax.set_yticks([])
+    ax.set_xlim(intervals[0][0], intervals[-1][-1])
+
+    if style_map is None:
+        style_map = assign_label_styles(labels, edgecolor='white')
+    transform = ax.get_xaxis_transform()
+    
+    for ival, lab in zip(intervals, labels):
+        rect = ax.axvspan(ival[0], ival[1], ymin=0, ymax=1, **style_map[lab])
+        if text:
+            ann = ax.annotate(
+                lab,
+                xy=(ival[0], 1), xycoords=transform, xytext=(8, -10),
+                textcoords="offset points", va='top', clip_on=True, 
+                bbox=dict(boxstyle="round", facecolor="white")
+            )
+            ann.set_clip_path(rect)
+    return ax
+
+
+def multi_seg(ms_anno, figsize=(8, 3.2), reindex=True, legend_ncol=6, title=None, text=False):
+    """Plots the given multi_seg annotation.
+    """
+    hier = ssdm.formatting.multi2hier(ms_anno)
+    if reindex:
+        hier = sc.reindex(hier)
+    N = len(hier)
+    fig, axs = plt.subplots(N, figsize=figsize) 
+    if N == 1:
+        axs = [axs]
+
+    _, lbls = ssdm.formatting.hier2mireval(hier)
+    style_map = assign_label_styles(lbls)
+    legend_handles = [mpatches.Patch(**style) for style in style_map.values()]
+
+    for level, (itvl, lbl) in enumerate(hier):
+        segments(
+            itvl, lbl, ax=axs.flat[level], 
+            style_map=style_map, text=text
+        )
+        axs[level].set_yticks([0.5])
+        axs[level].set_yticklabels([level + 1])
+        xticks = axs[level].get_xticks()
+        axs[level].set_xticks([])
+        axs[level].yaxis.tick_right()
+        axs[level].yaxis.set_label_position("right")
+    # Show time axis on the last layer
+    axs[level].set_xticks(xticks)
+    axs[level].xaxis.set_major_formatter(librosa.display.TimeFormatter())
+
+    if legend_ncol:
+        fig.legend(handles=legend_handles, loc='lower center', ncol=legend_ncol, bbox_to_anchor=(0.5, -0.06 * (len(legend_handles)//legend_ncol + 2.2)))
+    fig.text(0.94, 0.47, 'Segmentation Levels', va='center', rotation='vertical')
+    fig.suptitle(title)
+    return fig, axs
+
+
+
+
 # Visualize a multi level segmentation jams.Annotation
-def multi_seg(multi_seg, hier_depth=None, figsize=(10, 2.4), **eval_kwargs):
+def old_multi_seg(multi_seg, hier_depth=None, figsize=(10, 2.4), **eval_kwargs):
     ## From ADOBE musicsection
     def plot_levels(inters, labels, figsize):
         """Plots the given hierarchy."""
@@ -239,91 +352,6 @@ def cube(cube, **kwargs):
         channel_imgs.append(view_channels_(cube, channel=channel, title=f'channel: {channel}', **kwargs))
 
     return hv.Layout(channel_imgs)
-
-
-def train_curve(json_path, weighted_loss=False):
-    with open(json_path) as f:
-        train_curves = json.load(f)
-
-    if weighted_loss:
-        train_loss_list = [pair[0] + pair[1] * 0.1 for pair in train_curves['train_loss']]
-        val_loss_list = [pair[0] + pair[1] * 0.1 for pair in train_curves['val_loss']]
-    else:
-        train_loss_list = train_curves['train_loss']
-        val_loss_list = train_curves['val_loss']
-
-    train_loss = hv.Curve(train_loss_list, label='Train loss')
-    val_loss = hv.Curve(val_loss_list, label='Val loss')
-
-
-    best_epoch = np.asarray(val_loss_list).argmin()
-    best_val_loss = np.asarray(val_loss_list).min()
-    best_epoch_line = hv.VLine(x=best_epoch)
-    best_val_text = hv.Text(
-        1, 1e-4, f"Best epoch {best_epoch}: val loss: {best_val_loss:.3f}"
-    ).opts(text_align='left', text_baseline='bottom')
-
-
-    return train_loss * val_loss * best_epoch_line * best_val_text
-
-
-def train_curve_multi_loss(json_path):
-    with open(json_path) as f:
-        train_curves = json.load(f)
-
-    util_train_loss = [pair[0] for pair in train_curves['train_loss']]
-    nlvl_train_loss = [pair[1] for pair in train_curves['train_loss']]
-    util_val_loss = [triplet[0] for triplet in train_curves['val_loss']]
-    nlvl_val_loss = [triplet[-1] for triplet in train_curves['val_loss']]
-
-    train_u_loss = hv.Curve(util_train_loss, label='train util')
-    val_u_loss = hv.Curve(util_val_loss, label='val util')
-
-    train_lvl_loss = hv.Curve(nlvl_train_loss, label='train n_lvl')
-    val_lvl_loss = hv.Curve(nlvl_val_loss, label='val n_lvl')
-
-    best_u_epoch = np.asarray(util_val_loss).argmin()
-    best_val_u_loss = np.asarray(util_val_loss).min()
-    best_u_epoch_line = hv.VLine(x=best_u_epoch)
-    
-
-    best_nlvl_epoch = np.asarray(nlvl_val_loss).argmin()
-    best_val_nlvl_loss = np.asarray(nlvl_val_loss).min()
-    best_nlvl_epoch_line = hv.VLine(x=best_nlvl_epoch)
-    boa_nlvl_baseline_val_l = hv.HLine(y=0.012391).opts(color='orange', line_width=1)
-    boa_nlvl_baseline_train_l = hv.HLine(y=0.010598).opts(color='navy', line_width=1)
-    boa_nlvl_baseline_val_pfc = hv.HLine(y=0.032466).opts(color='orange')
-    boa_nlvl_baseline_train_pfc = hv.HLine(y=0.031441).opts(color='navy')
-    baselines = boa_nlvl_baseline_val_l * boa_nlvl_baseline_train_l * boa_nlvl_baseline_val_pfc * boa_nlvl_baseline_train_pfc
-
-    best_val_text = hv.Text(
-        1, 0.3, 
-        f" Best util epoch {best_u_epoch}, loss: {best_val_u_loss:.3f}"
-    ).opts(text_align='left', text_baseline='bottom')
-    best_nlvl_text = hv.Text(
-        1, 2e-2, 
-        f" Best nlvl epoch {best_nlvl_epoch}, loss: {best_val_nlvl_loss:.3f}"
-    ).opts(text_align='left', text_baseline='bottom')
-
-    util_overlay = train_u_loss * val_u_loss * best_u_epoch_line * best_val_text
-    nlvl_overlay = train_lvl_loss * val_lvl_loss * best_nlvl_epoch_line * best_nlvl_text * baselines
-
-    return util_overlay, nlvl_overlay
-
-
-def train_curve_contrastive(json_path):
-    with open(json_path) as f:
-        train_curves = json.load(f)
-
-    util_train_loss = [triplet[0] for triplet in train_curves['train_loss']]
-    nlvl_train_loss = [triplet[1] for triplet in train_curves['train_loss']]
-    entropy_train_penalty = [-triplet[2] for triplet in train_curves['train_loss']]
-
-    train_u_loss = hv.Curve(util_train_loss, label='train util')
-    train_lvl_loss = hv.Curve(nlvl_train_loss, label='train n_lvl')
-    train_nlvl_entropy = hv.Curve(entropy_train_penalty, label='val util')
-
-    return train_u_loss + train_lvl_loss + train_nlvl_entropy
 
 
 def nlvl_est(ds, net, device='cuda:0', pos_only=True, plot=True, **img_kwargs):

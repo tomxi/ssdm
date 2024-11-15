@@ -4,6 +4,7 @@ import librosa
 import matplotlib
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 from mir_eval import display
 import ssdm
 import ssdm.formatting
@@ -214,19 +215,19 @@ def multi_seg(ms_anno, figsize=(8, 3.2), reindex=True, legend_ncol=6, title=None
     legend_handles = [mpatches.Patch(**style) for style in style_map.values()]
 
     for level, (itvl, lbl) in enumerate(hier):
-        segments(
-            itvl, lbl, ax=axs.flat[level], 
+        ax = segments(
+            itvl, lbl, ax=axs[level], 
             style_map=style_map, text=text
         )
-        axs[level].set_yticks([0.5])
-        axs[level].set_yticklabels([level + 1])
-        xticks = axs[level].get_xticks()
-        axs[level].set_xticks([])
-        axs[level].yaxis.tick_right()
-        axs[level].yaxis.set_label_position("right")
+        ax.set_yticks([0.5])
+        ax.set_yticklabels([level + 1])
+        ax.set_xticks([])
+        ax.yaxis.tick_right()
+        ax.yaxis.set_label_position("right")
+    
     # Show time axis on the last layer
-    axs[level].set_xticks(xticks)
-    axs[level].xaxis.set_major_formatter(librosa.display.TimeFormatter())
+    axs[-1].xaxis.set_major_locator(ticker.AutoLocator())
+    axs[-1].xaxis.set_major_formatter(librosa.display.TimeFormatter())
 
     if legend_ncol:
         fig.legend(handles=legend_handles, loc='lower center', ncol=legend_ncol, bbox_to_anchor=(0.5, -0.06 * (len(legend_handles)//legend_ncol + 2.2)))

@@ -53,6 +53,7 @@ def boundary_kde(boundaries, bw=0.25):
         kde = stats.gaussian_kde(boundaries, bw_method=kde_bw)
         return kde
 
+
 # Building a KDE with boundaries, then sample the KDE 
 # using either sr or using a set of specified sampling points
 def boundary_salience(hier_intervals, trim=False, bw=0.25, sr=10, ts=None):
@@ -114,6 +115,7 @@ def lstars2hb(lstars, T=None):
         boundary_count.update(bt)
     return dict(sorted(boundary_count.items()))
 
+
 # Peak picking happens here
 def pick_bsm2hb(boundary_salience_mat, ts, depth=None, pre_max=8, post_max=8, pre_avg=3, post_avg=3, delta=1e-3, wait=10):
     # Do peak picking on the row-wise average:
@@ -149,8 +151,6 @@ def hb2intervals(rated_b):
         # print(boundaries)
         intervals.append(mir_eval.util.boundaries_to_intervals(boundaries))
     return intervals
-
-
 
 
 def hb2lstars(hb, labs):

@@ -16,7 +16,7 @@ def multi2hier(anno)-> list:
 
 def hier2multi(hier) -> jams.Annotation:
     anno = jams.Annotation(namespace='multi_segment')
-    anno.duration = hier[0][-1][-1][-1]
+    anno.duration = hier[0][0][-1][-1]
     anno.time = hier[0][0][0][0]
     for layer, (intervals, labels) in enumerate(hier):
         for ival, label in zip(intervals, labels):

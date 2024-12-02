@@ -199,7 +199,7 @@ def segments(
     return ax
 
 
-def multi_seg(ms_anno, figsize=(8, 3.2), reindex=True, legend_ncol=6, title=None, text=False):
+def multi_seg(ms_anno, figsize=(8, 4), reindex=True, legend_ncol=6, title=None, text=False, y_label=True, x_label=True):
     """Plots the given multi_seg annotation.
     """
     hier = ssdm.formatting.multi2hier(ms_anno)
@@ -219,20 +219,27 @@ def multi_seg(ms_anno, figsize=(8, 3.2), reindex=True, legend_ncol=6, title=None
             itvl, lbl, ax=axs[level], 
             style_map=style_map, text=text
         )
-        ax.set_yticks([0.5])
-        ax.set_yticklabels([level + 1])
+        if y_label:
+            ax.set_yticks([0.5])
+            ax.set_yticklabels([level + 1])
+        else:
+            ax.set_yticks([])
         ax.set_xticks([])
         ax.yaxis.tick_right()
         ax.yaxis.set_label_position("right")
     
-    # Show time axis on the last layer
-    axs[-1].xaxis.set_major_locator(ticker.AutoLocator())
-    axs[-1].xaxis.set_major_formatter(librosa.display.TimeFormatter())
+    if x_label:
+        # Show time axis on the last layer
+        axs[-1].xaxis.set_major_locator(ticker.AutoLocator())
+        axs[-1].xaxis.set_major_formatter(librosa.display.TimeFormatter())
+        axs[-1].set_xlabel('time')
 
     if legend_ncol:
         fig.legend(handles=legend_handles, loc='lower center', ncol=legend_ncol, bbox_to_anchor=(0.5, -0.06 * (len(legend_handles)//legend_ncol + 2.2)))
-    fig.text(0.94, 0.47, 'Segmentation Levels', va='center', rotation='vertical')
-    fig.suptitle(title)
+    if y_label:
+        fig.text(0.94, 0.47, 'Segmentation Levels', va='center', rotation='vertical')
+    fig.suptitle(title, y=1.1)
+    fig.tight_layout()
     return fig, axs
 
 

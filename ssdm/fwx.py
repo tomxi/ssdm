@@ -85,7 +85,7 @@ class S:
 
     def plot(self, **kwargs):
         """Plot the segmentation."""
-        new_kwargs = dict(text=True, legend_ncol=0, figsize=(8, 1.5))
+        new_kwargs = dict(text=True, legend_ncol=0, figsize=(6, 0.9), y_label=False)
         new_kwargs.update(kwargs)
         return multi_seg(self.anno, **new_kwargs)
 
@@ -251,6 +251,7 @@ class H:
             lab, current_k = _eigen_gap_scluster(M, min_k=current_k)
             labs.append(lab)
         return H(itvls, labs, sr=self.sr, Bhat_bw=self.Bhat_bw)
+
 
 def _eigen_gap_scluster(M, k=None, min_k=1):
     # scluster with k groups. default is eigen gap.

@@ -8,7 +8,7 @@ def multi2hier(anno)-> list:
     for obs in anno:
         lvl = obs.value['level']
         label = obs.value['label']
-        interval = [obs.time, obs.time+obs.duration]
+        interval = [round(obs.time, 3), round(obs.time+obs.duration, 3)]
         hier[lvl][0].append(interval)
         hier[lvl][1].append(f'{label}')
     return hier
@@ -20,8 +20,8 @@ def hier2multi(hier) -> jams.Annotation:
     anno.time = hier[0][0][0][0]
     for layer, (intervals, labels) in enumerate(hier):
         for ival, label in zip(intervals, labels):
-            anno.append(time=ival[0],
-                        duration=ival[1]-ival[0],
+            anno.append(time=round(ival[0], 3),
+                        duration=round(ival[1]-ival[0], 3),
                         value={'label': str(label), 'level': layer})
     return anno
 
@@ -60,8 +60,8 @@ def openseg2multi(
 
     for lvl, openseg in enumerate(annos):
         for obs in openseg:
-            multi_anno.append(time=obs.time,
-                              duration=obs.duration,
+            multi_anno.append(time=round(obs.time, 3),
+                              duration=round(obs.duration, 3),
                               value={'label': obs.value, 'level': lvl},
                              )
     return multi_anno
@@ -76,8 +76,8 @@ def multi2openseg(multi_anno, layer=-1):
     itvls, labels = multi2mirevalflat(multi_anno, layer)
     anno = jams.Annotation(namespace='segment_open')
     for ival, label in zip(itvls, labels):
-        anno.append(time=ival[0],
-                    duration=ival[1]-ival[0],
+        anno.append(time=round(ival[0], 3),
+                    duration=round(ival[1]-ival[0], 3),
                     value=str(label))
     return anno
 

@@ -100,8 +100,9 @@ class H:
         
         if len(set(start_points)) != 1 or len(set(end_points)) != 1:
             raise ValueError(
-                f"All levels must share same start/end points. Got starts {start_points} and ends {end_points}"
+                f"All levels must share same start/end points. Got starts {start_points} and ends {end_points}."
             )
+        
         if labels is None:
             labels = itvls
         self.itvls=itvls

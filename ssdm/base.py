@@ -543,11 +543,6 @@ class InferDS(Dataset):
         self.tids.sort()
         self.scores = self.get_scores()
         self.AVAL_FEAT_TYPES = ssdm.AVAL_FEAT_TYPES
-        # all_samples = list(itertools.product(
-        #     self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES
-        # ))
-        # self.samples = ['_'.join(sid_list) for sid_list in all_samples]
-        # self.samples.sort()
                     
     def __len__(self):
         return len(self.tids)
@@ -564,9 +559,7 @@ class InferDS(Dataset):
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
-
-        # samp_info = self.samples[idx]
-        # tid, rep_feat, loc_feat = samp_info.split('_')
+            
         tid = self.tids[idx]
 
         data_list = []

@@ -108,9 +108,9 @@ class PairDS(base.PairDS):
         super().__init__(ds_module=ssdm.jsd, name='jsd', split=split, transform=transform, perf_margin=perf_margin)
 
 
-class PairDSLmeasure(base.PairDSLmeasure):
-    def __init__(self, split='train', transform=None, perf_margin=0.05):
-        super().__init__(ds_module=ssdm.jsd, name='jsd', split=split, transform=transform, perf_margin=perf_margin)
+# class PairDSLmeasure(base.PairDSLmeasure):
+#     def __init__(self, split='train', transform=None, perf_margin=0.05):
+#         super().__init__(ds_module=ssdm.jsd, name='jsd', split=split, transform=transform, perf_margin=perf_margin)
 
 
 class InferDS(base.InferDS):

@@ -1,4 +1,4 @@
-from .formatting import mireval2multi
+from .formatting import mireval2multi, multi2mireval
 from .viz import multi_seg
 from .utils import quantize, laplacian
 import librosa
@@ -10,7 +10,7 @@ from sklearn.cluster import KMeans
 
 class S:
     """A flat segmentation, labeled intervals."""
-    def __init__(self, itvls, labels=None, sr=10, Bhat_bw=0.25):
+    def __init__(self, itvls, labels=None, sr=10, Bhat_bw=1, time_decimal=3):
         """Initialize the flat segmentation."""
         self.itvls = itvls
         if labels is None:
@@ -19,7 +19,7 @@ class S:
         self.anno = mireval2multi([itvls], [labels])
 
         # Build Lstar and T
-        self.Lstar = {b: l for (b, e), l in zip(itvls, labels)}
+        self.Lstar = {round(b, time_decimal): l for (b, e), l in zip(itvls, labels)}
         self.beta = np.array(sorted(set(self.Lstar.keys()).union([itvls[-1][-1]])))
         self.T0, self.T = self.beta[0], self.beta[-1]
 
@@ -92,13 +92,22 @@ class S:
 
 class H:
     """A hierarchical segmentation composed of multiple flat segmentations."""
-    def __init__(self, itvls, labels=None, sr=10, Bhat_bw=0.25):
+    def __init__(self, itvls, labels=None, sr=10, Bhat_bw=1, time_decimal=3):
         """Initialize the hierarchical segmentation."""
+        # Validate same start/end points across levels
+        start_points = [level[0][0] for level in itvls]
+        end_points = [level[-1][-1] for level in itvls]
+        
+        if len(set(start_points)) != 1 or len(set(end_points)) != 1:
+            raise ValueError(
+                f"All levels must share same start/end points. Got starts {start_points} and ends {end_points}"
+            )
         if labels is None:
             labels = itvls
-        self.itvls=itvls; self.labels=labels
+        self.itvls=itvls
+        self.labels=labels
         self.anno = mireval2multi(itvls, labels)
-        self.levels = [S(i, l, sr=sr, Bhat_bw=Bhat_bw) for i, l in zip(itvls, labels)]
+        self.levels = [S(i, l, sr=sr, Bhat_bw=Bhat_bw, time_decimal=time_decimal) for i, l in zip(itvls, labels)]
         self.d = len(self.levels)
         self.T0, self.T = self.levels[0].T0, self.levels[0].T
         self.beta = np.unique(np.concatenate([seg.beta for seg in self.levels]))
@@ -157,11 +166,12 @@ class H:
             bs = self.beta
         return sum(level.A(bs=bs) for level in self.levels)
 
-    def B(self, ts=None):
+    def B(self):
         """Return the boundary count across all levels."""
-        if ts is None:
-            ts = self.beta
-        return sum(level.B(t) for t in ts for level in self.levels)
+        rated_boundaries = dict()
+        for b in self.beta:
+            rated_boundaries[b] = sum(seg.B(b) for seg in self.levels)
+        return rated_boundaries
 
     def Astar(self, bs=None):
         """Return the deepest level where labels are identical.
@@ -223,13 +233,16 @@ class H:
             wait=int(wait * self.sr)
         )
 
+        # Ensure the first and last frames are included in the boundaries list
+        boundaries = np.unique(np.concatenate(([0, len(novelty) - 1], boundaries)))
+
         # Determine depth based on unique boundary salience
         depth = min(depth, len(np.unique(novelty[boundaries])))
 
         # Quantize boundary salience via KMeans
         boundary_salience = quantize(novelty[boundaries], quantize_method='kmeans', quant_bins=depth)
         rated_boundaries = {
-            round(self.ticks[b], 1): s 
+            round(self.ticks[b], 3): s 
             for b, s in zip(boundaries, boundary_salience)
         }
 
@@ -241,7 +254,7 @@ class H:
             intervals.append(mir_eval.util.boundaries_to_intervals(boundaries_at_level))
         return H(intervals, intervals, sr=self.sr, Bhat_bw=self.Bhat_bw)
     
-    def decode_L(self, itvls, min_k=1):
+    def decode_L(self, itvls, min_k=2):
         """decode labels from the coarsest to most fine, using increasing k from eigen-gap."""
         current_k = min_k
         labs = []
@@ -252,6 +265,22 @@ class H:
             labs.append(lab)
         return H(itvls, labs, sr=self.sr, Bhat_bw=self.Bhat_bw)
 
+    def decode(self, depth=4, min_k=2, **kwargs):
+        """Decode the hierarchical segmentation."""
+        # Decode boundaries
+        # print('Bhat bw:', self.Bhat_bw)
+        new_H = self.decode_B(depth=depth, **kwargs)
+        # Decode labels
+        return self.decode_L(new_H.itvls, min_k=min_k)
+
+
+def levels2H(levels, sr=10, Bhat_bw=1):
+    itvls = [l.itvls for l in levels]
+    lbls = [l.labels for l in levels]
+    return H(itvls, lbls, sr=sr, Bhat_bw=Bhat_bw)
+
+def multi2H(anno, sr=10, Bhat_bw=1):
+    return H(*multi2mireval(anno), sr=sr, Bhat_bw=Bhat_bw)
 
 def _eigen_gap_scluster(M, k=None, min_k=1):
     # scluster with k groups. default is eigen gap.

@@ -3,6 +3,7 @@ import ssdm
 from ssdm import scluster
 from . import feature
 from .expand_hier import expand_hierarchy
+from . import fwx
 import librosa
 import madmom
 from tqdm import tqdm
@@ -147,17 +148,11 @@ class Track(object):
                 return beats[:-1]
 
 
-    def ref(self, mode='expand', ts_mode='beat', anno_id=0):
-        # try:
-        #     seg_anns = self.jam().search(namespace='segment_salami_upper')
-        #     assert len(seg_anns) != 0
-        # except:
+    def ref(self, mode='expand', anno_id=0):
         seg_anns = self.jam().search(namespace='segment_open')
         assert len(seg_anns) != 0
 
-        
-
-        anno = fill_out_anno(seg_anns[anno_id], self.ts(mode=ts_mode))
+        anno = fill_out_anno(seg_anns[anno_id], self.ts(mode='frame'))
         if mode == 'expand':
             return ssdm.openseg2multi(expand_hierarchy(anno, dataset=self.ds_name, always_include=False))
         elif mode == 'normal':
@@ -403,13 +398,13 @@ class Track(object):
             # print('Done! -- lsd')
         
         return lsd_anno
-    
 
-    def lsd_score_l(self, anno_id=0, l_frame_size=0.5, beat_sync=True, path_sim_bw=95, recompute=False):
+
+    def lsd_score(self, anno_id=0, l_frame_size=0.1, beat_sync=True, path_sim_bw=95, clean_up=True, recompute=False):
         # save 
         nc_path = os.path.join(
             self.output_dir, 
-            f'ells/{self.tid}_a{anno_id}_{l_frame_size}locbw{path_sim_bw}{"_bsync" if beat_sync else ""}.nc'
+            f'ells/{self.tid}_a{anno_id}{"_cln" if clean_up else ""}.nc'
         )
 
         if not recompute:
@@ -422,11 +417,9 @@ class Track(object):
         score_dims = dict(
             rep_ftype=ssdm.AVAL_FEAT_TYPES,
             loc_ftype=ssdm.AVAL_FEAT_TYPES,
-            layer=[x+1 for x in range(16)],
-            metric=['l'],
             m_type=['p', 'r', 'f'],
         )
-
+    
         score_da = xr.DataArray(
             data=np.nan,  # Initialize the data with NaNs
             coords=score_dims,
@@ -444,12 +437,14 @@ class Track(object):
             if beat_sync:
                 lsd_config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
 
-            for layer in score_dims['layer']:
-                score_da.loc[feature_pair].loc[layer] = list(ssdm.compute_l(
-                    self.lsd(lsd_config, beat_sync=beat_sync, path_sim_sigma_percentile=path_sim_bw, recompute=False), 
-                    self.ref(mode='expand', anno_id=anno_id),
-                    l_frame_size=l_frame_size, nlvl=layer
-                ))
+            lsd_output = self.lsd(lsd_config, beat_sync=beat_sync, path_sim_sigma_percentile=path_sim_bw, recompute=False)
+            if clean_up:
+                lsd_output = fwx.multi2H(lsd_output).decode().anno
+            score_da.loc[feature_pair] = list(ssdm.compute_l(
+                lsd_output, 
+                self.ref(mode='expand', anno_id=anno_id),
+                l_frame_size=l_frame_size
+            ))
         
         try:
             score_da.to_netcdf(nc_path)
@@ -460,63 +455,7 @@ class Track(object):
             print(f'(re)computed and saved {self.ds_name} {self.tid} a{anno_id} l score')
         return score_da
 
-
-    def lsd_score_flat(self, anno_id=0, beat_sync=True, anno_mode='expand', a_layer=0, frame_size=0.1, recompute=False) -> xr.DataArray:
-        # save 
-        nc_path = os.path.join(self.output_dir, f'ells/{self.tid}_a{anno_id}{anno_mode}{a_layer}v{frame_size}.nc')
-
-        if not os.path.exists(nc_path):
-            # build da to store
-            score_dims = dict(
-                rep_ftype=ssdm.AVAL_FEAT_TYPES,
-                loc_ftype=ssdm.AVAL_FEAT_TYPES,
-                m_type=['p', 'r', 'f'],
-                # metric=['hr', 'hr3', 'pfc', 'v'],
-                metric=['v'],
-                layer=[x+1 for x in range(16)],
-            )
-
-            score_da = xr.DataArray(
-                data=np.nan,  # Initialize the data with NaNs
-                coords=score_dims,
-                dims=list(score_dims.keys()),
-                name=str(self.tid)
-            )
-
-            try:
-                score_da.to_netcdf(nc_path)
-            except PermissionError:
-                os.system(f'rm {nc_path}')
-            recompute = True
-        else:
-            with xr.open_dataarray(nc_path) as score_da:
-                score_da.load()
-
-        if recompute:
-            # build all the lsd configs:
-            for rep_ftype in ssdm.AVAL_FEAT_TYPES:
-                for loc_ftype in ssdm.AVAL_FEAT_TYPES:
-                    feature_pair = dict(rep_ftype=rep_ftype, loc_ftype=loc_ftype)
-                    lsd_config = ssdm.DEFAULT_LSD_CONFIG.copy()
-                    if beat_sync:
-                        lsd_config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
-                    lsd_config.update(feature_pair)
-                    score_da.loc[feature_pair] = ssdm.compute_flat(
-                        self.lsd(lsd_config, beat_sync=beat_sync, recompute=False), 
-                        self.ref(mode=anno_mode, anno_id=anno_id),
-                        a_layer=a_layer,
-                        frame_size=frame_size
-                    )
-            
-            try:
-                score_da.to_netcdf(nc_path)
-                print(f'(re)computed and saved {self.ds_name} {self.tid} a{anno_id} flat score')
-            except PermissionError:
-                os.system(f'rm {nc_path}')
-
-        return score_da
-
-    
+   
     def num_dist_segs(self):
         num_seg_per_anno = []
         for aid in range(self.num_annos()):
@@ -603,7 +542,6 @@ class InferDS(Dataset):
         self.tids = ds_module.get_ids(self.split)
         self.tids.sort()
         self.scores = self.get_scores()
-        self.vmeasures = self.get_vmeasures()
         self.AVAL_FEAT_TYPES = ssdm.AVAL_FEAT_TYPES
         # all_samples = list(itertools.product(
         #     self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES
@@ -618,15 +556,10 @@ class InferDS(Dataset):
         return f'{self.name}_{self.split if self.split is not None else "full"}_lmeasure_infer'
         
     def get_scores(self, score_type='f'):
-        score_da = ssdm.get_lsd_scores(self, heir=True, shuffle=True).sel(m_type=score_type).sortby('tid')
+        score_da = ssdm.get_lsd_scores(self, shuffle=True).sel(m_type=score_type).sortby('tid')
         new_tid = [self.name + tid.item() for tid in score_da.tid]
         return score_da.assign_coords(tid=new_tid).squeeze()
     
-    def get_vmeasures(self):
-        a_layer = 2 if self.name == 'jsd' else 0
-        score_da = ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=a_layer).sel(m_type='f').sortby('tid')
-        new_tid = [self.name + tid.item() for tid in score_da.tid]
-        return score_da.assign_coords(tid=new_tid).squeeze()
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
@@ -668,7 +601,6 @@ class PairDS(Dataset):
         self.name = name
         self.tids = self.ds_module.get_ids(self.split)
         self.scores = self.get_scores()
-        self.vmeasures = self.get_vmeasures()
         self.score_ranks = self.get_score_ranks()
         self.score_gaps = self.get_score_gaps()
         self.samples = list(self.score_gaps.keys())
@@ -678,7 +610,7 @@ class PairDS(Dataset):
 
 
     def __repr__(self):
-        return f'{self.name}_{self.split if self.split is not None else "full"}_vmeasure'
+        return f'{self.name}_{self.split if self.split is not None else "full"}'
     
 
     def __len__(self):
@@ -686,15 +618,7 @@ class PairDS(Dataset):
     
 
     def get_scores(self):
-        a_layer = 2 if self.name == 'jsd' else 0
-        return ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=a_layer).sel(m_type='f').sortby('tid').squeeze()
-        # new_tid = [self.name + tid.item() for tid in score_da.tid]
-        # return score_da.assign_coords(tid=new_tid)
-
-
-    def get_vmeasures(self):
-        a_layer = 2 if self.name == 'jsd' else 0
-        return ssdm.get_lsd_scores(self, heir=False, shuffle=True, anno_mode='expand', a_layer=a_layer).sel(m_type='f').sortby('tid').squeeze()
+        return ssdm.get_lsd_scores(self, shuffle=True).sel(m_type='f').sortby('tid').squeeze()
 
 
     def get_score_ranks(self):
@@ -709,7 +633,7 @@ class PairDS(Dataset):
 
 
     def get_score_gaps(self):
-        fpath = f'/home/qx244/scanning-ssm/ssdm/{self}_score_gaps.json'
+        fpath = f'/home/qx244/scanning-ssm/ssdm/{self}_score_gaps_2025.json'
         try:
             with open(fpath, 'r') as f:
                 score_gaps = json.load(f)
@@ -767,15 +691,15 @@ class PairDS(Dataset):
         return datum
 
 
-class PairDSLmeasure(PairDS):
-    def __init__(self, ds_module, name=None, split='val', transform=None, perf_margin=0.05):
-        super().__init__(ds_module, name, split, transform, perf_margin)
+# class PairDSLmeasure(PairDS):
+#     def __init__(self, ds_module, name=None, split='val', transform=None, perf_margin=0.05):
+#         super().__init__(ds_module, name, split, transform, perf_margin)
 
-    def __repr__(self):
-        return f'{self.name}_{self.split if self.split is not None else "full"}_lmeasure'
+#     def __repr__(self):
+#         return f'{self.name}_{self.split if self.split is not None else "full"}_lmeasure'
     
-    def get_scores(self, score_type='f'):
-        return ssdm.get_lsd_scores(self, heir=True, shuffle=True).sel(m_type=score_type).sortby('tid')
+#     def get_scores(self, score_type='f'):
+#         return ssdm.get_lsd_scores(self, shuffle=True).sel(m_type=score_type).sortby('tid')
 
 
 class LvlDS(InferDS):

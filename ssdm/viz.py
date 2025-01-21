@@ -61,19 +61,6 @@ def anno_meet_mats(track, mode='expand'):
     return fig, axs
 
 
-def lsd_meet_mat(track, config=dict(), beat_sync=False, layer_to_show=None):
-    lsd_config = ssdm.DEFAULT_LSD_CONFIG.copy()
-    if beat_sync:
-        lsd_config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
-    lsd_config.update(config)
-    lsd_seg = track.lsd(lsd_config, beat_sync=beat_sync)
-    lsd_meet_mat = ssdm.anno_to_meet(lsd_seg, track.ts(), num_layers=layer_to_show)
-    fig, ax = plt.subplots(figsize=(5, 4))
-    quadmesh = librosa.display.specshow(lsd_meet_mat, x_axis='time', y_axis='time', hop_length=4096, sr=22050, ax=ax)
-    fig.colorbar(quadmesh, ax=ax)      
-    return fig, ax
-
-
 def rec_mat(track, blocky=False, rec_diag=None, ax=None, **ssm_config):
     """
     blocky: bool = False, # if true, use low rank appoximation,
@@ -199,7 +186,7 @@ def segments(
     return ax
 
 
-def multi_seg(ms_anno, figsize=(8, 4), reindex=True, legend_ncol=6, title=None, text=False, y_label=True, x_label=True):
+def multi_seg(ms_anno, figsize=(8, 4), reindex=True, legend_ncol=6, text=False, y_label=True, x_label=True):
     """Plots the given multi_seg annotation.
     """
     hier = ssdm.formatting.multi2hier(ms_anno)
@@ -232,54 +219,14 @@ def multi_seg(ms_anno, figsize=(8, 4), reindex=True, legend_ncol=6, title=None, 
         # Show time axis on the last layer
         axs[-1].xaxis.set_major_locator(ticker.AutoLocator())
         axs[-1].xaxis.set_major_formatter(librosa.display.TimeFormatter())
-        axs[-1].set_xlabel('time')
+        axs[-1].set_xlabel('Time')
 
     if legend_ncol:
         fig.legend(handles=legend_handles, loc='lower center', ncol=legend_ncol, bbox_to_anchor=(0.5, -0.06 * (len(legend_handles)//legend_ncol + 2.2)))
     if y_label:
-        fig.text(0.94, 0.47, 'Segmentation Levels', va='center', rotation='vertical')
-    fig.suptitle(title, y=1.1)
-    fig.tight_layout()
+        fig.text(0.94, 0.55, 'Segmentation Levels', va='center', rotation='vertical')
+    # fig.tight_layout(rect=[0,0,0.95,1])
     return fig, axs
-
-
-
-
-# Visualize a multi level segmentation jams.Annotation
-def old_multi_seg(multi_seg, hier_depth=None, figsize=(10, 2.4), **eval_kwargs):
-    ## From ADOBE musicsection
-    def plot_levels(inters, labels, figsize):
-        """Plots the given hierarchy."""
-        N = len(inters)
-        fig, axs = plt.subplots(N, figsize=figsize) 
-        if N == 1:
-            axs = [axs]
-        for level in range(N):
-            display.segments(np.asarray(inters[level]), labels[level], ax=axs[level], edgecolor='white', **eval_kwargs)
-            axs[level].set_yticks([0.5])
-            axs[level].set_yticklabels([level + 1])
-            axs[level].set_xticks([])
-            axs[level].yaxis.tick_right()
-            axs[level].yaxis.set_label_position("right")
-
-        axs[0].xaxis.tick_top()
-        fig.subplots_adjust(top=0.8)  # Otherwise savefig cuts the top
-        
-        return fig, axs
-
-    def plot_segmentation(seg, figsize=figsize):
-        inters = []
-        labels = []
-        for level in seg:
-            inters.append(level[0])
-            labels.append(level[1])
-
-        fig, axs = plot_levels(inters, labels, figsize)
-        # fig.text(0.08, 0.47, 'Segmentation Levels', va='center', rotation='vertical')
-        return fig, axs
-
-    hier = ssdm.multi2hier(multi_seg)[:hier_depth]
-    return plot_segmentation(hier)
 
 
 def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True, figsize=(5,5), no_deci=False):   
@@ -326,40 +273,6 @@ def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True, fi
     if colorbar:
         plt.colorbar(im, shrink=0.8)
     return fig, ax
-
-
-## Inspecting model weight tensors
-def view_channels_(cube, channel=0, **hv_img_args):
-    if type(cube) is not np.ndarray:
-        cube = cube.cpu().numpy()
-
-    img_kwargs = dict(
-        frame_width=300, aspect='equal', cmap='inferno', active_tools=['box_zoom'],
-        xaxis=None, yaxis=None,
-    )
-    img_kwargs.update(hv_img_args)
-
-    cube = cube.squeeze()
-    ticks = list(range(cube.shape[-1]))
-    if len(cube.shape) == 2:
-        print('only 1 layer, channel is ignored')
-        square = cube
-    else:
-        square = cube[channel].squeeze()
-    return hv.Image((ticks, ticks, square)).opts(**img_kwargs) 
-
-
-def cube(cube, **kwargs):
-    cube = cube.squeeze()
-    channel_imgs = []
-    if len(cube.shape) == 2:
-        channels = 1
-    else:
-        channels = cube.shape[0]
-    for channel in range(channels):
-        channel_imgs.append(view_channels_(cube, channel=channel, title=f'channel: {channel}', **kwargs))
-
-    return hv.Layout(channel_imgs)
 
 
 def nlvl_est(ds, net, device='cuda:0', pos_only=True, plot=True, **img_kwargs):

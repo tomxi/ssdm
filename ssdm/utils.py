@@ -318,8 +318,6 @@ def get_lsd_scores(
     ds,
     shuffle=False,
     anno_col_fn=lambda stack: stack.max(dim='anno_id'), # activated when there are more than 1 annotation for a track
-    heir=False,
-    beat_sync=True,
     verbose=False,
     **lsd_score_kwargs,
 ) -> xr.DataArray:    
@@ -335,18 +333,11 @@ def get_lsd_scores(
     for tid in tid_iterator:
         track = ds.ds_module.Track(tid=tid)
         if track.num_annos() == 1:
-            if heir:
-                score_per_track.append(track.lsd_score_l(beat_sync=beat_sync, **lsd_score_kwargs))
-            else:
-                score_per_track.append(track.lsd_score_flat(beat_sync=beat_sync, **lsd_score_kwargs))
+            score_per_track.append(track.lsd_score(**lsd_score_kwargs))
         else:
             score_per_anno = []
             for anno_id in range(track.num_annos()):
-                if heir:
-                    score_per_anno.append(track.lsd_score_l(anno_id=anno_id, beat_sync=beat_sync, **lsd_score_kwargs))
-                else:
-                    score_per_anno.append(track.lsd_score_flat(anno_id=anno_id, beat_sync=beat_sync, **lsd_score_kwargs))
-            # print(score_per_anno)
+                score_per_anno.append(track.lsd_score(anno_id=anno_id, **lsd_score_kwargs))
             anno_stack = xr.concat(score_per_anno, pd.Index(range(len(score_per_anno)), name='anno_id'))
             score_per_track.append(anno_col_fn(anno_stack))
 

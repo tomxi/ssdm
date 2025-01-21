@@ -26,7 +26,7 @@ class Track(base.Track):
         return len(self.jam().search(namespace='segment_salami_function'))
 
 
-    def ref(self, mode='expand', ts_mode='beat', anno_id=0):
+    def ref(self, mode='expand', anno_id=0):
         anno_layers = []
         # print('haha')
         if mode == 'function':
@@ -37,7 +37,7 @@ class Track(base.Track):
         for n in namespaces:
             anno = self.jam().search(namespace=n)
             anno_layers.append(base.fill_out_anno(
-                anno[anno_id], self.ts(mode=ts_mode)
+                anno[anno_id], self.ts(mode='frame')
             ))
 
         if mode == 'expand':

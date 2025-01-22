@@ -25,8 +25,9 @@ class Track(base.Track):
         track_relationships = pd.read_csv('/home/qx244/jsd/data/track_relationships.csv')
 
         self.info = track_relationships.loc[track_relationships.melid==int(tid)]
-        self.title = self.info.filename_solo.item().replace('=', '-').replace('&', '').replace(',', '').replace('.', '')
-        self.title = self.title.replace('(', '').replace(')', '').replace('_solo', '_Solo').replace("'", '')
+        self.title = self.info.filename_solo.item().replace('=', '-').replace('&', '').replace(',', '').replace('.', '').replace('(', '').replace(')', '').replace("'", '')
+        self.title = self.title.replace('_solo', '_Solo').replace('_No1', 'No1').replace('_No2', 'No2').replace('_196', '196').replace('_Alternate', 'Alternate')
+        self.title = self.title.replace('-One', 'One').replace('-Bop', 'Bop').replace('-Jo', 'Jo').replace('26-2', '262').replace('-Ko', 'Ko')
         self.track_title = self.info.filename_track.item()
         self.audio_path = os.path.join(audio_dir, f'{self.title}.wav')
         self.ds_name = 'jsd'

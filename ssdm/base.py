@@ -1,9 +1,8 @@
 import ssdm
 # import ssdm.utils
 from ssdm import scluster
-from . import feature
 from .expand_hier import expand_hierarchy
-from . import fwx
+from . import fwx, utils, feature
 import librosa
 import madmom
 from tqdm import tqdm
@@ -386,7 +385,7 @@ class Track(object):
         if recompute:
             print('computing! -- lsd', self.tid)
             # genearte new multi_segment annotation and store/overwrite it in the original jams file.
-            lsd_anno = ssdm.utils.run_lsd(self, config=config, recompute_ssm=recompute, beat_sync=beat_sync, loc_sigma=path_sim_sigma_percentile)
+            lsd_anno = utils.run_lsd(self, config=config, recompute_ssm=recompute, beat_sync=beat_sync, loc_sigma=path_sim_sigma_percentile)
             print('Done! -- lsd')
             # update jams file
             # print('updating jams! -- lsd')

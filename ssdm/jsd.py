@@ -26,7 +26,7 @@ class Track(base.Track):
 
         self.info = track_relationships.loc[track_relationships.melid==int(tid)]
         self.title = self.info.filename_solo.item().replace('=', '-').replace('&', '').replace(',', '').replace('.', '')
-        self.title = self.title.replace('(', '').replace(')', '').replace('_solo', '_Solo')
+        self.title = self.title.replace('(', '').replace(')', '').replace('_solo', '_Solo').replace("'", '')
         self.track_title = self.info.filename_track.item()
         self.audio_path = os.path.join(audio_dir, f'{self.title}.wav')
         self.ds_name = 'jsd'

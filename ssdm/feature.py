@@ -1,20 +1,17 @@
 import numpy as np
 import librosa
 
-# import ssl
-# ssl._create_default_https_context = ssl._create_unverified_context
-
-import tensorflow_hub as hub
-
 # Load local model
-yamnet_model = hub.load('/home/qx244/yamnet')
-
+YAMNET_MODEL = None
 _AUDIO_SR = 22050
 _HOP_LEN = 4096
 
 def yamnet(audio_path, output_path):
-    yamnet_audio, _ = librosa.load(audio_path, sr=16000)  
-    _, yamnet_emb, _ = yamnet_model(yamnet_audio)
+    if YAMNET_MODEL is None:
+        import tensorflow_hub as hub
+        YAMNET_MODEL = hub.load('/home/qx244/yamnet')
+    yamnet_audio, _ = librosa.load(audio_path, sr=16000)
+    _, yamnet_emb, _ = YAMNET_MODEL(yamnet_audio)
     resampled_yamnet_emb = librosa.resample(
         yamnet_emb.numpy().T,
         orig_sr=1/0.48, target_sr=_AUDIO_SR / _HOP_LEN

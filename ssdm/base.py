@@ -1,5 +1,4 @@
 import ssdm
-# import ssdm.utils
 from ssdm import scluster
 from .expand_hier import expand_hierarchy
 from . import fwx, utils, feature
@@ -583,7 +582,7 @@ class InferDS(Dataset):
 
 
 class PairDS(Dataset):
-    def __init__(self, ds_module, name=None, split='val', transform=None, perf_margin=0.001):
+    def __init__(self, ds_module, name=None, split='val', transform=None, perf_margin=0.05):
         super().__init__()
         self.ds_module = ds_module
         self.split = split
@@ -615,9 +614,9 @@ class PairDS(Dataset):
 
     def get_score_ranks(self):
         from scipy.stats import rankdata
-        score_rank = self.scores.max('layer').copy()
+        score_rank = self.scores.copy()
         for i, sq in enumerate(score_rank):
-            score_rank[i] = rankdata(sq).reshape(5,5,1)
+            score_rank[i] = rankdata(sq).reshape(5,5)
 
         # Highest first, out of a total of 25
         score_rank = 26 - score_rank
@@ -632,10 +631,9 @@ class PairDS(Dataset):
         except:
             samp_iter = itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES)
             score_gaps = {}
-            best_lvl_score = self.scores.max('layer')
             for tid, rep_a, loc_a, rep_b, loc_b in tqdm(samp_iter):
-                score_a = best_lvl_score.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a).item()
-                score_b = best_lvl_score.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b).item()
+                score_a = self.scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a).item()
+                score_b = self.scores.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b).item()
                 score_gaps[f'{tid}_{rep_a}_{loc_a}_{rep_b}_{loc_b}'] = score_a - score_b
             with open(fpath, 'w') as f:
                 json.dump(score_gaps, f)
@@ -661,16 +659,10 @@ class PairDS(Dataset):
         )
         x1 = torch.tensor(first_evecs_a, dtype=torch.float32)[None, None, :]
         x2 = torch.tensor(first_evecs_b, dtype=torch.float32)[None, None, :]
-        x1_layer_score = self.vmeasures.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
-        x1_layer_score = torch.tensor(x1_layer_score.values, dtype=torch.float32)[None, :]
-        x2_layer_score = self.vmeasures.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
-        x2_layer_score = torch.tensor(x2_layer_score.values, dtype=torch.float32)[None, :]
         x1_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a)
         x2_score_rank = self.score_ranks.sel(tid=tid, rep_ftype=rep_b, loc_ftype=loc_b)
         datum = {'x1': x1,
                  'x2': x2,
-                 'x1_layer_score': x1_layer_score,
-                 'x2_layer_score': x2_layer_score,
                  'x1_rank': x1_score_rank.item(),
                  'x2_rank': x2_score_rank.item(),
                  'x1_info': f'{rep_a}_{loc_a}',
@@ -681,76 +673,6 @@ class PairDS(Dataset):
         if self.transform:
             datum = self.transform(datum)
         return datum
-
-
-# class PairDSLmeasure(PairDS):
-#     def __init__(self, ds_module, name=None, split='val', transform=None, perf_margin=0.05):
-#         super().__init__(ds_module, name, split, transform, perf_margin)
-
-#     def __repr__(self):
-#         return f'{self.name}_{self.split if self.split is not None else "full"}_lmeasure'
-    
-#     def get_scores(self, score_type='f'):
-#         return ssdm.get_lsd_scores(self, shuffle=True).sel(m_type=score_type).sortby('tid')
-
-
-class LvlDS(InferDS):
-    def __init__(self, ds_module=None, name='base', split='val', rank_cutoff=8, transform=None):
-        super().__init__(ds_module=ds_module, name=name, split=split, transform=transform)
-        self.score_rank = self.get_score_ranks()
-        self.samples = self.get_samps(rank_cutoff=rank_cutoff)
-        self.samples.sort()
-
-    def __repr__(self):
-        return super().__repr__().replace('infer', 'nlvl')
-
-
-    def get_samps(self, rank_cutoff=8):
-        import numpy as np
-        condition = self.score_rank <= rank_cutoff
-        coords = condition.coords
-        # Get the flattened indices where the condition is true
-        flat_indices = np.flatnonzero(condition.values)
-        # Convert the flat indices to coordinate indices
-        unraveled_indices = np.unravel_index(flat_indices, condition.shape)
-        # Combine the unraveled indices into a list of tuples
-        return [f'{coords["tid"][tid].item()}_{coords["rep_ftype"][rep_ftype].item()}_{coords["loc_ftype"][loc_ftype].item()}' for tid, rep_ftype, loc_ftype, _ in zip(*unraveled_indices)]
-    
-
-    def get_score_ranks(self):
-        from scipy.stats import rankdata
-        score_rank = self.scores.max('layer').copy()
-        for i, sq in enumerate(score_rank):
-            score_rank[i] = rankdata(sq).reshape(5,5,1)
-        # Highest first, out of a total of 25
-        score_rank = 26 - score_rank
-        return score_rank
-    
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-
-        samp_info = self.samples[idx]
-        full_tid, rep_feat, loc_feat = samp_info.split('_')
-        vmeasure_per_lvl_best_feat = self.scores.sel(tid=full_tid, rep_ftype=rep_feat, loc_ftype=loc_feat)
-        # rep_feat = track_score.rep_ftype.item()
-        # loc_feat = track_score.loc_ftype.item()
-
-        first_evecs = self.ds_module.Track(tid=full_tid.replace(self.name, '')).embedded_rec_mat(
-            feat_combo=dict(rep_ftype=rep_feat, loc_ftype=loc_feat), 
-            lap_norm='random_walk', beat_sync=True,
-            recompute=False
-        )
-
-        datum = {'x': torch.tensor(first_evecs, dtype=torch.float32)[None, None, :],
-                 'lvl_score': torch.tensor(vmeasure_per_lvl_best_feat.values, dtype=torch.float32)[None, :],
-                 'info': samp_info}
-
-        if self.transform:
-            datum = self.transform(datum)
-        
-        return datum
-    
 
 
 def delay_embed(
@@ -770,6 +692,7 @@ def delay_embed(
         n_steps=n_steps, 
         delay=delay
     )
+
 
 def fill_out_anno(anno, ts):
         anno_start_time = anno.data[0].time

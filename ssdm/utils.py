@@ -1,20 +1,18 @@
 import xarray as xr
 import pandas as pd
 import numpy as np
-import torch
-from torch import nn
+
 
 from sklearn import preprocessing, cluster
 from sklearn.model_selection import train_test_split
 from scipy import sparse, stats
 from tqdm import tqdm
 
-import random, os
+import random
 import jams, mir_eval
 
 import ssdm
 import ssdm.scluster as sc
-import ssdm.scanner as scn
 
 
 def noop(x):
@@ -137,70 +135,6 @@ def compute_l(
     )
 
 
-def compute_flat(
-    proposal: jams.Annotation, #Multi-seg
-    annotation: jams.Annotation, #Multi-seg,
-    a_layer = -1,
-    frame_size = 0.1,
-) -> np.array:
-    ref_inter, ref_labels = ssdm.multi2mirevalflat(annotation, layer=a_layer) # Which anno layer?
-    num_prop_layers = len(ssdm.multi2hier(proposal))
-
-    # get empty dataarray for result
-    results_dim = dict(
-        m_type=['p', 'r', 'f'],
-        # metric=['hr', 'hr3', 'pfc', 'v'],
-        metric=['v'],
-        layer=[x+1 for x in range(16)]
-    )
-    results = xr.DataArray(data=None, coords=results_dim, dims=list(results_dim.keys()))
-    for p_layer in range(num_prop_layers):
-        est_inter, est_labels = ssdm.multi2mirevalflat(proposal, layer=p_layer)
-        # make last segment for estimation end at the same time as annotation
-        end_time = max(ref_inter[-1, 1], est_inter[-1, 1])
-        ref_inter[-1, 1] = end_time
-        est_inter[-1, 1] = end_time
-        
-        layer_result_dict = dict(
-            # hr=mir_eval.segment.detection(ref_inter, est_inter, window=.5, trim=True),
-            # hr3=mir_eval.segment.detection(ref_inter, est_inter, window=3, trim=True),
-            # pfc=mir_eval.segment.pairwise(ref_inter, ref_labels, est_inter, est_labels, frame_size=frame_size),
-            v=mir_eval.segment.vmeasure(ref_inter, ref_labels, est_inter, est_labels, frame_size=frame_size)
-        )
-
-        for metric in layer_result_dict:
-            results.loc[dict(layer=p_layer+1, metric=metric)] = list(layer_result_dict[metric])
-    return results
-
-
-def load_net(model_path='', device=None):
-    if device is None:
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    else: 
-        device = device
-    #extract info from model_path
-    model_basename = os.path.basename(model_path)
-    # Check for cached inference results:
-    # check all the available models in scanner.py to see if anyone fits
-    net = None
-    for model_id in scn.AVAL_MODELS:
-        if model_basename.find(model_id + '_') >= 0:
-            # print(model_basename)
-            # print(model_id)
-            # returns the first model found in the file base name
-            net = scn.AVAL_MODELS[model_id]()
-            continue
-        elif model_basename.find(model_id + '-') >= 0:
-            net = scn.AVAL_MODELS[model_id]()
-            continue
-    if net == None:
-        raise IndexError('could not figure out which model architecutre to initialize.')      
-    # load model and do inference
-    state_dict = torch.load(model_path, map_location=device)
-    net.load_state_dict(state_dict=state_dict)
-    return net
-
-
 def quantize(data, quantize_method='percentile', quant_bins=8):
     # method can me 'percentile' 'kmeans'. Everything else will be no quantize
     data_shape = data.shape
@@ -253,14 +187,6 @@ def create_splits(arr, val_ratio=0.15, test_ratio=0.15, random_state=20230327):
     test_set.sort()
     return dict(train=train_set, val=val_set, test=test_set)
 
-
-def adjusted_best_layer(cube, tolerance=0):
-    max_score_over_layer = cube.max('layer')
-    # We can tolerate a bit of perforamcne, so let's take that off from the max
-    thresh = max_score_over_layer - tolerance
-    # The first layer over threshold
-    over_thresh = cube >= thresh
-    return over_thresh.idxmax('layer')
 
 
 # HELPER functin to run laplacean spectral decomposition TODO this is where the rescaling happens
@@ -342,29 +268,4 @@ def get_lsd_scores(
             score_per_track.append(anno_col_fn(anno_stack))
 
     return xr.concat(score_per_track, pd.Index(tids, name='tid'), coords='minimal').rename().sortby('tid')
-
-
-def net_pick_performance(ds, net, device='cuda', verbose=False, drop_feats=[]):
-    score_da = ds.scores.copy()
-    net_output = scn.net_infer_multi_loss(ds, net, device, verbose=verbose)
-    if drop_feats:
-        net_output = net_output.drop_sel(rep_ftype=drop_feats, loc_ftype=drop_feats)
-        score_da = score_da.drop_sel(rep_ftype=drop_feats, loc_ftype=drop_feats)
-    util_score = net_output.loc[:, :, :, 'util']
-    nlvl_pick = net_output.loc[:, :, :, 'nlvl']
-    best_util_idx = util_score.argmax(dim=['rep_ftype', 'loc_ftype'])
-    net_layer_pick = nlvl_pick.isel(best_util_idx).astype(int)
-    net_feat_pick_score = score_da.sel(rep_ftype=net_layer_pick.rep_ftype, loc_ftype=net_layer_pick.loc_ftype)
-
-    # Get oracle feature pick, and see how net is doing on nlvl
-    orc_feat_idx = score_da.max('layer').argmax(dim=['rep_ftype', 'loc_ftype'])
-    net_layer_pick_orc_feat = nlvl_pick.isel(orc_feat_idx).astype(int)
-    orc_feat_scores = score_da.sel(rep_ftype=net_layer_pick_orc_feat.rep_ftype, loc_ftype=net_layer_pick_orc_feat.loc_ftype)
-
-    out = dict(net_pick = net_feat_pick_score.isel(layer=net_layer_pick),
-               orc_feat_net_lvl = orc_feat_scores.isel(layer=net_layer_pick_orc_feat),
-               net_feat_orc_lvl = net_feat_pick_score.max('layer'),
-               orc = orc_feat_scores.max('layer')
-               )
-    return out
 

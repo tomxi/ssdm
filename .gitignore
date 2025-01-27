@@ -1,5 +1,6 @@
 .vscode/
 
+wandb/
 sbatch/
 notebooks/
 new_nbs/

@@ -171,16 +171,8 @@ class PairDS(base.PairDS):
     def __init__(self, **kwargs):
         super().__init__(ds_module=ssdm.slm, name='slm', **kwargs)
 
-# class PairDSLmeasure(base.PairDSLmeasure):
-#     def __init__(self, **kwargs):
-#         super().__init__(ds_module=ssdm.slm, name='slm', **kwargs)
-
 
 class InferDS(base.InferDS):
     def __init__(self, **kwargs):
         super().__init__(ds_module=ssdm.slm, name='slm', **kwargs)
 
-
-class LvlDS(base.LvlDS):
-    def __init__(self, **kwargs):
-        super().__init__(ds_module=ssdm.slm, name='slm', **kwargs)

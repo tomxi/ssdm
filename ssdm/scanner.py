@@ -1,6 +1,6 @@
 import ssdm
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
 from torch import nn, optim
 import wandb
 
@@ -290,25 +290,32 @@ class LitCNNModule(L.LightningModule):
         return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 2}]
 
 
-def train_model(devices=2, wb_run_name=None, debug=False):
+def train_model(loaders=4, wb_run_name=None, debug=False, ds_modules=DEFAULT_DS_MODULES, perf_margin=0.05):
     model = LitCNNModule()
-    dm = PairDataModule()
+    dm = PairDataModule(ds_modules=ds_modules, perf_margin=perf_margin,loaders=loaders)
     
     wb_logger = L.pytorch.loggers.WandbLogger(project='ssdm3', name=wb_run_name)
     wb_logger.watch(model, log='all')
 
     trainer = L.Trainer(
         max_epochs=50, 
-        devices=devices,
         accumulate_grad_batches=8, 
         logger=wb_logger, 
         callbacks=[
-            LearningRateMonitor(logging_interval='step'),
-            ModelCheckpoint(monitor='val ranking loss', save_top_k=3, mode='min', save_last=True)
+            TQDMProgressBar(refresh_rate=1000),
+            LearningRateMonitor(logging_interval='step'), 
+            ModelCheckpoint(dirpath=wandb.run.dir, filename='{epoch}-{val_ranking_loss:.2f}',
+                            monitor='val ranking loss', save_top_k=3, mode='min', save_last=True)
         ]
     )
+    
     if debug:
         return trainer, model, dm
 
     trainer.fit(model, dm)
     wandb.finish()
+
+
+if __name__ == '__main__':
+    train_model(wb_run_name='rwc only', ds_modules=[ssdm.rwcpop], perf_margin=0.05)
+    train_model(wb_run_name='slm only', ds_modules=[ssdm.slm], perf_margin=0.07)

@@ -254,9 +254,9 @@ class Track(object):
             with open(pathsim_path, 'wb') as f:
                 np.save(f, pathsim)
         
-        # read npy file
-        with open(pathsim_path, 'rb') as f:
-            pathsim = np.load(pathsim_path, allow_pickle=True)
+        # # read npy file
+        # with open(pathsim_path, 'rb') as f:
+        #     pathsim = np.load(pathsim_path, allow_pickle=True)
         return pathsim
 
 

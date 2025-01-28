@@ -8,7 +8,7 @@ from .utils import *
 
 # from . import feature
 # from . import scluster
-# from . import scanner
+
 from . import viz
 viz.hv.extension('bokeh')
 
@@ -17,5 +17,7 @@ from . import salami as slm
 from . import jsd
 from . import rwcpop
 from . import spam
+
+from . import scanner as scn
 
 from .expand_hier import expand_hierarchy

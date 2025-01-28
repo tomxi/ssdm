@@ -3,6 +3,7 @@ import torch
 from torch.utils.data import DataLoader, ConcatDataset
 from torch import nn, optim
 import wandb
+import timm
 
 import lightning as L
 from lightning.pytorch.callbacks import TQDMProgressBar, ModelCheckpoint, LearningRateMonitor
@@ -233,10 +234,21 @@ class CNNModel(nn.Module):
         return self.util_head(multires_embeddings)
 
 
-class LitCNNModule(L.LightningModule):
-    def __init__(self):
+class LitModule(L.LightningModule):
+    def __init__(self, model='cnn'):
         super().__init__()
-        self.model = CNNModel()
+        if model == 'cnn':
+            self.model = CNNModel()
+        elif model == 'swin':
+            self.model = nn.Sequential(
+                ExpandEvecs(), timm.create_model(
+                    'swinv2_cr_small_ns_256.untrained',
+                    pretrained=False,
+                    in_chans=16,
+                    num_classes=1,
+                    strict_img_size=False
+                )
+            )
         self.loss_fn = nn.MarginRankingLoss(margin=1)
 
     
@@ -290,12 +302,12 @@ class LitCNNModule(L.LightningModule):
         return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 2}]
 
 
-def train_model(loaders=4, wb_run_name=None, debug=False, ds_modules=DEFAULT_DS_MODULES, perf_margin=0.05):
-    model = LitCNNModule()
+def train_model(loaders=4, wb_run_name=None, debug=False, ds_modules=DEFAULT_DS_MODULES, perf_margin=0.05, model='cnn'):
+    net = LitModule(model=model)
     dm = PairDataModule(ds_modules=ds_modules, perf_margin=perf_margin,loaders=loaders)
     
     wb_logger = L.pytorch.loggers.WandbLogger(project='ssdm3', name=wb_run_name)
-    wb_logger.watch(model, log='all')
+    wb_logger.watch(net, log='all')
 
     trainer = L.Trainer(
         max_epochs=50, 
@@ -310,12 +322,12 @@ def train_model(loaders=4, wb_run_name=None, debug=False, ds_modules=DEFAULT_DS_
     )
     
     if debug:
-        return trainer, model, dm
+        return trainer, net, dm
 
-    trainer.fit(model, dm)
+    trainer.fit(net, dm)
     wandb.finish()
 
 
 if __name__ == '__main__':
-    train_model(wb_run_name='rwc only', ds_modules=[ssdm.rwcpop], perf_margin=0.05)
-    train_model(wb_run_name='slm only', ds_modules=[ssdm.slm], perf_margin=0.07)
+    train_model(wb_run_name='rwc only', ds_modules=[ssdm.rwcpop], perf_margin=0.05, model='swin')
+    train_model(wb_run_name='slm only', ds_modules=[ssdm.slm], perf_margin=0.07, model='swin')

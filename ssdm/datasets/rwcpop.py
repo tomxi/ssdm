@@ -1,16 +1,8 @@
 import ssdm
-import ssdm.rwcpop
-from . import base
-import xarray as xr
+from .. import base
 
-import torch
-from torch.utils.data import Dataset
-
-import os, jams, itertools
+import os, jams
 import pandas as pd
-
-from tqdm import tqdm
-from glob import glob
 
 import librosa
 NAME = 'rwcpop'

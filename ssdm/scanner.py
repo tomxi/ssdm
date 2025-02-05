@@ -4,6 +4,8 @@ from torch.utils.data import DataLoader, ConcatDataset
 from torch import nn, optim
 import wandb
 import timm
+import argparse
+from typing import List
 
 import lightning as L
 from lightning.pytorch.callbacks import TQDMProgressBar, ModelCheckpoint, LearningRateMonitor
@@ -145,7 +147,6 @@ class InputSizeAwareConv2d(nn.Module):
 class CNNModel(nn.Module):
     def __init__(self):
         super().__init__()
-        self.expand_evecs = ExpandEvecs()
         self.maxpool = ConditionalMaxPool2d(kernel_size=2, stride=2)
         self.adapool_big = nn.AdaptiveMaxPool2d((24, 24))
         self.adapool_med = nn.AdaptiveMaxPool2d((12, 12))
@@ -208,7 +209,6 @@ class CNNModel(nn.Module):
         )
  
     def forward(self, x):
-        x = self.expand_evecs(x)
         x1 = self.convlayers1(x)
         x2 = self.convlayers2(self.maxpool(x1))
         x3 = self.convlayers3(self.maxpool(x2))
@@ -237,23 +237,24 @@ class CNNModel(nn.Module):
 class LitModule(L.LightningModule):
     def __init__(self, model='cnn'):
         super().__init__()
+        self.expand_evecs = ExpandEvecs()
+
         if model == 'cnn':
-            self.model = CNNModel()
+            self.backbone = CNNModel()
         elif model == 'swin':
-            self.model = nn.Sequential(
-                ExpandEvecs(), timm.create_model(
-                    'swinv2_cr_small_ns_256.untrained',
-                    pretrained=False,
-                    in_chans=16,
-                    num_classes=1,
-                    strict_img_size=False
-                )
+            self.backbone = timm.create_model(
+                'swinv2_cr_tiny_224.untrained',
+                pretrained=False,
+                in_chans=16,
+                num_classes=1,
+                strict_img_size=False
             )
         self.loss_fn = nn.MarginRankingLoss(margin=1)
-
+        self.save_hyperparameters()
     
     def forward(self, x):
-        return self.model(x)
+        x = self.expand_evecs(x)
+        return self.backbone(x)
 
 
     def on_fit_start(self):
@@ -294,9 +295,9 @@ class LitModule(L.LightningModule):
         optimizer = optim.AdamW(grouped_parameters)
         lr_scheduler = optim.lr_scheduler.CyclicLR(
             optimizer, 
-            base_lr=1e-6, max_lr=1e-2, 
+            base_lr=1e-6, max_lr=5e-3, 
             cycle_momentum=False, mode='triangular2', 
-            step_size_up=5000
+            step_size_up=18000
         )
 
         return [optimizer], [{'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 2}]
@@ -310,13 +311,13 @@ def train_model(loaders=4, wb_run_name=None, debug=False, ds_modules=DEFAULT_DS_
     wb_logger.watch(net, log='all')
 
     trainer = L.Trainer(
-        max_epochs=50, 
+        max_epochs=20,
         accumulate_grad_batches=8, 
         logger=wb_logger, 
         callbacks=[
             TQDMProgressBar(refresh_rate=1000),
             LearningRateMonitor(logging_interval='step'), 
-            ModelCheckpoint(dirpath=wandb.run.dir, filename='{epoch}-{val_ranking_loss:.2f}',
+            ModelCheckpoint(dirpath=f'ckpts/{model}/', filename='{epoch}-{val ranking loss:.2f}',
                             monitor='val ranking loss', save_top_k=3, mode='min', save_last=True)
         ]
     )
@@ -329,5 +330,31 @@ def train_model(loaders=4, wb_run_name=None, debug=False, ds_modules=DEFAULT_DS_
 
 
 if __name__ == '__main__':
-    train_model(wb_run_name='rwc only', ds_modules=[ssdm.rwcpop], perf_margin=0.05, model='swin')
-    train_model(wb_run_name='slm only', ds_modules=[ssdm.slm], perf_margin=0.07, model='swin')
+    parser = argparse.ArgumentParser(description='Train SSDM model')
+    parser.add_argument('--ds', type=str, default='hybrid',
+                       help='Dataset modules to use')
+    parser.add_argument('--name', type=str, default='test',
+                       help='WandB run name')
+    parser.add_argument('--perf_margin', type=float, default=0.05,
+                       help='Performance margin')
+    parser.add_argument('--model', type=str, default='cnn',
+                       choices=['cnn', 'swin'], 
+                       help='Model architecture')
+
+    args = parser.parse_args()
+
+    # Map dataset names to modules
+    ds_map = {
+        'rwcpop': [ssdm.rwcpop],
+        'jsd': [ssdm.jsd],
+        'slm': [ssdm.slm],
+        'hmx': [ssdm.hmx],
+        'hybrid': [ssdm.rwcpop, ssdm.jsd, ssdm.slm, ssdm.hmx]
+    }
+
+    train_model(
+        wb_run_name='-'.join([args.name, args.model, args.ds]),
+        ds_modules=ds_map[args.ds],
+        perf_margin=args.perf_margin,
+        model=args.model
+    )

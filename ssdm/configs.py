@@ -1,4 +1,3 @@
-# from ssdm.utils import *
 AVAL_FEAT_TYPES = ['crema', 'tempogram', 'mfcc', 'yamnet', 'openl3']
 AVAL_DIST_TYPES = ['cosine', 'sqeuclidean']
 AVAL_BW_TYPES = ['med_k_scalar', 'gmean_k_avg']

@@ -1,4 +1,4 @@
-from . import base
+from .. import base
 import ssdm
 import json
 import numpy as np

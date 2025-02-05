@@ -2,8 +2,9 @@ import numpy as np
 import os, json, pkg_resources
 from glob import glob
 
-from . import base
 import ssdm
+from .. import base
+
 
 HMX_TITLE_DICT = dict()
 title_dict_dir = '/scratch/qx244/data/audio_features_crema_mfcc_openl3_tempogram_yamnet/crema_mfcc_openl3_tempogram_yamnet_features/'

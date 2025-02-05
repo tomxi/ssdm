@@ -5,7 +5,6 @@ import matplotlib
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
-from mir_eval import display
 import ssdm
 import ssdm.formatting
 import ssdm.scluster as sc
@@ -13,10 +12,7 @@ import holoviews as hv
 
 import itertools
 from cycler import cycler
-import torch
-from tqdm import tqdm
 
-import xarray as xr
 
 
 def scatter_scores(
@@ -273,51 +269,3 @@ def heatmap(da, ax=None, title=None, xlabel=None, ylabel=None, colorbar=True, fi
     if colorbar:
         plt.colorbar(im, shrink=0.8)
     return fig, ax
-
-
-def nlvl_est(ds, net, device='cuda:0', pos_only=True, plot=True, **img_kwargs):
-    first_s = ds[0]
-    nlvl_output_size = first_s['layer_score'].shape[-1]
-    print('nlvl_output_size: ', nlvl_output_size)
-    xr_coords = dict(sid=ds.samples, pred=['pred', 'target'], layer=list(range(nlvl_output_size)))
-    nlvl_outputs = xr.DataArray(None, coords=xr_coords, dims=xr_coords.keys())
-    nlvl_loss_fn = ssdm.scn.NLvlLoss()
-    loss = dict()
-    target_best_layer = dict()
-    pred_best_layer = dict()
-    
-    net.eval()
-    net.to(device)
-    counter = 0
-    with torch.no_grad():
-        for s in tqdm(ds):
-            if s['label'] == 0 and pos_only:
-                nlvl_outputs = nlvl_outputs.drop_sel(sid=s['info'])
-            else:
-                util, nlvl = net(s['data'].to(device))
-                nlvl_outputs.loc[s['info'], 'pred'] = nlvl.detach().cpu().numpy().squeeze()
-                nlvl_outputs.loc[s['info'], 'target'] = s['layer_score'].detach().cpu().numpy().squeeze()
-                loss[s['info']] = nlvl_loss_fn(nlvl, s['layer_score'].to(device)).detach().cpu().numpy().squeeze()
-                pred_best_layer[s['info']] = nlvl_outputs.loc[s['info'], 'pred'].argmax().item()
-                target_best_layer[s['info']] = nlvl_outputs.loc[s['info'], 'target'].argmax().item()
-                counter += 1
-            
-            # if counter >= 30:
-            #     break
-    
-    sid_by_best_layer = sorted(target_best_layer, key=target_best_layer.get)
-    sorted_nlvl_outputs = nlvl_outputs.loc[sid_by_best_layer]
-
-
-    losses = np.array(list(loss.values()))
-    print('mean nlvl loss:', losses.mean())
-    if plot:
-        x_axis = list(range(len(loss)))
-        y_axis = list(range(nlvl_output_size))
-        best_layer_line = hv.Curve(sorted_nlvl_outputs.sel(pred='target').argmax('layer').values).opts(interpolation='steps-mid', color='white')
-        pred_img = hv.Image((x_axis, y_axis, sorted_nlvl_outputs.sel(pred='pred').values.T)).opts(colorbar=True, cmap='coolwarm', width=500, height=150, **img_kwargs)
-        target_img = hv.Image((x_axis, y_axis, sorted_nlvl_outputs.sel(pred='target').values.T)).opts(colorbar=True, cmap='coolwarm', width=500, height=150, **img_kwargs)
-        layout = [pred_img*best_layer_line, target_img*best_layer_line]
-        hv.output(hv.Layout(layout).cols(2))
-    
-    return sorted_nlvl_outputs

@@ -1,8 +1,8 @@
 import ssdm
-from ssdm import base
+from .. import base
 import os, json, pkg_resources
 import jams
-import ssdm.formatting
+
 import xarray as xr
 import pandas as pd
 from tqdm import tqdm
@@ -52,7 +52,7 @@ class Track(base.Track):
     def adobe(
         self,
     ) -> jams.Annotation:
-        result_dir = '/scratch/qx244/data/ISMIR21-Segmentations/SALAMI/def_mu_0.1_gamma_0.1/'
+        result_dir = '/home/qx244/ISMIR21-Segmentations/SALAMI/def_mu_0.1_gamma_0.1/'
         filename = f'{self.tid}.mp3.msdclasscsnmagic.json'
 
         with open(os.path.join(result_dir, filename), 'rb') as f:

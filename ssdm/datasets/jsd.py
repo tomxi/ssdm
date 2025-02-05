@@ -1,15 +1,10 @@
-from . import base
+from .. import base
 import ssdm
-import xarray as xr
 
-import torch
-from torch.utils.data import Dataset
-
-import os, jams, itertools
+import os, jams
 import pandas as pd
 import librosa
 import dataset
-from tqdm import tqdm
 
 class Track(base.Track):
     def __init__(

@@ -51,8 +51,6 @@ def flatten_labels(labels, dataset='hmx'):
     else:
         raise NotImplementedError('bad dataset')
 
-
-
 def expand_labels(labels, dataset='hmx'):
     
     flat = flatten_labels(labels, dataset)
@@ -79,9 +77,6 @@ def issame(labs1, labs2):
     
     # Labelings are the same if the segment label agreements are identical
     return np.all(a1 == a2)
-
-
-from copy import deepcopy
 
 
 def expand_hierarchy(_ann, dataset='hmx', always_include=False):

@@ -1,7 +1,7 @@
-import ssdm
-from ssdm import scluster
+from .configs import *
 from .expand_hier import expand_hierarchy
-from . import fwx, utils, feature
+from . import fwx, utils, feature, scluster
+from .formatting import *
 import librosa
 import madmom
 from tqdm import tqdm
@@ -128,7 +128,7 @@ class Track(object):
     def ts(self, mode='frame', pad=False) -> np.array: # mode can also be beat
         if self._track_ts is None:
             num_frames = np.asarray(
-                [self.representation(feat, use_track_ts=False, beat_sync=False).shape[-1] for feat in ssdm.AVAL_FEAT_TYPES]
+                [self.representation(feat, use_track_ts=False, beat_sync=False).shape[-1] for feat in AVAL_FEAT_TYPES]
             )
             self._track_ts = frames_to_time(
                 list(range(np.min(num_frames))), 
@@ -152,12 +152,12 @@ class Track(object):
 
         anno = fill_out_anno(seg_anns[anno_id], self.ts(mode='frame'))
         if mode == 'expand':
-            return ssdm.openseg2multi(expand_hierarchy(anno, dataset=self.ds_name, always_include=False))
+            return openseg2multi(expand_hierarchy(anno, dataset=self.ds_name, always_include=False))
         elif mode == 'normal':
             if self.ds_name == 'jsd':
-                return ssdm.openseg2multi([expand_hierarchy(anno, dataset=self.ds_name, always_include=False)[-1]])
+                return openseg2multi([expand_hierarchy(anno, dataset=self.ds_name, always_include=False)[-1]])
             else:
-                return ssdm.openseg2multi([anno])
+                return openseg2multi([anno])
 
 
     def path_ref(
@@ -170,7 +170,7 @@ class Track(object):
         # Get reference annotation
         ref_anno = self.ref(mode, **anno_id_kwarg)
         # Get annotation meet matrix
-        anno_meet = ssdm.anno_to_meet(ref_anno, self.ts(mode=ts_mode))
+        anno_meet = utils.anno_to_meet(ref_anno, self.ts(mode=ts_mode))
         # Pull out diagonal
         anno_diag = anno_meet.diagonal(1)
         if binarize:
@@ -266,9 +266,9 @@ class Track(object):
         recompute: bool = False,
         beat_sync: bool = False,
     ):
-        config = ssdm.DEFAULT_LSD_CONFIG.copy()
+        config = DEFAULT_LSD_CONFIG.copy()
         if beat_sync:
-            config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
+            config.update(BEAT_SYNC_CONFIG_PATCH)
         config.update(config_update)
         # calculated combined rec mat
         rep_ssm = self.ssm(feature=config['rep_ftype'], 
@@ -339,9 +339,9 @@ class Track(object):
         path_sim_sigma_percentile: float = 95,
     ) -> jams.Annotation:
         # load lsd jams and file/log handeling...
-        config = ssdm.DEFAULT_LSD_CONFIG.copy()
+        config = DEFAULT_LSD_CONFIG.copy()
         if beat_sync:
-            config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
+            config.update(BEAT_SYNC_CONFIG_PATCH)
         config.update(config_update)
 
         if print_config:
@@ -413,8 +413,8 @@ class Track(object):
         
         # build da to store
         score_dims = dict(
-            rep_ftype=ssdm.AVAL_FEAT_TYPES,
-            loc_ftype=ssdm.AVAL_FEAT_TYPES,
+            rep_ftype=AVAL_FEAT_TYPES,
+            loc_ftype=AVAL_FEAT_TYPES,
             m_type=['p', 'r', 'f'],
         )
     
@@ -430,15 +430,15 @@ class Track(object):
 
         for rep_ftype, loc_ftype in indexer:
             feature_pair = dict(rep_ftype=rep_ftype, loc_ftype=loc_ftype)
-            lsd_config = ssdm.DEFAULT_LSD_CONFIG.copy()
+            lsd_config = DEFAULT_LSD_CONFIG.copy()
             lsd_config.update(feature_pair)
             if beat_sync:
-                lsd_config.update(ssdm.BEAT_SYNC_CONFIG_PATCH)
+                lsd_config.update(BEAT_SYNC_CONFIG_PATCH)
 
             lsd_output = self.lsd(lsd_config, beat_sync=beat_sync, path_sim_sigma_percentile=path_sim_bw, recompute=False)
             if clean_up:
                 lsd_output = fwx.multi2H(lsd_output).decode().anno
-            score_da.loc[feature_pair] = list(ssdm.compute_l(
+            score_da.loc[feature_pair] = list(utils.compute_l(
                 lsd_output, 
                 self.ref(mode='expand', anno_id=anno_id),
                 l_frame_size=l_frame_size
@@ -457,7 +457,7 @@ class Track(object):
     def num_dist_segs(self):
         num_seg_per_anno = []
         for aid in range(self.num_annos()):
-            ref_anno = ssdm.multi2openseg(self.ref(mode='normal'))
+            ref_anno = multi2openseg(self.ref(mode='normal'))
             segs = []
             for obs in ref_anno:
                 segs.append(obs.value)
@@ -468,12 +468,12 @@ class Track(object):
     def scan_by(self, net, device='cuda:0'):
         # build da to store
         util_score_dims = dict(
-            rep_ftype=ssdm.AVAL_FEAT_TYPES,
-            loc_ftype=ssdm.AVAL_FEAT_TYPES,
+            rep_ftype=AVAL_FEAT_TYPES,
+            loc_ftype=AVAL_FEAT_TYPES,
         )
         nlvl_score_dims = dict(
-            rep_ftype=ssdm.AVAL_FEAT_TYPES,
-            loc_ftype=ssdm.AVAL_FEAT_TYPES,
+            rep_ftype=AVAL_FEAT_TYPES,
+            loc_ftype=AVAL_FEAT_TYPES,
             layer=[x+1 for x in range(16)],
         )
 
@@ -492,7 +492,7 @@ class Track(object):
         )
 
         # build all the lsd configs:
-        indexer = itertools.product(ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES)
+        indexer = itertools.product(AVAL_FEAT_TYPES, AVAL_FEAT_TYPES)
         net.to(device)
         net.eval()
         for rep_feat, loc_feat in indexer:
@@ -540,7 +540,7 @@ class InferDS(Dataset):
         self.tids = ds_module.get_ids(self.split)
         self.tids.sort()
         self.scores = self.get_scores()
-        self.AVAL_FEAT_TYPES = ssdm.AVAL_FEAT_TYPES
+        self.AVAL_FEAT_TYPES = AVAL_FEAT_TYPES
                     
     def __len__(self):
         return len(self.tids)
@@ -549,7 +549,7 @@ class InferDS(Dataset):
         return f'{self.name}_{self.split if self.split is not None else "full"}_lmeasure_infer'
         
     def get_scores(self, score_type='f'):
-        score_da = ssdm.get_lsd_scores(self, shuffle=True).sel(m_type=score_type).sortby('tid')
+        score_da = utils.get_lsd_scores(self, shuffle=True).sel(m_type=score_type).sortby('tid')
         new_tid = [self.name + tid.item() for tid in score_da.tid]
         return score_da.assign_coords(tid=new_tid).squeeze()
     
@@ -609,7 +609,7 @@ class PairDS(Dataset):
     
 
     def get_scores(self):
-        return ssdm.get_lsd_scores(self, shuffle=True).sel(m_type='f').sortby('tid').squeeze()
+        return utils.get_lsd_scores(self, shuffle=True).sel(m_type='f').sortby('tid').squeeze()
 
 
     def get_score_ranks(self):
@@ -629,7 +629,7 @@ class PairDS(Dataset):
             with open(fpath, 'r') as f:
                 score_gaps = json.load(f)
         except:
-            samp_iter = itertools.product(self.tids, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES, ssdm.AVAL_FEAT_TYPES)
+            samp_iter = itertools.product(self.tids, AVAL_FEAT_TYPES, AVAL_FEAT_TYPES, AVAL_FEAT_TYPES, AVAL_FEAT_TYPES)
             score_gaps = {}
             for tid, rep_a, loc_a, rep_b, loc_b in tqdm(samp_iter):
                 score_a = self.scores.sel(tid=tid, rep_ftype=rep_a, loc_ftype=loc_a).item()

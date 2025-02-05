@@ -17,7 +17,6 @@ setup(
         'Development Status :: 3 - Alpha',
         'Intended Audience :: Collaborators',
         'License :: OSI Approved :: MIT License',
-        'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
     ],
 )

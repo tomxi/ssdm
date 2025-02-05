@@ -1,5 +1,6 @@
 .vscode/
 
+*2025.json
 wandb/
 sbatch/
 notebooks/
@@ -9,7 +10,7 @@ figs/
 *.sbatch
 *_old.py
 
-salami_old.py
+*.egg-info/
 
 __pycache__
 .ipynb*

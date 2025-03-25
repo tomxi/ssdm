@@ -1,4 +1,5 @@
 import numpy as np
+
 np.int = int
 np.float = float
 
@@ -11,9 +12,10 @@ from .utils import *
 # from . import scluster
 
 from . import viz
-viz.hv.extension('bokeh')
 
-from .datasets import hmx, rwcpop, slm, jsd
+viz.hv.extension("bokeh")
+
+from .corpus import hmx, rwcpop, slm, jsd
 
 from . import scanner as scn
 

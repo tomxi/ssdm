@@ -17,4 +17,5 @@ __pycache__
 .ipynb*
 
 *.pdf
-
+.pytest_cache/
+*.log

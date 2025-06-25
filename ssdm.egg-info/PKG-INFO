@@ -1,18 +1,64 @@
-Metadata-Version: 2.2
+Metadata-Version: 2.4
 Name: ssdm
-Version: 0.1.0
+Version: 0.1.1
 Summary: Scanning SDMs for MSA representation selection
-Home-page: https://github.com/tomxi/ssdm
-Author: Tom Xi
-Author-email: tom.xi@nyu.edu
-Classifier: Development Status :: 3 - Alpha
-Classifier: Intended Audience :: Collaborators
+Author-email: Tom Xi <tom.xi@nyu.edu>
+License: MIT License
+        
+        Copyright (c) 2022 TomXi | Qingyang Xi
+        
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+        
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        
+Project-URL: Homepage, https://github.com/tomxi/ssdm
+Project-URL: Issues, https://github.com/tomxi/ssdm/issues
+Classifier: Programming Language :: Python :: 3
 Classifier: License :: OSI Approved :: MIT License
-Classifier: Programming Language :: Python :: 3.8
-Classifier: Programming Language :: Python :: 3.9
+Classifier: Operating System :: OS Independent
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Science/Research
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
 License-File: LICENSE
-Dynamic: author
-Dynamic: author-email
-Dynamic: classifier
-Dynamic: home-page
-Dynamic: summary
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: librosa
+Requires-Dist: matplotlib
+Requires-Dist: holoviews
+Requires-Dist: cycler
+Requires-Dist: xarray
+Requires-Dist: scikit-learn
+Requires-Dist: scipy
+Requires-Dist: tqdm
+Requires-Dist: jams
+Requires-Dist: mir_eval
+Requires-Dist: python-igraph
+Requires-Dist: madmom
+Requires-Dist: torch
+Requires-Dist: wandb
+Requires-Dist: timm
+Requires-Dist: lightning
+Requires-Dist: tensorflow
+Requires-Dist: tensorflow-hub
+Requires-Dist: crema
+Requires-Dist: openl3
+Requires-Dist: dataset
+Dynamic: license-file
+
+# Scanning-SDM
+Scanning Self-Difference Matrices of different representations.

@@ -1,5 +1,6 @@
 import numpy as np
 import librosa
+import os
 
 # Load local model
 YAMNET_MODEL = None
@@ -7,9 +8,10 @@ _AUDIO_SR = 22050
 _HOP_LEN = 4096
 
 def yamnet(audio_path, output_path):
+    global YAMNET_MODEL
     if YAMNET_MODEL is None:
         import tensorflow_hub as hub
-        YAMNET_MODEL = hub.load('/home/qx244/yamnet')
+        YAMNET_MODEL = hub.load('https://tfhub.dev/google/yamnet/1')
     yamnet_audio, _ = librosa.load(audio_path, sr=16000)
     _, yamnet_emb, _ = YAMNET_MODEL(yamnet_audio)
     resampled_yamnet_emb = librosa.resample(
@@ -19,6 +21,7 @@ def yamnet(audio_path, output_path):
     yamnet_ts = librosa.frames_to_time(
         np.arange(resampled_yamnet_emb.shape[-1]), 
         sr=_AUDIO_SR, hop_length=_HOP_LEN)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     np.savez(output_path, feature=resampled_yamnet_emb, ts=yamnet_ts)
 
 
@@ -37,6 +40,7 @@ def openl3(audio_path, output_path):
         np.arange(resampled_emb.shape[-1]), 
         hop_length=_HOP_LEN, sr=sr
     )
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     np.savez(output_path, feature=resampled_emb, ts=ts)
 
 
@@ -52,6 +56,7 @@ def mfcc(audio_path, output_path):
     mfcc_ts = librosa.frames_to_time(
         np.arange(normalized_mfcc.shape[-1]), 
         hop_length=_HOP_LEN, sr=sr, n_fft=_HOP_LEN*2)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     np.savez(output_path, feature=normalized_mfcc, ts=mfcc_ts)
 
 
@@ -67,6 +72,7 @@ def tempogram(audio_path, output_path):
     ts = librosa.frames_to_time(
         np.arange(resampled_tempogram.shape[-1]), 
         hop_length=_HOP_LEN, sr=sr)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     np.savez(output_path, feature=resampled_tempogram, ts=ts)
 
 
@@ -99,6 +105,7 @@ def crema(audio_path, output_path):
         np.arange(resampled_crema_pitch.shape[-1]), 
         hop_length=4096, sr=22050)
 
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     np.savez(output_path, 
              pitch=resampled_crema_pitch, 
              root=resampled_crema_root,
@@ -136,6 +143,7 @@ def crema_full(audio_path, output_path):
         np.arange(resampled_crema_pitch.shape[-1]), 
         hop_length=4096, sr=22050)
 
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     np.savez(output_path, 
              pitch=resampled_crema_pitch, 
              root=resampled_crema_root,

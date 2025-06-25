@@ -11,9 +11,9 @@ class Track(base.Track):
     def __init__(
             self, 
             tid: str = '384', 
-            dataset_dir: str = '/scratch/qx244/data/salami/', 
-            output_dir: str = '/vast/qx244/salami/',
-            feature_dir: str = '/scratch/qx244/data/salami/features'
+            dataset_dir: str = '/Users/tomxi/data/salami/', 
+            output_dir: str = '/Users/tomxi/data/salami/',
+            feature_dir: str = '/Users/tomxi/data/salami/features'
         ):
         super().__init__(tid, dataset_dir=dataset_dir, output_dir=output_dir, feature_dir=feature_dir)
         self.audio_path = os.path.join(dataset_dir, f'audio/{tid}/audio.mp3')
